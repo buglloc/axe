@@ -301,6 +301,7 @@ fn sockets<W: Write>(
             capability.id()
         )));
     };
+
     let max_items = *max_items;
     let selection = *selection;
     let mut coverage = Coverage::default();
@@ -357,6 +358,7 @@ fn sockets<W: Write>(
             }
         }
     }
+
     parse_unix_sockets(
         capability,
         selection,
@@ -374,6 +376,7 @@ fn sockets<W: Write>(
         .iter()
         .map(|record| record.inode)
         .collect::<HashSet<_>>();
+
     let owners = socket_owners(&wanted, deadline, &mut coverage, &mut partial)?;
 
     for mut record in records {

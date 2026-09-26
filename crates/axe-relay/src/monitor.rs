@@ -26,6 +26,7 @@ pub struct Status {
     pub quic_control: SocketAddr,
     pub clients: Vec<Client>,
 }
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -78,6 +79,7 @@ impl Sessions {
                 connected_seconds: session.connected_at.elapsed().as_secs(),
             })
             .collect();
+
         clients.sort_unstable_by_key(|client| client.id);
         clients
     }
@@ -87,6 +89,7 @@ impl Sessions {
             .last_event
             .checked_add(1)
             .expect("relay event ID exhausted");
+
         if self.events.len() == MAX_EVENTS {
             self.events.pop_front();
         }
@@ -127,10 +130,12 @@ impl Monitor {
             .addresses
             .lock()
             .unwrap_or_else(|error| error.into_inner()))?;
+
         let sessions = self
             .sessions
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+
         Some(Status {
             version: 1,
             uptime_seconds: self.started_at.elapsed().as_secs(),
@@ -154,6 +159,7 @@ impl Monitor {
                 events: Vec::new(),
             });
         };
+
         if epoch != self.epoch
             || after > cursor
             || sessions
@@ -163,6 +169,7 @@ impl Monitor {
         {
             return Err("event cursor expired or invalid; restart watch");
         }
+
         Ok(EventBatch {
             epoch: self.epoch,
             cursor,
@@ -189,6 +196,7 @@ impl Monitor {
             .unwrap_or_else(|error| error.into_inner());
         let id = sessions.next_id;
         sessions.next_id = id.checked_add(1).expect("relay registration ID exhausted");
+
         println!(
             "relay: registered client={client_id:?} transport={transport} from {peer}; public {public_address}; active_clients={}",
             sessions.active.len() + 1
@@ -203,6 +211,7 @@ impl Monitor {
                 connected_at: Instant::now(),
             },
         );
+
         let session = &sessions.active[&id];
         let client = Client {
             id,
@@ -212,6 +221,7 @@ impl Monitor {
             public_address: session.public_address.clone(),
             connected_seconds: 0,
         };
+
         sessions.record(EventKind::Connected, client);
         RegistrationGuard { monitor: self, id }
     }

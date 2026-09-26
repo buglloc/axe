@@ -29,6 +29,7 @@ impl PackageDefinition {
         let Some(version) = versions.next() else {
             return Err(format!("package {} has no channels", self.id));
         };
+
         if version == "latest" || versions.any(|candidate| candidate != version) {
             return Err(format!(
                 "package {} channels must all name one exact version",
@@ -55,9 +56,11 @@ impl PackageDefinition {
                 ));
             }
         }
+
         for channel in self.channels.keys() {
             validate_name(channel, "channel")?;
         }
+
         if self.targets.is_empty() {
             return Err(format!("package {} has no targets", self.id));
         }
@@ -95,6 +98,7 @@ pub fn parse_package_set(
                 return Err(format!("duplicate AXE Store name or alias {name}"));
             }
         }
+
         if selected.is_some_and(|selected| {
             selected != attribute
                 && selected != package.name

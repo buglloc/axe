@@ -135,6 +135,7 @@ pub fn release(options: &ReleaseOptions<'_>) -> Result<usize, String> {
             );
             sink.put_immutable(&artifact.versioned_key, &artifact.path, artifact.digest)?;
         }
+
         if options.phase == ReleasePhase::ImmutableOnly {
             let mut records = read_release_records(options.metadata)?;
             for artifact in &artifacts {
@@ -147,6 +148,7 @@ pub fn release(options: &ReleaseOptions<'_>) -> Result<usize, String> {
             sink.verify_immutable(&artifact.versioned_key, &artifact.path, artifact.digest)?;
         }
     }
+
     if options.phase != ReleasePhase::ImmutableOnly {
         for artifact in &artifacts {
             eprintln!(
@@ -156,6 +158,7 @@ pub fn release(options: &ReleaseOptions<'_>) -> Result<usize, String> {
             sink.put_stable(&artifact.stable_key, &artifact.path)?;
         }
     }
+
     if options.phase == ReleasePhase::All {
         let mut records = read_release_records(options.metadata)?;
         for artifact in &artifacts {
@@ -317,6 +320,7 @@ mod tests {
         bytes[24] = entry;
         bytes[52] = 64; // ELF64 header size
         fs::write(path, bytes).expect("write executable fixture");
+
         #[cfg(unix)]
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))
             .expect("make fixture executable");
@@ -331,6 +335,7 @@ mod tests {
         let arm = input.join(artifact_filename(Target::Aarch64Linux));
         write_elf(&x86, goblin::elf::header::EM_X86_64, 1);
         write_elf(&arm, goblin::elf::header::EM_AARCH64, 2);
+
         let directory = scratch.0.join("published");
         let metadata = scratch.0.join("axe-releases.json");
         let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/store.json");
@@ -385,6 +390,7 @@ mod tests {
         );
 
         release(&options).expect("retry identical immutable release");
+
         options.phase = ReleasePhase::StableOnly;
         let immutable_arm = directory.join(format!(
             "axe/releases/v{}/aarch64-linux/axe",
@@ -392,10 +398,12 @@ mod tests {
         ));
         let original_arm = fs::read(&arm).expect("read original aarch64");
         fs::write(&immutable_arm, b"changed remote bytes").expect("corrupt remote immutable");
+
         let error = release(&options).expect_err("stable phase must verify every immutable object");
         assert!(error.contains("already exists with different bytes"));
         assert!(!directory.join("axe/stable/x86_64-linux").exists());
         fs::write(&immutable_arm, &original_arm).expect("restore remote immutable");
+
         release(&options).expect("publish stable objects after verifying immutable bytes");
         let original_x86 = fs::read(&x86).expect("read original x86");
         let stable_x86 = directory.join("axe/stable/x86_64-linux/axe");
@@ -411,6 +419,7 @@ mod tests {
         write_elf(&x86, goblin::elf::header::EM_X86_64, 3);
         let error = release(&options).expect_err("stable phase must match staged metadata");
         assert!(error.contains("does not match local version, URLs and hash"));
+
         options.phase = ReleasePhase::ImmutableOnly;
         let error = release(&options).expect_err("different bytes cannot reuse the same version");
         assert!(error.contains("already exists with different bytes"));

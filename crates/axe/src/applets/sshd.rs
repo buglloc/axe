@@ -236,6 +236,7 @@ fn cpu_max_workers(cpu_max: &str) -> Option<usize> {
     }
     Some(usize::try_from(quota.div_ceil(period)).unwrap_or(usize::MAX))
 }
+
 fn require_shell_executable(
     executable: &crate::executable::Executable,
 ) -> Result<(), &'static str> {

@@ -208,6 +208,7 @@ impl RegistryBuilder {
             },
         );
     }
+
     #[cfg(feature = "on-demand")]
     pub(crate) fn insert_bundled_if_vacant(
         &mut self,

@@ -371,6 +371,7 @@ fn output_path(input: &Path, decompress: bool, format: Format) -> io::Result<Pat
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
 }
+
 fn done() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "")
 }

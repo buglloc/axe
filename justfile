@@ -235,19 +235,11 @@ check-store-bootstrap:
 nix-fmt:
     alejandra store/nix flake.nix
 
-benchmark-opt-level: generate-dev-keys
-    python3 tools/benchmark-opt-level.py
-
 check: _prepare-axe-dev-keys check-store-bootstrap
     AXE_EDITION_ROOT="{{edition_root}}" cargo check --locked --workspace --all-targets --all-features
 
 smoke: generate-dev-keys
     AXE_EDITION_ROOT="{{edition_root}}" cargo test --locked --workspace --all-features
-
-
-relay-live-smoke: generate-dev-keys
-    AXE_EDITION_ROOT="{{edition_root}}" cargo build --locked -p axe -p axe-relay
-    AXE_EDITION_ROOT="{{edition_root}}" bash scripts/relay-live-smoke.sh {{cargo_target_dir}}/debug/axe {{cargo_target_dir}}/debug/axe-relay
 
 applet-parity: generate-dev-keys
     AXE_EDITION_ROOT="{{edition_root}}" cargo test --locked -p axe --all-features --test applet_parity

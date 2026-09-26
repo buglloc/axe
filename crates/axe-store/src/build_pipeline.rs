@@ -96,6 +96,7 @@ pub fn build(options: &BuildOptions<'_>) -> Result<BuildResult, String> {
     let mut failures = Vec::new();
     let mut attempted_targets = 0_usize;
     let mut target_count = 0_usize;
+
     for (attribute, package) in &packages {
         let version = package.exact_version()?.to_owned();
         let intended = package
@@ -145,6 +146,7 @@ pub fn build(options: &BuildOptions<'_>) -> Result<BuildResult, String> {
                 }
             }
         }
+
         if artifacts.is_empty() {
             let failure = format!("{}: omitted because no target succeeded", package.id);
             eprintln!("axe-store: build: unsupported: {failure}");
@@ -165,6 +167,7 @@ pub fn build(options: &BuildOptions<'_>) -> Result<BuildResult, String> {
             versions: BTreeMap::from([(version, ToolVersion { targets: artifacts })]),
         };
         manifest.validate().map_err(|error| error.to_string())?;
+
         let entry = write_manifest(&stage, package, &manifest, &signing)?;
         tools.insert(package.name.clone(), entry);
     }
@@ -174,6 +177,7 @@ pub fn build(options: &BuildOptions<'_>) -> Result<BuildResult, String> {
     let package_count = tools.len();
     write_index(&stage, tools, &signing, 1)?;
     sync_tree(&stage).map_err(|error| format!("sync staging tree: {error}"))?;
+
     if options.output.exists() {
         fs::remove_dir_all(options.output)
             .map_err(|error| format!("replace {}: {error}", options.output.display()))?;
@@ -280,6 +284,7 @@ fn acquire_nix_packages(
     );
     let status = realise_nix_batch(&batch)?;
     let validity = query_nix_output_validity(&batch)?;
+
     for (job, output) in batch {
         let output_text = output
             .to_str()
@@ -320,6 +325,7 @@ fn plan_nix_builds(jobs: &[NixBuildJob]) -> Result<Vec<Result<PathBuf, String>>,
 
     let plans: Vec<NixBuildOutput> = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("parse Nix batch plan: {error}"))?;
+
     if plans.len() != jobs.len() {
         return Err(format!(
             "Nix batch plan returned {} derivations, expected {}",
@@ -428,6 +434,7 @@ fn nix_output_path(mut build: NixBuildOutput) -> Result<PathBuf, String> {
             )
         });
     }
+
     if build.outputs.len() == 1 {
         return build
             .outputs
@@ -441,6 +448,7 @@ fn nix_output_path(mut build: NixBuildOutput) -> Result<PathBuf, String> {
                 )
             });
     }
+
     Err(format!(
         "Nix derivation {} has ambiguous outputs: {}",
         build.drv_path,
@@ -545,6 +553,7 @@ fn package_acquired(
         .sync_all()
         .map_err(|error| format!("sync object: {error}"))?;
     drop(object);
+
     let relative = written.object_sha256.object_path();
     let destination = stage.join(&relative);
     match fs_atomic::install(&temporary, &destination, InstallMode::NoReplace) {
@@ -600,11 +609,13 @@ fn write_manifest(
         channels,
         synopsis: package.synopsis.clone(),
     };
+
     let path = stage.join(entry.manifest_path());
     fs_atomic::write(&path, InstallMode::NoReplace, None, |file| {
         file.write_all(&bytes)
     })
     .map_err(|error| format!("stage immutable manifest {}: {error}", path.display()))?;
+
     let staged_sha256 =
         Digest::from_file(&path).map_err(|error| format!("digest {}: {error}", path.display()))?;
     if staged_sha256 != manifest_sha256 {
@@ -613,6 +624,7 @@ fn write_manifest(
             path.display()
         ));
     }
+
     Ok(entry)
 }
 
@@ -633,6 +645,7 @@ fn write_index(
     let signed = sign_document(&index, signing).map_err(|error| format!("sign Index: {error}"))?;
     let compressed = zstd::stream::encode_all(signed.as_slice(), 9)
         .map_err(|error| format!("compress Index: {error}"))?;
+
     write_file(&stage.join("index.cbor.zst"), &compressed)?;
     write_file(&stage.join("index.json"), &json)
 }
@@ -690,6 +703,7 @@ fn write_deterministic_tar(tree: &CanonicalTree, destination: &Path) -> Result<(
             }
         }
     }
+
     builder.finish().map_err(io_string)?;
     builder
         .into_inner()
@@ -732,6 +746,7 @@ fn sync_tree(root: &Path) -> io::Result<()> {
         }
         index += 1;
     }
+
     for directory in directories.into_iter().rev() {
         File::open(directory)?.sync_all()?;
     }
@@ -782,6 +797,7 @@ mod tests {
                 path: "bin/tool".into(),
             },
         };
+
         let manifest = ToolManifest {
             schema_version: SCHEMA_VERSION,
             id: package.id.clone(),
@@ -805,6 +821,7 @@ mod tests {
                 },
             )]),
         };
+
         let entry =
             write_manifest(&stage, &package, &manifest, &signing).expect("stage signed manifest");
         write_index(

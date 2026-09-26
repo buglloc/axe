@@ -632,6 +632,7 @@ impl Executable {
         }
     }
 }
+
 #[cfg(target_os = "linux")]
 fn select_path_fallback(
     original: Option<PathBuf>,
@@ -1562,6 +1563,7 @@ mod tests {
             .and_then(|(_, value)| value);
         assert_eq!(inherited, Some(runtime_root.as_os_str()));
     }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn relay_identity_uses_sha1_elf_build_id() {

@@ -146,6 +146,7 @@ pub fn entry_with_signals(args: Vec<OsString>) -> i32 {
         &mut stderr.lock(),
         Some(interruption.as_ref()),
     );
+
     for registration in registrations {
         signal_hook::low_level::unregister(registration);
     }
@@ -269,6 +270,7 @@ mod tests {
             );
         }
     }
+
     #[test]
     fn capture_seals_validated_unix_socket_evidence() {
         use std::fs;
@@ -282,6 +284,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("vzik-capture-{}-{nonce}", std::process::id()));
         fs::create_dir(&root).expect("create fixture directory");
+
         let socket_path = root.join("service.sock");
         let _listener = UnixListener::bind(&socket_path).expect("bind fixture socket");
         let capture_path = root.join("capture.jsonl");

@@ -276,6 +276,7 @@ pub fn observe() -> EnvironmentObservation {
         observe_portable()
     }
 }
+
 #[cfg(not(target_os = "linux"))]
 fn linux_only<T>() -> Observation<T> {
     Observation::unsupported("Linux-specific observation")
@@ -347,6 +348,7 @@ fn observe_linux(root: &Path) -> EnvironmentObservation {
         gid: indexed_status(&status_fields, "Gid", 0),
         effective_gid: indexed_status(&status_fields, "Gid", 1),
     };
+
     let restrictions = observe_restrictions(&proc, &sys, &status_fields);
     let isolation = observe_isolation(root, &proc, &sys, &status_fields);
 
@@ -691,6 +693,7 @@ fn observe_isolation(
     })
     .collect::<Vec<_>>();
     vm_sources.sort_by(|left, right| left.0.cmp(&right.0));
+
     let vm_match = [
         ("kvm_qemu", ["kvm", "qemu"].as_slice()),
         ("vmware", ["vmware"].as_slice()),
@@ -715,6 +718,7 @@ fn observe_isolation(
                 })
         })
     });
+
     let (vm_provider, vm_evidence) = vm_match.map_or_else(
         || (None, Vec::new()),
         |(provider, evidence)| (Some((provider, Confidence::High)), vec![evidence]),
@@ -824,6 +828,7 @@ fn observe_container_isolation(
     } else {
         "no strong container signature matched"
     };
+
     isolation_layer(provider, evidence, unknown_reason)
 }
 
@@ -871,6 +876,7 @@ fn process_ancestry(proc: &Path) -> Vec<String> {
         if let Ok(comm) = read_text(root.join("comm")) {
             result.push(comm.trim().to_owned());
         }
+
         let Ok(status) = read_text(root.join("status")) else {
             break;
         };
@@ -881,6 +887,7 @@ fn process_ancestry(proc: &Path) -> Vec<String> {
         else {
             break;
         };
+
         if parent == 0 || parent == pid {
             break;
         }
@@ -964,9 +971,11 @@ fn memory_field(fields: &BTreeMap<String, String>, name: &str) -> Observation<u6
         return Observation::unknown(format!("{name} is missing from /proc/meminfo"));
     };
     let mut parts = value.split_ascii_whitespace();
+
     let Some(kibibytes) = parts.next().and_then(|value| value.parse::<u64>().ok()) else {
         return Observation::unknown(format!("{name} is malformed in /proc/meminfo"));
     };
+
     if parts.next() != Some("kB") {
         return Observation::unknown(format!("{name} has an unsupported unit"));
     }
@@ -1047,6 +1056,7 @@ fn read_text(path: impl AsRef<Path>) -> io::Result<String> {
     let file = fs::File::open(path)?;
     let mut bytes = Vec::with_capacity(64 << 10);
     file.take(TEXT_SOURCE_LIMIT + 1).read_to_end(&mut bytes)?;
+
     if bytes.len() as u64 > TEXT_SOURCE_LIMIT {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,

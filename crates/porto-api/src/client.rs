@@ -205,6 +205,7 @@ impl Client {
             let stream = std::os::unix::net::UnixStream::connect(&self.socket_path)
                 .map_err(|source| io_error("connect to Porto socket", source))?;
             configure_stream(&stream, self.timeout)?;
+
             self.stream = Some(stream);
             Ok(())
         }
@@ -1185,10 +1186,12 @@ mod tests {
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept Porto client");
             let length = read_frame_length(&mut stream).expect("read request length");
+
             let mut payload = vec![0; length];
             stream.read_exact(&mut payload).expect("read request");
             let request =
                 rpc::TContainerRequest::decode(payload.as_slice()).expect("decode request");
+
             let frame = response.encode_length_delimited_to_vec();
             stream.write_all(&frame).expect("write response");
             request

@@ -119,11 +119,13 @@ pub fn summarize(path: &Path, output: &mut impl Write) -> Result<(), Error> {
         .iter()
         .map(|capability| capability.id.clone())
         .collect::<Vec<_>>();
+
     let counts = json!({
         "planned":summary.planned_capabilities.len(),
         "started":started.len(),
         "not_started":summary.not_started_capabilities.len(),
     });
+
     write_document(
         output,
         &json!({
@@ -230,6 +232,7 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                     line_number,
                     "planned_capabilities",
                 )?;
+
                 if summary.planned_capabilities.is_empty() {
                     return invalid(line_number, "planned_capabilities must not be empty");
                 }
@@ -242,6 +245,7 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                 {
                     return invalid(line_number, "planned_capabilities contains duplicates");
                 }
+
                 summary.collector = object
                     .get("collector")
                     .filter(|value| value.is_object())
@@ -252,6 +256,7 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                     .filter(|value| value.is_object())
                     .cloned()
                     .ok_or_else(|| invalid_error(line_number, "global_limits must be an object"))?;
+
                 saw_start = true;
             }
             "capability_start" => {
@@ -298,6 +303,7 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                     .ok_or_else(|| {
                         invalid_error(line_number, "diagnostic.count must be an integer")
                     })?;
+
                 summary.diagnostic_records += 1;
                 summary.diagnostic_count = summary.diagnostic_count.saturating_add(count);
                 *summary
@@ -348,6 +354,7 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+
                 summary
                     .outcomes
                     .get_mut(outcome)
@@ -387,18 +394,21 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                     line_number,
                     "not_started_capabilities",
                 )?;
+
                 let mut observed_plan = summary
                     .capabilities
                     .iter()
                     .map(|capability| capability.id.clone())
                     .collect::<Vec<_>>();
                 observed_plan.extend(summary.not_started_capabilities.iter().cloned());
+
                 if observed_plan != summary.planned_capabilities {
                     return invalid(
                         line_number,
                         "started and not-started capabilities do not match the declared plan",
                     );
                 }
+
                 let expected_outcome = if summary.not_started_capabilities.is_empty()
                     && summary
                         .capabilities
@@ -409,6 +419,7 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                 } else {
                     "degraded"
                 };
+
                 if summary.stream_outcome != expected_outcome {
                     return invalid(
                         line_number,
@@ -452,6 +463,7 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
     if !saw_end {
         return invalid(line_number.saturating_add(1), "missing stream_end");
     }
+
     summary.records = expected_seq;
     summary.bytes = bytes_before;
     Ok(summary)
@@ -472,12 +484,14 @@ fn read_record(
             .iter()
             .position(|byte| *byte == b'\n')
             .map_or(available.len(), |index| index + 1);
+
         if line.len().saturating_add(end) > MAX_LINE_BYTES as usize {
             return invalid(
                 line_number,
                 format!("record exceeds {MAX_LINE_BYTES} bytes"),
             );
         }
+
         let complete = available[end - 1] == b'\n';
         line.extend_from_slice(&available[..end]);
         input.consume(end);
@@ -520,6 +534,7 @@ fn verify_counters(
     let counters = counters
         .and_then(Value::as_object)
         .ok_or_else(|| invalid_error(line, "counters must be an object"))?;
+
     if counters.get("records").and_then(Value::as_u64) != Some(records) {
         return invalid(line, format!("counters.records must be {records}"));
     }
@@ -574,6 +589,7 @@ fn valid_enum<'a>(
         invalid(line, format!("unknown {field} {outcome}"))
     }
 }
+
 fn invalid<T>(line: u64, message: impl Into<String>) -> Result<T, Error> {
     Err(invalid_error(line, message))
 }

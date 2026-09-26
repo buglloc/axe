@@ -137,12 +137,6 @@ Artifacts are staged in `dist/`:
 
 Linux recipes verify that the result is a static ELF of type `EXEC` with neither `INTERP` nor `DT_NEEDED`. The x86_64 recipe also runs the artifact with an empty `PATH`.
 
-Compare Linux x86_64 release sizes and startup times for `opt-level` values `z`, `s`, `2`, and `3` with:
-
-```bash
-just benchmark-opt-level
-```
-
 The Darwin recipe uses an SDK in ignored `target/toolchains/`.
 
 See [`BOOTSTRAP.md`](BOOTSTRAP.md) for keys, production configuration, AXE Store, and remote builders.

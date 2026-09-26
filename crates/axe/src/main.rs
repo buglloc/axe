@@ -16,6 +16,7 @@ mod supervisor;
 mod embedded {
     include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 }
+
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path};
 use std::sync::Arc;
@@ -42,6 +43,7 @@ fn main() {
         print!("{HELP}");
         return;
     }
+
     if args.len() == 1 && args[0] == OsStr::new("--version") {
         println!(
             "axe {VERSION} (edition {}; Brush {})",
@@ -50,6 +52,7 @@ fn main() {
         );
         return;
     }
+
     publish_shell_paths(&executable);
 
     let managed_applet = managed_applet_name(&argv0, &executable);
@@ -65,6 +68,7 @@ fn main() {
     unsafe {
         std::env::set_var("AXE_STORE_MODE", store_mode.as_str());
     }
+
     let mode = if managed_applet.is_some()
         || args
             .first()

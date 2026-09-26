@@ -20,6 +20,7 @@ pub(crate) fn write(
     let parent = parent(path);
     fs::create_dir_all(parent)?;
     let temporary = temporary_path(path)?;
+
     let result = (|| {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
@@ -36,6 +37,7 @@ pub(crate) fn write(
         file.sync_all()?;
         install(&temporary, path, mode)
     })();
+
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
@@ -45,6 +47,7 @@ pub(crate) fn write(
 pub(crate) fn install(source: &Path, destination: &Path, mode: InstallMode) -> io::Result<()> {
     let parent = parent(destination);
     fs::create_dir_all(parent)?;
+
     match mode {
         InstallMode::Replace => fs::rename(source, destination)?,
         InstallMode::NoReplace => {
@@ -52,6 +55,7 @@ pub(crate) fn install(source: &Path, destination: &Path, mode: InstallMode) -> i
             fs::remove_file(source)?;
         }
     }
+
     File::open(parent)?.sync_all()
 }
 

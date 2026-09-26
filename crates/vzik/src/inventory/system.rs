@@ -340,6 +340,7 @@ fn parse_nix_manifest(bytes: &[u8], source: &Path) -> io::Result<Vec<Value>> {
             } else {
                 b"inactive".as_slice()
             };
+
             records.push(json!({
                 "name":text(name.as_bytes()),
                 "version":text(version.as_bytes()),
@@ -729,6 +730,7 @@ fn services<W: Write>(
         )?;
     }
     partial |= passwd_truncated;
+
     let mut any_source = false;
 
     for manager in &managers {
@@ -1092,6 +1094,7 @@ mod tests {
             "/nix/store/example-curl"
         );
     }
+
     #[test]
     fn service_inventory_recognizes_every_systemd_unit_type() {
         for expected in [

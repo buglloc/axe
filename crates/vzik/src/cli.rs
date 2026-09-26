@@ -1121,6 +1121,7 @@ pub struct Execution {
     pub invocations: Vec<Invocation>,
     pub limits: GlobalLimits,
 }
+
 #[derive(Debug)]
 pub struct CaptureExecution {
     pub execution: Execution,
@@ -1209,6 +1210,7 @@ pub fn parse(mut argv: Vec<OsString>) -> Result<Action, CliError> {
     if argv.first().and_then(|value| value.to_str()) == Some("capture") {
         return parse_capture(program, &argv[1..]);
     }
+
     parse_core(program, argv)
 }
 
@@ -1304,6 +1306,7 @@ fn parse_capture(program: OsString, arguments: &[OsString]) -> Result<Action, Cl
     let Action::Execute(execution) = action else {
         return Err("capture requires a collection command".into());
     };
+
     Ok(Action::Capture(CaptureExecution {
         execution,
         output,
@@ -1513,6 +1516,7 @@ fn porto_values(matches: &ArgMatches) -> Result<(PathBuf, bool, bool, usize), St
     if !include_streams && max_stream_requested {
         return Err("--max-stream-bytes requires --include-streams".into());
     }
+
     let max_stream_bytes = if include_streams {
         usize_value(matches, "max-stream-bytes")?
     } else {
@@ -1520,6 +1524,7 @@ fn porto_values(matches: &ArgMatches) -> Result<(PathBuf, bool, bool, usize), St
     };
     Ok((socket, show_sensitive, include_streams, max_stream_bytes))
 }
+
 fn systemctl_values(
     matches: &ArgMatches,
 ) -> Result<(Option<PathBuf>, Option<String>, bool), String> {
@@ -1585,6 +1590,7 @@ fn root_command() -> Command {
                     .arg_required_else_help(true),
             );
         }
+
         command = command.mut_subcommand(group, |group_command| {
             group_command.subcommand(capability_command(capability))
         });
@@ -1618,9 +1624,11 @@ fn capability_command(capability: CapabilityId) -> Command {
                 .value_parser(parser),
         );
     }
+
     for option in capability.option_specs() {
         command = command.arg(option_arg(option));
     }
+
     if matches!(
         capability,
         CapabilityId::SystemctlList | CapabilityId::DbusList
@@ -1629,6 +1637,7 @@ fn capability_command(capability: CapabilityId) -> Command {
             argument.conflicts_with_all(["socket", "user"])
         });
     }
+
     if capability == CapabilityId::FilesystemUnixSockets {
         command = command
             .long_about(
@@ -1734,6 +1743,7 @@ fn limits_from_matches(matches: &ArgMatches, safe_profile: bool) -> GlobalLimits
     } else {
         GlobalLimits::targeted()
     };
+
     GlobalLimits {
         deadline_seconds: matches
             .get_one::<u64>("deadline-seconds")
@@ -1827,6 +1837,7 @@ fn path_option_value(
         .expect("Clap supplies the path default");
     bounded_path(value, max_bytes, &format!("--{name}"))
 }
+
 fn optional_path_value(
     matches: &ArgMatches,
     name: &str,

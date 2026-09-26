@@ -389,6 +389,7 @@ fn collect_shadow<W: Write>(
             return Ok(());
         }
     }
+
     Ok(())
 }
 
@@ -551,6 +552,7 @@ fn filesystem<W: Write>(
                 if file_capability.is_some() {
                     reasons.push("file_capability");
                 }
+
                 if reasons.is_empty() {
                     None
                 } else {

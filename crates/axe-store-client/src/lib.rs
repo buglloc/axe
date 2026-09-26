@@ -229,6 +229,7 @@ impl ClientConfig {
         for (id, key) in trusted {
             insert_trusted_key(&mut trusted_keys, Some(id), key)?;
         }
+
         if let Ok(key) = std::env::var("AXE_STORE_TRUSTED_KEY")
             && !key.is_empty()
         {
@@ -248,6 +249,7 @@ impl ClientConfig {
             .clone()
             .unwrap_or_else(|| file.storage.public_base_url());
         let consumer = file.consumer;
+
         let addresses = match std::env::var("AXE_STORE_ADDRESSES") {
             Ok(value) if !value.is_empty() => value
                 .split(',')
@@ -322,6 +324,7 @@ fn validate_base_url(url: &str, explicit_override: bool) -> Result<(), StoreErro
             format!("invalid AXE Store URL: {error}"),
         )
     })?;
+
     let local_http = explicit_override
         && uri.scheme_str() == Some("http")
         && matches!(uri.host(), Some("localhost" | "127.0.0.1" | "[::1]"));
@@ -367,6 +370,7 @@ fn metadata_namespace(config: &ClientConfig) -> Result<String, StoreError> {
             "AXE Store base URL must not contain a query",
         ));
     }
+
     let default_port = uri.port_u16().is_some_and(|port| {
         scheme.eq_ignore_ascii_case("https") && port == 443
             || scheme.eq_ignore_ascii_case("http") && port == 80
@@ -385,6 +389,7 @@ fn metadata_namespace(config: &ClientConfig) -> Result<String, StoreError> {
         authority.to_ascii_lowercase(),
         uri.path()
     );
+
     let mut hash = Sha256::new();
     hash.update(b"axe-store-metadata-v1");
     hash.update((url.len() as u64).to_be_bytes());
@@ -455,6 +460,7 @@ impl Client {
                 config.max_metadata_bytes,
             )?
         };
+
         let metadata_namespace = metadata_namespace(&config)?;
         let metadata_agent = build_agent(&config, config.metadata_timeout)?;
         let object_agent = build_agent(&config, config.object_timeout)?;
@@ -588,6 +594,7 @@ impl Client {
             index,
             blocking_error,
         };
+
         *state = Some(result.clone());
         Ok(result)
     }
@@ -603,6 +610,7 @@ impl Client {
                 format!("unknown AXE Store tool {name:?}"),
             )
         })?;
+
         let target = Target::detect().map_err(|error| {
             StoreError::configuration(StoreStage::Configuration, error.to_string())
         })?;
@@ -650,6 +658,7 @@ impl Client {
                     ));
                 }
             }
+
             prepare::remove_cache_entry(&path).map_err(|error| {
                 StoreError::transient(
                     StoreStage::Storage,
@@ -696,6 +705,7 @@ impl Client {
                 (None, None, Some(error))
             }
         };
+
         if cache_state.as_ref().is_some_and(|state| !state.is_stale()) {
             return cached_manifest.ok_or_else(|| {
                 StoreError::integrity(
@@ -754,6 +764,7 @@ impl Client {
                         "manifest ID mismatch",
                     ));
                 }
+
                 if let Some(directory) = &cache {
                     write_metadata(
                         directory,
@@ -792,6 +803,7 @@ impl Client {
             StoreStage::Index,
             self.config.max_metadata_bytes,
         )?;
+
         Ok(Some((index, state)))
     }
 
@@ -803,6 +815,7 @@ impl Client {
         let Some((bytes, state)) = read_metadata(directory, StoreStage::Manifest)? else {
             return Ok(None);
         };
+
         verify_manifest_digest(&bytes, entry)?;
         let manifest: ToolManifest = verify_document(&bytes, &self.config.trusted_keys)
             .map_err(|error| StoreError::integrity(StoreStage::Manifest, error.to_string()))?;
@@ -894,6 +907,7 @@ impl Client {
                 .limit(limit)
                 .read_to_vec()
                 .map_err(|error| StoreError::transient(stage, format!("read response: {error}")))?;
+
             Ok(Fetch::Content { bytes, etag })
         })();
 
@@ -961,6 +975,7 @@ impl Client {
                 return None;
             }
         };
+
         let latest_valid = now.saturating_add(self.config.transient_retry.as_secs());
         if state.retry_after > latest_valid {
             let _ = fs::remove_file(path);
@@ -977,6 +992,7 @@ impl Client {
         if let Ok(mut current) = self.network_backoff.lock() {
             *current = Some(state.clone());
         }
+
         let Some(path) = self.network_backoff_path() else {
             return;
         };
@@ -1085,6 +1101,7 @@ fn decode_index(
             "decoded Index exceeds metadata size limit",
         ));
     }
+
     let index: StoreIndex = verify_document(&signed, keys)
         .map_err(|error| StoreError::integrity(stage, error.to_string()))?;
     index
@@ -1109,6 +1126,7 @@ fn resolve_manifest(
             format!("{canonical} is unavailable for channel {channel:?} on {target}"),
         )
     };
+
     let version = manifest.channels.get(channel).ok_or_else(unavailable)?;
     let artifact = manifest
         .versions
@@ -1164,6 +1182,7 @@ fn read_metadata(
     if !content.exists() && !state.exists() {
         return Ok(None);
     }
+
     let bytes = fs::read(&content).map_err(|error| {
         StoreError::integrity(stage, format!("read cached {}: {error}", content.display()))
     })?;
@@ -1194,6 +1213,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     let parent = path.parent().expect("cache file has parent");
     fs::create_dir_all(parent).map_err(|error| storage_error(parent, error))?;
     let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+
     let result = (|| -> io::Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
@@ -1204,6 +1224,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
         fs::rename(&temporary, path)?;
         File::open(parent)?.sync_all()
     })();
+
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
@@ -1237,6 +1258,7 @@ fn build_agent(config: &ClientConfig, timeout: Duration) -> Result<ureq::Agent, 
             StoreError::configuration(StoreStage::Configuration, "AXE Store URL has no host")
         })?
         .to_owned();
+
     let certificates = axe_tls_roots::certificates()
         .iter()
         .map(|certificate| ureq::tls::Certificate::from_der(certificate.as_ref()).to_owned())
@@ -1407,6 +1429,7 @@ fn happy_eyeballs_connect(
                 return Err(connect_failures(failures));
             }
         };
+
         if ready == 0 {
             continue;
         }
@@ -1423,6 +1446,7 @@ fn happy_eyeballs_connect(
                 Ok(Some(error)) | Err(error) => failures.push((attempt.address, error)),
             }
         }
+
         if pending.is_empty() {
             next_launch = Instant::now();
         }
@@ -1689,6 +1713,7 @@ impl ureq::unversioned::resolver::Resolver for FixedResolver {
         if uri.host() != Some(&self.host) {
             return Err(ureq::Error::HostNotFound);
         }
+
         let mut resolved = self.empty();
         let port = uri.port_u16().unwrap_or(443);
         let prefer_ipv4 = self.addresses.first().is_none_or(IpAddr::is_ipv4);
@@ -1720,6 +1745,7 @@ impl ureq::unversioned::resolver::Resolver for FixedResolver {
                 resolved.push(SocketAddr::new(address, port));
             }
         }
+
         if resolved.is_empty() {
             Err(ureq::Error::HostNotFound)
         } else {
@@ -1847,6 +1873,7 @@ mod tests {
         let signed = sign_document(index, &signing).expect("sign embedded Index");
         let embedded_index =
             zstd::stream::encode_all(signed.as_slice(), 3).expect("compress embedded Index");
+
         let mut client = Client::new(
             ClientConfig {
                 public_base_url,
@@ -2205,6 +2232,7 @@ mod tests {
                 .write_all(&swapped)
                 .expect("write swapped signed manifest");
         });
+
         let error = client
             .resolve("swap", "stable")
             .expect_err("reject swapped signed bytes");
@@ -2314,6 +2342,7 @@ mod tests {
             .resolve("conditional", "stable")
             .expect_err("304 cannot restore corrupt cache");
         server.join().expect("join manifest server");
+
         assert_eq!(
             (error.stage, error.class),
             (StoreStage::Manifest, FailureClass::Integrity)
@@ -2403,6 +2432,7 @@ mod tests {
             let entry = index.tools.values().next().expect("one edition tool");
             cache_signed_manifest(client, entry, bytes);
         }
+
         let other_metadata = second.metadata_root().expect("second metadata root");
         let mut first = Client::new(first.config.clone(), NetworkPolicy::Offline)
             .expect("restart first edition");
@@ -2431,6 +2461,7 @@ mod tests {
             (error.stage, error.class),
             (StoreStage::Index, FailureClass::Configuration)
         );
+
         first.defer_network_retry(&StoreError::transient(
             StoreStage::Index,
             "first edition failure",
@@ -2445,6 +2476,7 @@ mod tests {
         );
         assert!(other_metadata.exists());
         assert!(objects.join("object").exists());
+
         let mut restarted = Client::new(second.config.clone(), NetworkPolicy::Offline)
             .expect("restart surviving edition");
         restarted.storage_roots_override = Some(vec![shared.clone()]);
@@ -2529,6 +2561,7 @@ mod tests {
                 .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 .expect("write transient response");
         });
+
         let target = Target::detect().expect("supported test target");
         let index = index_with_target("backoff", 1, target);
         let mut first = client_for(&index, format!("http://{address}/"));
@@ -2671,6 +2704,7 @@ mod tests {
                 Event::Finished(written.compressed_size),
             ]
         );
+
         let status = prepared.run("fixture", &[]).expect("run sealed memfd");
         assert_eq!(status.code(), Some(23));
         fs::remove_dir_all(&directory).expect("remove memfd fixture directory");

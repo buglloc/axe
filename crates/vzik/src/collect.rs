@@ -242,6 +242,7 @@ mod linux {
         let self_pid = std::process::id();
         let capacity = max_items.saturating_sub(1);
         let mut lowest = BinaryHeap::<u32>::with_capacity(capacity.saturating_add(1));
+
         let directory = match fs::read_dir("/proc") {
             Ok(directory) => directory,
             Err(error) => {
@@ -543,6 +544,7 @@ mod linux {
                     .split(|byte| byte.is_ascii_whitespace())
                     .filter(|field| !field.is_empty())
                     .collect::<Vec<_>>();
+
                 if fields.is_empty() {
                     continue;
                 }

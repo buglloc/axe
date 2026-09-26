@@ -86,6 +86,7 @@ impl Digest {
     pub fn from_reader(mut reader: impl Read) -> io::Result<Self> {
         let mut hash = Sha256::new();
         io::copy(&mut reader, &mut HashWriter(&mut hash))?;
+
         Ok(Self(hash.finalize().into()))
     }
 
@@ -176,6 +177,7 @@ fn write_hex(formatter: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
     for byte in bytes {
         write!(formatter, "{byte:02x}")?;
     }
+
     Ok(())
 }
 
@@ -351,6 +353,7 @@ impl StoreIndex {
                     return invalid(format!("name or alias {alias:?} is claimed twice"));
                 }
             }
+
             for (channel, targets) in &entry.channels {
                 validate_name(channel, "channel")?;
                 if targets.is_empty() {
@@ -386,6 +389,7 @@ impl ToolManifest {
                 ));
             }
         }
+
         for (version, tool_version) in &self.versions {
             validate_name(version, "version")?;
             if tool_version.targets.is_empty() {
@@ -400,6 +404,7 @@ impl ToolManifest {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -617,6 +622,7 @@ where
             .checked_add(read as u64)
             .ok_or_else(|| Error::Invalid("artifact size overflow".into()))?;
     }
+
     if payload_size == 0 {
         return invalid("artifact payload must be non-empty");
     }
@@ -633,6 +639,7 @@ where
     trailer[44..].copy_from_slice(&signature.to_bytes());
     output.write_all(&trailer)?;
     output.flush()?;
+
     object_hash.update(trailer);
 
     let compressed_size = payload_size + ARTIFACT_TRAILER_SIZE as u64;
@@ -768,6 +775,7 @@ impl CanonicalTree {
     pub fn collect(root: &Path) -> Result<Self, Error> {
         let mut entries = Vec::new();
         collect_tree(root, root, &mut entries)?;
+
         entries.sort_unstable_by(|left, right| left.relative_path.cmp(&right.relative_path));
         Ok(Self { entries })
     }
@@ -849,9 +857,11 @@ fn collect_tree(
         } else {
             return invalid(format!("unsupported filesystem entry {}", source.display()));
         };
+
         if kind == CanonicalTreeEntryKind::Directory {
             collect_tree(root, &source, entries)?;
         }
+
         entries.push(CanonicalTreeEntry {
             relative_path,
             source,
@@ -882,10 +892,12 @@ fn validate_safe_link(root: &Path, source: &Path, target: &Path) -> Result<(), E
     if target.is_absolute() {
         return invalid(format!("absolute symlink target in {}", source.display()));
     }
+
     let parent = source
         .parent()
         .ok_or_else(|| Error::Invalid("symlink has no parent".into()))?;
     let joined = parent.join(target);
+
     let mut depth = 0_usize;
     for component in joined
         .strip_prefix(root)
@@ -948,6 +960,7 @@ mod tests {
                 },
             )]),
         };
+
         let bytes = sign_document(&index, &signing).expect("sign Index");
         let decoded: StoreIndex = verify_document(&bytes, &trusted).expect("verify Index");
         assert_eq!(decoded, index);
@@ -981,6 +994,7 @@ mod tests {
             Err(Error::Invalid(_))
         ));
     }
+
     #[test]
     fn metadata_types_round_trip_and_reject_untrusted_or_unknown_fields() {
         let (signing, trusted) = keys();
@@ -994,6 +1008,7 @@ mod tests {
             unpacked_sha256: Digest([2; 32]),
             fully_static: false,
         };
+
         let manifest = ToolManifest {
             schema_version: SCHEMA_VERSION,
             id: "cli/tool".into(),
@@ -1007,6 +1022,7 @@ mod tests {
                 },
             )]),
         };
+
         for bytes in [
             sign_document(&manifest, &signing).expect("sign manifest"),
             sign_document(&artifact, &signing).expect("sign artifact metadata"),
@@ -1025,6 +1041,7 @@ mod tests {
             .expect("verify manifest"),
             manifest
         );
+
         let mut forward_compatible = manifest.clone();
         forward_compatible
             .versions
@@ -1041,6 +1058,7 @@ mod tests {
         decoded
             .validate()
             .expect("ignore unknown non-local target contract");
+
         assert_eq!(
             verify_document::<Artifact>(
                 &sign_document(&artifact, &signing).expect("sign artifact metadata"),
@@ -1083,6 +1101,7 @@ mod tests {
     fn signed_object(signing: &SigningKey) -> (Vec<u8>, WrittenArtifact) {
         let compressed = zstd::stream::encode_all(b"payload".as_slice(), 3).expect("compress");
         let mut object = io::Cursor::new(Vec::new());
+
         let written =
             sign_artifact(&mut compressed.as_slice(), &mut object, signing).expect("sign artifact");
         (object.into_inner(), written)

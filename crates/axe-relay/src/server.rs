@@ -82,11 +82,13 @@ impl PortAllocator {
                 Err(error) if error.kind() == io::ErrorKind::AddrInUse => {}
                 Err(error) => return Err(error),
             }
+
             port = self.successor(port);
             if port == start {
                 break;
             }
         }
+
         Err(io::Error::new(
             io::ErrorKind::AddrInUse,
             format!(
@@ -128,12 +130,14 @@ pub async fn run(
             "invalid public port range",
         ));
     }
+
     if options.token.len() < 32 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "token must contain at least 32 bytes",
         ));
     }
+
     let listener = TcpListener::bind(&options.tcp_control).await?;
     let quic_endpoint = quic::server_endpoint(
         &options.quic_control,
@@ -142,6 +146,7 @@ pub async fn run(
         &options.quic_client_cert,
     )
     .await?;
+
     let token = Arc::<str>::from(options.token);
     let public = Arc::new(PublicEndpoint {
         bind: options.public_bind,
@@ -277,6 +282,7 @@ async fn handle_control(
             ));
         }
     };
+
     if registration.version != PROTOCOL_VERSION {
         return reject_registration(&mut stream, "unsupported protocol version").await;
     }
@@ -286,6 +292,7 @@ async fn handle_control(
     if registration.client_id.is_empty() {
         return reject_registration(&mut stream, "invalid registration").await;
     }
+
     serve_registration(
         stream,
         &registration.client_id,
@@ -303,6 +310,7 @@ async fn reject_registration(stream: &mut TcpStream, message: &str) -> io::Resul
         message,
     };
     let _ = write_cbor_frame(stream, &response).await;
+
     Err(io::Error::new(
         io::ErrorKind::PermissionDenied,
         message.to_owned(),
@@ -319,6 +327,7 @@ async fn serve_registration(
 ) -> io::Result<()> {
     let public = bind_port(endpoint.bind, ports).await?;
     let public_address = advertised_address(&endpoint.host, public.local_addr()?.port());
+
     write_cbor_frame(
         &mut stream,
         &RegistrationResponse::Accepted {
@@ -380,6 +389,7 @@ async fn resolve_peer(resolver: Option<&TokioResolver>, address: IpAddr) -> Stri
     let Some(resolver) = resolver else {
         return address.to_string();
     };
+
     let lookup = tokio::time::timeout(PTR_LOOKUP_TIMEOUT, resolver.reverse_lookup(address)).await;
     let name = match lookup {
         Ok(Ok(response)) => response.answers().iter().find_map(|record| {
@@ -433,6 +443,7 @@ async fn write_cbor_frame(
     if payload.len() > MAX_CONTROL_MESSAGE {
         return Err(invalid("control message too long"));
     }
+
     writer.write_u32(payload.len() as u32).await?;
     writer.write_all(&payload).await
 }
@@ -444,6 +455,7 @@ async fn read_cbor_frame<T: DeserializeOwned>(
     if length > MAX_CONTROL_MESSAGE {
         return Err(invalid("control message too long"));
     }
+
     let mut payload = vec![0; length];
     reader.read_exact(&mut payload).await?;
     ciborium::de::from_reader(payload.as_slice())

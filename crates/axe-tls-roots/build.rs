@@ -14,6 +14,7 @@ fn main() {
     let edition_root = env::var_os("AXE_EDITION_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| source_root.to_path_buf());
+
     let additional_ca = edition_root.join("store/nix/assets/trusted_ca.pem");
     println!("cargo:rerun-if-changed={}", additional_ca.display());
 
@@ -27,6 +28,7 @@ fn main() {
     } else {
         Vec::new()
     };
+
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR")).join("additional-ca.pem");
     fs::write(&output, bytes)
         .unwrap_or_else(|error| panic!("write generated CA bundle {}: {error}", output.display()));

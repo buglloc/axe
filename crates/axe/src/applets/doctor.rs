@@ -106,6 +106,7 @@ pub(crate) struct BridgeObservation {
     pub path: Observation<EncodedOsValue>,
     pub failure: Option<Failure>,
 }
+
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct LaunchCandidate {
     pub kind: &'static str,

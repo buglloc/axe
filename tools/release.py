@@ -17,6 +17,7 @@ import tempfile
 import tomllib
 from urllib.request import urlopen
 
+
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = {
     "x86_64-linux": "axe-x86_64-unknown-linux-musl",
@@ -108,6 +109,7 @@ def changelog_with_release(text: str, tag: str, date: str, notes: str) -> str:
     if not text.startswith(header):
         raise ReleaseError("invalid changelog frontmatter")
     body = text[len(header):].strip()
+
     entry = re.sub(r"(?m)^## ", "### ", notes.strip())
     existing = re.search(rf"(?m)^## \[{re.escape(tag)}\]\([^\n]+\) — [^\n]+$", body)
     if existing:
@@ -115,6 +117,7 @@ def changelog_with_release(text: str, tag: str, date: str, notes: str) -> str:
         if following != entry:
             raise ReleaseError(f"changelog entry differs from reviewed notes for {tag}")
         return text
+
     heading = f"## [{tag}](https://github.com/buglloc/axe/releases/tag/{tag}) — {date}"
     previous = "" if body == "No published releases yet." else body
     return header + "\n" + heading + "\n\n" + entry + "\n" + ("\n" + previous + "\n" if previous else "")
@@ -128,6 +131,7 @@ def prepare(bump: str) -> None:
     clean()
     old = current_version()
     previous = last_tag()
+
     if previous is None:
         if bump != "initial":
             raise ReleaseError("first release requires 'initial' (uses the current workspace version)")
@@ -139,12 +143,14 @@ def prepare(bump: str) -> None:
             raise ReleaseError(f"Cargo version {old} does not match last tag {previous}")
         major, minor, patch = map(int, old.split("."))
         version = {"major": f"{major + 1}.0.0", "minor": f"{major}.{minor + 1}.0", "patch": f"{major}.{minor}.{patch + 1}"}[bump]
+
     tag = f"v{version}"
     if git("tag", "--list", tag):
         raise ReleaseError(f"tag {tag} already exists")
     page = page_for(version)
     if page.exists():
         raise ReleaseError(f"release notes already exist: {page}")
+
     source = f"{previous}..HEAD" if previous else "HEAD"
     history = git("log", "--format=%H%n%s%n%b%n---", source)
     if not history:
@@ -154,6 +160,7 @@ def prepare(bump: str) -> None:
     patch = git("diff", "--no-ext-diff", previous, "HEAD", "--", *paths) if previous else ""
     if len(patch.encode()) > 150_000:
         patch = "Patch exceeds 150 KiB; no patch supplied. Do not infer behavior from filenames alone."
+
     context = (
         f"Release {tag}; source range: {previous or 'first release'}..HEAD\n\n"
         f"Commit messages:\n{history}\n\nChanged files:\n{changes}\n\n"
@@ -170,12 +177,14 @@ def prepare(bump: str) -> None:
         "If the evidence is insufficient, explicitly say so in the relevant section. "
         "Output ONLY the Markdown body; a human will review before publication. Use skill://avoid-ai-writing"
     )
-    with tempfile.TemporaryDirectory(prefix="axe-release-") as temporary:
+
+    with tempfile.TemporaryDirectory(prefix=".axe-release-", dir=ROOT) as temporary:
         evidence = Path(temporary) / "evidence.txt"
         evidence.write_text(context)
-        notes = run("omp", "--no-tools", "--no-session", "--no-extensions", "--no-skills", "--no-rules", "--max-time", "10m", "-p", f"@{evidence}", prompt, capture=True)
+        notes = run("omp",  "--no-extensions", "--max-time", "10m", "-p", f"@{evidence}", prompt, capture=True)
     if not notes.startswith("## ") or "```" in notes:
         raise ReleaseError("OMP did not return reviewable Markdown notes")
+
     manifest = ROOT / "Cargo.toml"
     lock = ROOT / "Cargo.lock"
     original_manifest = manifest.read_text()
@@ -184,6 +193,7 @@ def prepare(bump: str) -> None:
     updated, count = re.subn(r'(?m)^version = "[^"\n]+"$', f'version = "{version}"', section, count=1)
     if not separator or count != 1:
         raise ReleaseError("cannot locate workspace version")
+
     try:
         atomic_write(manifest, prefix + separator + updated)
         run("cargo", "update", "--workspace", "--offline")
@@ -194,6 +204,7 @@ def prepare(bump: str) -> None:
         lock.write_bytes(original_lock)
         page.unlink(missing_ok=True)
         raise
+
     print(f"Prepared {tag}; review {page}, Cargo.toml, Cargo.lock, then commit and push main.")
 
 
@@ -206,16 +217,19 @@ def release_cli(edition: Path, stage: Path, phase: str, directory: Path | None) 
         command.extend(("--backend", "directory", "--directory", str(directory)))
     run(*command, cwd=edition)
 
+
 def verify_public_objects(stage: Path, *, stable: bool = False) -> None:
     records = json.loads((stage / "axe-releases.json").read_text())
     if set(records) != set(TARGETS):
         raise ReleaseError("release metadata does not contain all targets")
+
     for target, record in records.items():
         expected = sha256(stage / TARGETS[target])
         url = record["stable_url"] if stable else record["url"]
         if not url.startswith("https://"):
             raise ReleaseError(f"release URL is not HTTPS: {target}")
         digest = hashlib.sha256()
+
         with urlopen(url, timeout=60) as response:
             if response.status != 200 or response.geturl() != url:
                 raise ReleaseError(f"release object unreadable at expected URL: {url}")
@@ -228,15 +242,16 @@ def verify_public_objects(stage: Path, *, stable: bool = False) -> None:
                 remaining -= len(block)
             if response.read(1):
                 raise ReleaseError(f"oversized release object: {target}")
+
         if digest.hexdigest() != expected:
             raise ReleaseError(f"public release object differs from staged asset: {target}")
-
 
 
 def render_downloads(readme: str, tag: str, records: dict, assets: dict) -> str:
     if set(records) != set(TARGETS):
         raise ReleaseError("cannot update README from incomplete release metadata")
     github = f"https://github.com/buglloc/axe/releases/download/{tag}"
+
     lines = [
         "## Downloads",
         "",
@@ -245,6 +260,7 @@ def render_downloads(readme: str, tag: str, records: dict, assets: dict) -> str:
         "| Target | Binary | SHA-256 |",
         "| --- | --- | --- |",
     ]
+
     for target, name in TARGETS.items():
         record = records[target]
         if (
@@ -257,9 +273,11 @@ def render_downloads(readme: str, tag: str, records: dict, assets: dict) -> str:
         if record["hash"] != "sha256-" + base64.b64encode(bytes.fromhex(assets[name])).decode() or digest != assets[name]:
             raise ReleaseError(f"metadata hash does not match GitHub asset: {target}")
         lines.append(f"| AXE {target} | [GitHub]({github}/{name}) · [immutable S3]({record['url']}) | `{digest}` |")
+
     for target, name in zip(TARGETS, RELAY, strict=True):
         lines.append(f"| axe-relay {target} | [GitHub]({github}/{name}) | `{assets[name]}` |")
     section = "\n".join(lines) + "\n\n"
+
     marker = "## Downloads\n"
     if readme.count(marker) != 1:
         raise ReleaseError("README must contain exactly one Downloads section")
@@ -272,6 +290,7 @@ def render_downloads(readme: str, tag: str, records: dict, assets: dict) -> str:
 
 def gh_release(tag: str) -> dict | None:
     result = subprocess.run(("gh", "release", "view", tag, "--json", "isDraft,body,assets"), cwd=ROOT, capture_output=True, text=True, check=False)
+
     if result.returncode == 0:
         return json.loads(result.stdout)
     if "release not found" in result.stderr.lower() or "http 404" in result.stderr.lower():
@@ -282,6 +301,7 @@ def gh_release(tag: str) -> dict | None:
 def remote_tag(tag: str) -> str | None:
     output = git("ls-remote", "--tags", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}")
     refs = dict(line.split("\t", 1)[::-1] for line in output.splitlines())
+
     if not refs:
         return None
     return refs.get(f"refs/tags/{tag}^{{}}") or refs.get(f"refs/tags/{tag}")
@@ -291,6 +311,7 @@ def verify_remote_source(commit: str) -> None:
     remote = git("ls-remote", "origin", "refs/heads/main")
     if not remote or remote.split()[0] != commit:
         raise ReleaseError("push the reviewed release commit to origin/main first")
+
     if run("gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner", capture=True) != "buglloc/axe":
         raise ReleaseError("GitHub CLI is not targeting the public buglloc/axe repository")
 
@@ -303,6 +324,7 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
     snapshot = sha256(index)
     notes = release_notes(page)
     manifest_path = stage / "manifest.json"
+
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text())
         if (
@@ -318,6 +340,7 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
         return stage
     if stage.exists():
         raise ReleaseError(f"incomplete release staging directory: {stage}; inspect before retry")
+
     checks = (
         ("cargo", "fmt", "--all", "--", "--check"),
         ("just", "check"),
@@ -329,12 +352,14 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
     )
     for command in checks:
         run(*command)
+
     if sha256(index) != snapshot:
         raise ReleaseError("Store bootstrap changed during build")
     native = out / TARGETS["x86_64-linux"]
     output = run(str(native), "--version", capture=True)
     if f"axe {version}+{commit[:12]} (edition oss;" not in output:
         raise ReleaseError(f"built binary has wrong version, source commit or edition: {output}")
+
     stage.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".release-stage-", dir=stage.parent) as temporary:
         pending = Path(temporary)
@@ -345,6 +370,7 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
                 raise ReleaseError(f"missing built asset: {source}")
             shutil.copy2(source, pending / name)
             assets[name] = sha256(pending / name)
+
         atomic_write(pending / "notes.md", notes)
         atomic_write(pending / "SHA256SUMS", "".join(f"{digest}  {name}\n" for name, digest in sorted(assets.items())))
         assets["SHA256SUMS"] = sha256(pending / "SHA256SUMS")
@@ -357,6 +383,7 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
     if edition != ROOT or json.loads((edition / "edition.json").read_text())["id"] != "oss":
         raise ReleaseError("public GitHub releases require the OSS edition root")
     tag = f"v{version}"
+
     page = page_for(version)
     if not page.is_file() or current_version() != version:
         raise ReleaseError(f"commit version {version} and reviewed notes {page} first")
@@ -367,6 +394,7 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
         allowed = {"nix/axe-releases.json", "README.md", "web/content/changelog.md", str(page.relative_to(ROOT))}
         if not stage.joinpath("manifest.json").exists() or any(line[3:] not in allowed for line in dirty.splitlines()):
             raise ReleaseError("checkout has changes unrelated to this staged release")
+
         metadata = stage / "axe-releases.json"
         if metadata.exists() and (edition / "nix" / "axe-releases.json").read_text() != metadata.read_text():
             raise ReleaseError("release metadata changed independently of staged publication")
@@ -374,6 +402,7 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
         clean()
     if directory is None:
         verify_remote_source(commit)
+
     local_tag = git("rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{}}") if git("tag", "--list", tag) else None
     if local_tag is not None and local_tag != commit:
         raise ReleaseError(f"existing tag {tag} points to another commit")
@@ -383,26 +412,31 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
             raise ReleaseError(f"remote tag {tag} points to another commit")
         if remote is not None and local_tag is None:
             raise ReleaseError(f"fetch the existing remote tag {tag} before retrying")
+
     if not stage.joinpath("manifest.json").exists() and (
         local_tag is not None or (directory is None and remote is not None)
     ):
         raise ReleaseError(f"tag {tag} already exists; restore the original dist/releases/{tag} before retrying")
+
     stage = stage_assets(version, commit, out, edition, page)
     if directory is not None:
         release_cli(edition, stage, "immutable", directory)
         release_cli(edition, stage, "stable", directory)
         print(f"Verified local directory release {tag} at {directory}; no tag, GitHub, or S3 changes")
         return
+
     if local_tag is None:
         run("git", "tag", "-a", tag, "-m", f"AXE {tag}")
     if remote_tag(tag) is None:
         run("git", "push", "origin", f"refs/tags/{tag}")
+
     release = gh_release(tag)
     if release is None:
         run("gh", "release", "create", tag, "--verify-tag", "--draft", "--title", tag, "--notes-file", str(stage / "notes.md"))
         release = gh_release(tag)
     if release is None or release["body"].strip() != (stage / "notes.md").read_text().strip():
         raise ReleaseError("GitHub release body differs from reviewed notes")
+
     release_cli(edition, stage, "immutable", None)
     records = json.loads((stage / "axe-releases.json").read_text())
     assets = json.loads((stage / "manifest.json").read_text())["assets"]
@@ -411,6 +445,7 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
     if dirty and "README.md" in {line[3:] for line in dirty.splitlines()} and (ROOT / "README.md").read_text() != readme:
         raise ReleaseError("README changes are not the expected staged download table")
     verify_public_objects(stage)
+
     expected = json.loads((stage / "manifest.json").read_text())["assets"]
     for name, digest in expected.items():
         if name not in {asset["name"] for asset in release["assets"]}:
@@ -419,14 +454,17 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
             run("gh", "release", "download", tag, "--pattern", name, "--dir", temporary)
             if sha256(Path(temporary) / name) != digest:
                 raise ReleaseError(f"GitHub release asset differs from staged binary: {name}")
+
     if release["isDraft"]:
         run("gh", "release", "edit", tag, "--draft=false")
     release_cli(edition, stage, "stable", None)
     verify_public_objects(stage, stable=True)
+
     data = (stage / "axe-releases.json").read_text()
     records = json.loads(data)
     if set(records) != set(TARGETS) or any(item["version"] != version for item in records.values()):
         raise ReleaseError("release metadata missing a target or has mismatched versions")
+
     atomic_write(edition / "nix" / "axe-releases.json", data)
     changelog = ROOT / "web" / "content" / "changelog.md"
     atomic_write(changelog, changelog_with_release(changelog.read_text(), tag, datetime.now(timezone.utc).date().isoformat(), release_notes(page)))
@@ -442,8 +480,10 @@ def main() -> None:
     publish_parser = subcommands.add_parser("publish")
     publish_parser.add_argument("--edition-root", type=Path, default=ROOT)
     publish_parser.add_argument("--output", type=Path, default=ROOT / "dist")
+
     publish_parser.add_argument("--local-directory", type=Path, help="exercise complete local publication without GitHub, S3, or tags")
     arguments = parser.parse_args()
+
     if arguments.command == "prepare":
         prepare(arguments.bump)
     else:

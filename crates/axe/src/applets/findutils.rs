@@ -631,6 +631,7 @@ fn execution_budget() -> usize {
 fn os_string_from_input(bytes: &[u8]) -> Result<OsString, String> {
     Ok(OsString::from_vec(bytes.to_vec()))
 }
+
 fn launch_failure(command: &OsStr, error: io::Error) -> XargsFailure {
     XargsFailure {
         code: if error.kind() == io::ErrorKind::NotFound {

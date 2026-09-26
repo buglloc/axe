@@ -104,6 +104,7 @@ fn list<W: Write>(
             return Ok(unavailable_report(coverage));
         }
     };
+
     let mut partial = false;
     if let Some(error) = discovery_error {
         partial = true;
@@ -115,6 +116,7 @@ fn list<W: Write>(
             &mut coverage,
         )?;
     }
+
     let mut successful_managers = 0_u64;
 
     for target in targets {
@@ -135,6 +137,7 @@ fn list<W: Write>(
                 continue;
             }
         };
+
         successful_managers += 1;
         coverage.scanned = coverage.scanned.saturating_add(units.len() as u64);
         units.sort_by(|left, right| left.0.cmp(&right.0));
@@ -202,6 +205,7 @@ fn inspect<W: Write>(
             return Ok(unavailable_report(coverage));
         }
     };
+
     check_deadline(deadline)?;
 
     let connection = match connect(&target.socket, deadline) {
@@ -225,6 +229,7 @@ fn inspect<W: Write>(
             return Ok(unavailable_report(coverage));
         }
     };
+
     let unit_properties = match get_all(&connection, &object_path, UNIT_INTERFACE) {
         Ok(properties) => properties,
         Err(error) => {
@@ -287,6 +292,7 @@ pub(super) fn manager_targets(
             None,
         ));
     }
+
     if let Some(socket) = socket {
         return Ok((
             vec![ManagerTarget {
@@ -323,6 +329,7 @@ fn discover_user_managers() -> (Vec<ManagerTarget>, Option<io::Error>) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return (targets, None),
         Err(error) => return (targets, Some(error)),
     };
+
     let mut discovery_error = None;
 
     for entry in entries {
@@ -340,6 +347,7 @@ fn discover_user_managers() -> (Vec<ManagerTarget>, Option<io::Error>) {
         else {
             continue;
         };
+
         let socket = entry.path().join("bus");
         match socket.try_exists() {
             Ok(true) => {}
@@ -349,6 +357,7 @@ fn discover_user_managers() -> (Vec<ManagerTarget>, Option<io::Error>) {
                 continue;
             }
         }
+
         targets.push(ManagerTarget {
             scope: "user",
             user: users.remove(&uid),
@@ -381,6 +390,7 @@ fn passwd_users() -> io::Result<BTreeMap<u32, Vec<u8>>> {
 
 fn passwd_entries() -> io::Result<Vec<(Vec<u8>, u32)>> {
     let (bytes, _) = read_bounded(Path::new("/etc/passwd"), PASSWD_BYTES)?;
+
     let mut users = Vec::new();
     for line in bytes.split(|byte| *byte == b'\n') {
         let fields = line.split(|byte| *byte == b':').collect::<Vec<_>>();

@@ -41,6 +41,7 @@ impl PreparedTool {
             .then(CaBundle::create)
             .transpose()
             .map_err(|error| StoreError::transient(StoreStage::Execute, error.to_string()))?;
+
         let result = match &self.executable {
             Executable::Path(path) => run_path(path, name, args, ca_bundle.as_ref()),
             #[cfg(target_os = "linux")]
@@ -78,6 +79,7 @@ pub(crate) fn prepare(
             Err(error) => return Err(object_corruption.unwrap_or(error)),
         }
     }
+
     let mut object = object.expect("cache or download produced object");
 
     match &resolved.artifact.kind {
@@ -105,6 +107,7 @@ fn find_cached_object(
 ) -> Result<(Option<ObjectFile>, Option<StoreError>), StoreError> {
     let relative = object_relative(resolved.artifact.object_sha256);
     let mut corruption = None;
+
     for root in client.storage_roots() {
         let cache = root.join(&relative);
         match load_cached_object(client, resolved, &cache) {
@@ -129,6 +132,7 @@ fn load_cached_object(
         return Ok(None);
     }
     ensure_private_cache_directory(cache)?;
+
     let path = cache.join("object");
     let mut file = match File::open(&path) {
         Ok(file) => file,
@@ -153,6 +157,7 @@ fn load_cached_object(
             format!("corrupt cached object {}: {error}", path.display()),
         )
     })?;
+
     write_verified_state(
         cache,
         &path,
@@ -177,6 +182,7 @@ fn download_object(
         .ok_or_else(|| StoreError::configuration(StoreStage::Storage, "required space overflow"))?;
     let relative = object_relative(resolved.artifact.object_sha256);
     let mut storage_errors = Vec::new();
+
     for root in client.storage_roots() {
         if let Err(error) = ensure_writable_root(&root, required) {
             storage_errors.push(error);
@@ -188,6 +194,7 @@ fn download_object(
             storage_errors.push(storage_error(parent, error));
             continue;
         }
+
         let lock_path = root
             .join("locks")
             .join(format!("object-{}.lock", resolved.artifact.object_sha256));
@@ -198,6 +205,7 @@ fn download_object(
                 continue;
             }
         };
+
         match load_cached_object(client, resolved, &destination) {
             Ok(Some(object)) => return Ok(object),
             Ok(None) => {}
@@ -222,6 +230,7 @@ fn download_object(
             storage_errors.push(error);
             continue;
         }
+
         let mut cleanup = CleanupPath::new(temporary.clone());
         let temporary_object = temporary.join("object");
         let mut file = match OpenOptions::new()
@@ -236,6 +245,7 @@ fn download_object(
                 continue;
             }
         };
+
         let result: Result<ObjectFile, StoreError> = (|| {
             download_into(client, resolved, &mut file, progress)?;
             file.sync_all()
@@ -253,11 +263,13 @@ fn download_object(
                 Some(verified.payload_size),
                 &client.metadata_namespace,
             )?;
+
             sync_directory(&temporary)?;
             remove_cache_entry(&destination).map_err(|error| storage_error(&destination, error))?;
             fs::rename(&temporary, &destination)
                 .map_err(|error| storage_error(&destination, error))?;
             sync_directory(parent)?;
+
             cleanup.disarm();
             file.seek(SeekFrom::Start(0))
                 .map_err(|error| storage_error(&destination, error))?;
@@ -266,6 +278,7 @@ fn download_object(
                 payload_size: verified.payload_size,
             })
         })();
+
         match result {
             Ok(object) => return Ok(object),
             Err(error)
@@ -394,6 +407,7 @@ fn download_into(
                 last_report = Instant::now();
             }
         }
+
         if downloaded != total {
             return Err(StoreError::transient(
                 StoreStage::Object,
@@ -402,6 +416,7 @@ fn download_into(
         }
         Ok(downloaded)
     })();
+
     client.record_network_result(&result);
 
     match result {
@@ -445,6 +460,7 @@ fn prepare_single(
         let cache = root.join(&relative);
         let destination = cache.join("payload");
         let parent = cache.parent().expect("unpacked path has parent");
+
         if let Err(error) = fs::create_dir_all(parent) {
             storage_errors.push(storage_error(parent, error));
             continue;
@@ -506,6 +522,7 @@ fn prepare_single(
                     continue;
                 }
             }
+
             if let Err(error) = remove_cache_entry(&cache) {
                 storage_errors.push(storage_error(&cache, error));
                 continue;
@@ -521,6 +538,7 @@ fn prepare_single(
             storage_errors.push(error);
             continue;
         }
+
         let mut cleanup = CleanupPath::new(temporary.clone());
         let temporary_payload = temporary.join("payload");
         let mut output = match OpenOptions::new()
@@ -534,6 +552,7 @@ fn prepare_single(
                 continue;
             }
         };
+
         let result: Result<PreparedTool, StoreError> = (|| {
             decode_single(object, payload_size, &mut output, resolved)?;
             make_executable(&temporary_payload)
@@ -555,6 +574,7 @@ fn prepare_single(
                 executable: Executable::Path(destination),
             })
         })();
+
         match result {
             Ok(prepared) => return Ok(prepared),
             Err(error) if error.class == FailureClass::Integrity => return Err(error),
@@ -602,6 +622,7 @@ fn decode_single(
     output
         .seek(SeekFrom::Start(0))
         .map_err(|error| StoreError::transient(StoreStage::Storage, error.to_string()))?;
+
     let limited = object.take(payload_size);
     let mut decoder = zstd::Decoder::new(limited)
         .map_err(|error| classify_decode_io(error, "open Zstandard payload"))?;
@@ -653,6 +674,7 @@ fn prepare_package(
         .unpacked_size
         .checked_add(client.config.free_space_reserve_bytes.max(MINIMUM_RESERVE))
         .ok_or_else(|| StoreError::configuration(StoreStage::Storage, "required space overflow"))?;
+
     let relative = unpacked_relative(resolved.artifact.unpacked_sha256);
     let mut corruption = None;
     let mut last_storage = None;
@@ -672,6 +694,7 @@ fn prepare_package(
         let destination = cache.join("tree");
         let executable = destination.join(entrypoint);
         let parent = cache.parent().expect("unpacked path has parent");
+
         if let Err(error) = fs::create_dir_all(parent) {
             last_storage = Some(storage_error(parent, error));
             continue;
@@ -747,6 +770,7 @@ fn prepare_package(
             last_storage = Some(error);
             continue;
         }
+
         let mut cleanup = CleanupPath::new(temporary.clone());
         let tar_path = temporary.join("package.tar");
         let tree = temporary.join("tree");
@@ -769,6 +793,7 @@ fn prepare_package(
                 executable: Executable::Path(executable),
             })
         })();
+
         match result {
             Ok(prepared) => return Ok(prepared),
             Err(error) if error.class == FailureClass::Integrity => return Err(error),
@@ -806,11 +831,13 @@ fn decode_and_extract_package(
             ),
         ));
     }
+
     tar_file
         .sync_all()
         .map_err(|error| storage_error(tar_path, error))?;
     fs::create_dir(tree).map_err(|error| storage_error(tree, error))?;
     extract_safe_tar(tar_path, tree)?;
+
     let digest = canonical_tree_digest(tree)
         .map_err(|error| StoreError::integrity(StoreStage::Decode, error.to_string()))?;
     if digest != resolved.artifact.unpacked_sha256 {
@@ -819,6 +846,7 @@ fn decode_and_extract_package(
             "package tree digest mismatch",
         ));
     }
+
     let executable = tree.join(entrypoint);
     if !is_executable(&executable) {
         return Err(StoreError::integrity(
@@ -837,6 +865,7 @@ fn extract_safe_tar(tar_path: &Path, destination: &Path) -> Result<(), StoreErro
         .unpack(destination)
         .map_err(|error| classify_decode_io(error, "unpack package"))
 }
+
 #[derive(Debug, Deserialize, Serialize)]
 struct VerifiedState {
     schema: u8,
@@ -875,6 +904,7 @@ fn write_verified_state(
             format!("serialize verified cache state: {error}"),
         )
     })?;
+
     let temporary = cache.join(".verified.tmp");
     let destination = cache.join(VERIFIED_STATE_FILE);
     remove_cache_entry(&temporary).map_err(|error| storage_error(&temporary, error))?;
@@ -885,6 +915,7 @@ fn write_verified_state(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
+
     let mut file = options
         .open(&temporary)
         .map_err(|error| storage_error(&temporary, error))?;
@@ -948,6 +979,7 @@ fn fingerprint_entry(path: &Path, relative: &Path, hash: &mut Sha256) -> io::Res
             hash.update(duration.as_nanos().to_le_bytes());
         }
     }
+
     if file_type.is_symlink() {
         let target = fs::read_link(path)?;
         let target = target.as_os_str().as_encoded_bytes();
@@ -964,6 +996,7 @@ fn fingerprint_entry(path: &Path, relative: &Path, hash: &mut Sha256) -> io::Res
             fingerprint_entry(&child.path(), &relative.join(child.file_name()), hash)?;
         }
     }
+
     Ok(())
 }
 
@@ -1031,6 +1064,7 @@ fn prepare_directory_removal(path: &Path) -> io::Result<()> {
     if mode & 0o700 != 0o700 {
         fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o700))?;
     }
+
     for entry in fs::read_dir(path)? {
         let entry = entry?;
         if entry.file_type()?.is_dir() {
@@ -1079,6 +1113,7 @@ fn verify_unpacked_file(path: &Path, expected: Digest, size: u64) -> Result<bool
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(storage_error(path, error)),
     };
+
     if !metadata.is_file() {
         return Err(StoreError::integrity(
             StoreStage::Decode,
@@ -1091,6 +1126,7 @@ fn verify_unpacked_file(path: &Path, expected: Digest, size: u64) -> Result<bool
             "cached executable size mismatch",
         ));
     }
+
     let actual = Digest::from_file(path).map_err(|error| storage_error(path, error))?;
     if actual != expected {
         return Err(StoreError::integrity(
@@ -1098,6 +1134,7 @@ fn verify_unpacked_file(path: &Path, expected: Digest, size: u64) -> Result<bool
             "cached executable digest mismatch",
         ));
     }
+
     make_executable(path).map_err(|error| storage_error(path, error))?;
     Ok(true)
 }
@@ -1156,6 +1193,7 @@ fn format_error_chain(error: &dyn std::error::Error) -> String {
 fn acquire_lock(path: &Path) -> Result<LockGuard, StoreError> {
     let parent = path.parent().expect("lock path has parent");
     fs::create_dir_all(parent).map_err(|error| storage_error(parent, error))?;
+
     for _ in 0..100 {
         match OpenOptions::new().write(true).create_new(true).open(path) {
             Ok(mut file) => {
@@ -1172,6 +1210,7 @@ fn acquire_lock(path: &Path) -> Result<LockGuard, StoreError> {
             Err(error) => return Err(storage_error(path, error)),
         }
     }
+
     Err(StoreError::transient(
         StoreStage::Storage,
         "timed out waiting for cache lock",
@@ -1276,6 +1315,7 @@ fn run_memfd(
     for argument in args {
         argv.push(CString::new(argument.as_os_str().as_bytes()).map_err(io::Error::other)?);
     }
+
     let mut environment = std::env::vars_os()
         .filter(|(key, _)| key != OsStr::new("CURL_CA_BUNDLE"))
         .map(|(key, value)| {
@@ -1290,6 +1330,7 @@ fn run_memfd(
         bytes.extend_from_slice(ca.path().as_os_str().as_bytes());
         environment.push(CString::new(bytes).map_err(io::Error::other)?);
     }
+
     let argv_pointers = argv
         .iter()
         .map(|value| value.as_ptr() as usize)
@@ -1339,6 +1380,7 @@ fn sync_directory_tree(root: &Path) -> io::Result<()> {
         }
         index += 1;
     }
+
     for directory in directories.into_iter().rev() {
         File::open(directory)?.sync_all()?;
     }
@@ -1476,6 +1518,7 @@ mod tests {
         fs::create_dir_all(cache.parent().expect("cache has parent"))
             .expect("create shared cache parent");
         ensure_private_cache_directory(&cache).expect("create shared cache");
+
         let signing = SigningKey::from_bytes(&[17; 32]);
         let other_signing = SigningKey::from_bytes(&[23; 32]);
         let mut signed = io::Cursor::new(Vec::new());
@@ -1503,6 +1546,7 @@ mod tests {
             .expect("first edition verifies object")
             .expect("cached object");
         assert_ne!(first.metadata_namespace, second.metadata_namespace);
+
         let error = match load_cached_object(&second, &resolved, &cache) {
             Ok(_) => panic!("second edition cannot reuse first edition's verified state"),
             Err(error) => error,
@@ -1556,6 +1600,7 @@ mod tests {
         let object_path = root.join("signed-object");
         fs::write(&object_path, signed.into_inner()).expect("write replacement object");
         let mut object = File::open(object_path).expect("open replacement object");
+
         let resolved = crate::ResolvedTool {
             name: "shared".into(),
             version: "1".into(),
@@ -1569,6 +1614,7 @@ mod tests {
                 fully_static: false,
             },
         };
+
         let prepared = prepare_single(&second, &resolved, &mut object, written.payload_size)
             .expect("repair corrupt shared payload");
         assert!(matches!(&prepared.executable, Executable::Path(_)));

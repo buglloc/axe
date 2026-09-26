@@ -116,6 +116,7 @@ fn run_applet(applet: &str, args: &[&str], input: &[u8], current_dir: &Path) -> 
 fn assert_parity(applet: &str, case: Case<'_>, current_dir: &Path) {
     let reference = run_reference(applet, case.args, case.input, current_dir);
     let actual = run_applet(applet, case.args, case.input, current_dir);
+
     let context = || {
         format!(
             "{} ({applet} {})\nreference: {}\naxe: {}",
@@ -378,6 +379,7 @@ fn assert_compression_interoperability(applet: &str) {
 
     let axe_stream = run_applet(applet, &["-c"], input, scratch.path());
     assert_success("axe compression", &axe_stream);
+
     let decoded = run_reference(applet, &["-dc"], &axe_stream.stdout, scratch.path());
     assert_success("reference decompression of axe stream", &decoded);
     assert_eq!(

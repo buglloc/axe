@@ -598,6 +598,7 @@ fn event_names(mask: EventMask) -> Vec<&'static str> {
     .filter_map(|(event, name)| mask.contains(event).then_some(name))
     .collect()
 }
+
 fn event_counter_names(mask: EventMask) -> Vec<&'static str> {
     [
         (EventMask::ACCESS, "access"),
@@ -636,6 +637,7 @@ fn event_columns() -> &'static [&'static str] {
         "unmount",
     ]
 }
+
 fn path_selected(path: &Path, common: &Common) -> bool {
     let value = path.to_string_lossy();
     !common
@@ -647,6 +649,7 @@ fn path_selected(path: &Path, common: &Common) -> bool {
             .as_ref()
             .is_none_or(|regex| regex.is_match(&value))
 }
+
 fn watched_name(path: &Path) -> String {
     let mut value = path.to_string_lossy().into_owned();
     if path.is_dir() && !value.ends_with('/') {
@@ -654,9 +657,11 @@ fn watched_name(path: &Path) -> String {
     }
     value
 }
+
 fn csv_field(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
+
 fn parse_timeout(value: Option<String>) -> Result<Option<Duration>, String> {
     let seconds = value
         .ok_or("timeout requires an argument")?
@@ -664,6 +669,7 @@ fn parse_timeout(value: Option<String>) -> Result<Option<Duration>, String> {
         .map_err(|_| "invalid timeout")?;
     Ok((seconds > 0).then(|| Duration::from_secs(seconds)))
 }
+
 fn signal_flag() -> Result<Arc<AtomicBool>, String> {
     let flag = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, flag.clone())
@@ -672,6 +678,7 @@ fn signal_flag() -> Result<Arc<AtomicBool>, String> {
         .map_err(|error| error.to_string())?;
     Ok(flag)
 }
+
 fn utf8_args(args: Vec<OsString>) -> Result<Vec<String>, String> {
     args.into_iter()
         .map(|value| {

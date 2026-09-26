@@ -21,6 +21,7 @@ pub(crate) enum BridgeState {
     Published(PathBuf),
     Disabled,
 }
+
 const LOCK_STALE_AFTER: Duration = Duration::from_secs(120);
 const MAX_GENERATIONS: usize = 2;
 
@@ -576,6 +577,7 @@ mod tests {
 
         fs::remove_dir_all(&root).expect("clean scratch directory");
     }
+
     #[test]
     fn canonical_filesystem_target_is_published_verbatim() {
         let root = scratch("filesystem-target");

@@ -41,6 +41,7 @@ fn capability_discovery_separates_compact_index_from_detail() {
     let index = vzik().arg("capabilities").output().expect("run index");
     assert!(index.status.success());
     let index: Value = serde_json::from_slice(&index.stdout).expect("capability index JSON");
+
     assert_eq!(index["schema_version"], 3);
     assert_eq!(index["protocol"]["schema_version"], 3);
     assert_eq!(index["exit_status"]["degraded"], 3);
@@ -52,6 +53,7 @@ fn capability_discovery_separates_compact_index_from_detail() {
         .expect("run detail");
     assert!(detail.status.success());
     let detail: Value = serde_json::from_slice(&detail.stdout).expect("capability detail JSON");
+
     assert_eq!(detail["capability"]["id"], "porto.list");
     assert!(detail["capability"]["request"].is_object());
     assert!(detail["capability"]["outcomes"].is_array());
@@ -98,6 +100,7 @@ fn degraded_collection_status_agrees_with_terminal_and_summary() {
         .output()
         .expect("summarize degraded stream");
     fs::remove_file(&path).expect("remove captured stream");
+
     assert!(summary.status.success());
     let summary: Value = serde_json::from_slice(&summary.stdout).expect("summary JSON");
     assert_eq!(summary["schema_version"], 3);
@@ -122,6 +125,7 @@ fn degraded_collection_status_agrees_with_terminal_and_summary() {
         .arg(&stderr_path)
         .output()
         .expect("capture degraded stream");
+
     assert_eq!(
         captured.status.code(),
         Some(3),
@@ -134,6 +138,7 @@ fn degraded_collection_status_agrees_with_terminal_and_summary() {
     assert_eq!(capture_result["artifact_status"], "sealed");
     let receipt: Value = serde_json::from_slice(&fs::read(&receipt_path).expect("read receipt"))
         .expect("receipt JSON");
+
     assert_eq!(receipt["schema_version"], 3);
     assert_eq!(receipt["capture"]["stream_outcome"], "degraded");
     for field in [
@@ -147,6 +152,7 @@ fn degraded_collection_status_agrees_with_terminal_and_summary() {
             capture_result["coverage_summary"][field]
         );
     }
+
     fs::remove_file(capture_path).expect("remove capture");
     fs::remove_file(receipt_path).expect("remove receipt");
     fs::remove_file(stderr_path).expect("remove saved stderr");
@@ -182,6 +188,7 @@ fn sigterm_emits_abort_record_without_success_terminal() {
             .expect("read stderr");
         bytes
     });
+
     let mut stdout = BufReader::new(child.stdout.take().expect("stdout pipe"));
     let mut first_line = String::new();
     stdout

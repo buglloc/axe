@@ -642,6 +642,7 @@ fn show_routes(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
     }
     Ok(())
 }
+
 struct BestRoute {
     rank: (u8, std::cmp::Reverse<u32>),
     gateway: Option<IpAddr>,

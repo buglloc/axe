@@ -115,6 +115,7 @@ fn main() {
         Some(command) => query(&options.api, options.api_token.as_deref(), command),
         None => start(options),
     };
+
     if let Err(error) = result {
         eprintln!("axe-relay: {error}");
         std::process::exit(1);
@@ -132,17 +133,20 @@ impl ApiClient {
         {
             return Err("API URL must be an origin without credentials, query or path".into());
         }
+
         let local_http = matches!(base.host(), Some(url::Host::Ipv4(address)) if address.is_loopback())
             || matches!(base.host(), Some(url::Host::Ipv6(address)) if address.is_loopback());
         if base.scheme() != "https" && !(base.scheme() == "http" && local_http) {
             return Err("API URL must use HTTPS or HTTP to a loopback IP".into());
         }
+
         let status_endpoint = base
             .join("/api/v1/status")
             .map_err(|error| error.to_string())?;
         let events_endpoint = base
             .join("/api/v1/events")
             .map_err(|error| error.to_string())?;
+
         Ok(Self {
             agent: ureq::Agent::config_builder()
                 .timeout_global(Some(Duration::from_secs(5)))
@@ -185,6 +189,7 @@ impl ApiClient {
             }
             _ => format!("request failed: {error}"),
         })?;
+
         let body = response
             .body_mut()
             .with_config()
@@ -216,10 +221,13 @@ fn query(api: &str, token: Option<&str>, command: &Command) -> Result<(), String
         }
         return Ok(());
     }
+
     if let Command::Watch { client_id, json } = command {
         return watch(&client, client_id.as_deref(), *json);
     }
+
     let status = client.status()?;
+
     match command {
         Command::Status { json: true } => println!(
             "{}",
@@ -254,6 +262,7 @@ fn query(api: &str, token: Option<&str>, command: &Command) -> Result<(), String
     }
     Ok(())
 }
+
 #[derive(serde::Serialize)]
 struct WatchRecord<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -280,12 +289,14 @@ fn watch(client: &ApiClient, client_id: Option<&str>, json: bool) -> Result<(), 
             )?;
         }
     }
+
     loop {
         let batch = client.events(Some((epoch, cursor)))?;
         for event in &batch.events {
             if client_id.is_some_and(|id| id != event.client.client_id) {
                 continue;
             }
+
             let kind = match event.kind {
                 EventKind::Connected => "connected",
                 EventKind::Disconnected => "disconnected",
@@ -300,6 +311,7 @@ fn watch(client: &ApiClient, client_id: Option<&str>, json: bool) -> Result<(), 
                 },
             )?;
         }
+
         cursor = batch.cursor;
         std::thread::sleep(Duration::from_millis(250));
     }
@@ -345,6 +357,7 @@ fn wait_for(
         }) {
             return Ok(registration);
         }
+
         let Some(remaining) = deadline.checked_sub(started.elapsed()) else {
             return Err(format!(
                 "timed out after {timeout}s waiting for relay client {client_id:?}"
@@ -361,12 +374,14 @@ fn start(options: Options) -> Result<(), String> {
     if options.min_port == 0 || options.min_port > options.max_port {
         return Err("invalid public port range".into());
     }
+
     let token = options
         .token
         .ok_or("set AXE_RELAY_TOKEN or --token (at least 32 bytes)")?;
     if token.len() < 32 {
         return Err("relay token must contain at least 32 bytes".into());
     }
+
     let public_host = options
         .public_host
         .ok_or("set --public-host to the address or DNS name reachable by SSH users")?;
@@ -382,6 +397,7 @@ fn start(options: Options) -> Result<(), String> {
             }
         },
     };
+
     let server_options = server::ServerOptions {
         tcp_control: options.tcp_control,
         quic_control: options.quic_control,
@@ -400,10 +416,12 @@ fn start(options: Options) -> Result<(), String> {
         max_port: options.max_port,
         token,
     };
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| format!("create runtime: {error}"))?;
+
     runtime.block_on(async move {
         let listener = tokio::net::TcpListener::bind(options.http).await
             .map_err(|error| format!("bind dashboard {}: {error}", options.http))?;

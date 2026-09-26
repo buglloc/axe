@@ -661,6 +661,7 @@ fn authorized_key_paths(user: &PasswdEntry, patterns: &[Vec<u8>]) -> Vec<PathBuf
             user.home.join(path)
         });
     }
+
     paths.into_iter().collect()
 }
 

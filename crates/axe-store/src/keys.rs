@@ -26,6 +26,7 @@ pub fn generate(root: &Path) -> Result<(), String> {
 
     fs::create_dir_all(&trusted_dir)
         .map_err(|error| format!("create {}: {error}", trusted_dir.display()))?;
+
     let seed = rand::rng().random::<[u8; 32]>();
     let signing = SigningKey::from_bytes(&seed);
     let key_id = KeyId::for_key(&signing.verifying_key());
@@ -76,6 +77,7 @@ pub fn generate_relay_identities(root: &Path) -> Result<(), String> {
         (client_private_key_path, client_private_key, true),
         (client_certificate_path, client_certificate, false),
     ];
+
     let mut written = Vec::with_capacity(artifacts.len());
     for (path, contents, private) in artifacts {
         let result = if private {
@@ -104,11 +106,13 @@ fn generate_quic_identity(
     parameters.not_after = date_time_ymd(2120, 1, 1);
     parameters.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     parameters.extended_key_usages = vec![usage];
+
     let private_key = KeyPair::generate_for(&PKCS_ED25519)
         .map_err(|error| format!("generate {subject} QUIC private key: {error}"))?;
     let certificate = parameters
         .self_signed(&private_key)
         .map_err(|error| format!("sign {subject} QUIC certificate: {error}"))?;
+
     Ok((certificate.pem(), private_key.serialize_pem()))
 }
 
@@ -131,6 +135,7 @@ pub fn load_trusted_keys(directory: &Path) -> Result<TrustedKeys, String> {
         .map_err(|error| format!("read {}: {error}", directory.display()))?;
     paths.retain(|path| path.extension().is_some_and(|extension| extension == "pub"));
     paths.sort_unstable();
+
     if paths.is_empty() {
         return Err(format!(
             "{} has no trusted public keys",
@@ -154,6 +159,7 @@ pub fn load_trusted_keys(directory: &Path) -> Result<TrustedKeys, String> {
         keys.insert_named(id, key)
             .map_err(|error| error.to_string())?;
     }
+
     Ok(keys)
 }
 

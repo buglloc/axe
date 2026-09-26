@@ -168,17 +168,20 @@ fn unicode_encodings_json_and_null_records_preserve_offsets() {
 
     let utf8_name = utf8.to_str().expect("UTF-8 scratch path");
     let output = run(&["--encoding=utf8", "--json", "--null", "-n4", utf8_name]);
+
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+
     let records = output
         .stdout
         .split(|byte| *byte == 0)
         .filter(|record| !record.is_empty())
         .map(|record| serde_json::from_slice::<serde_json::Value>(record).expect("valid JSON"))
         .collect::<Vec<_>>();
+
     assert_eq!(records.len(), 2);
     assert_eq!(records[0]["file"], utf8_name);
     assert_eq!(records[0]["offset"], 1);
@@ -189,6 +192,7 @@ fn unicode_encodings_json_and_null_records_preserve_offsets() {
 
     let utf16_name = utf16.to_str().expect("UTF-8 scratch path");
     let output = run(&["--encoding=utf16le", "-n4", "-t", "d", utf16_name]);
+
     assert!(
         output.status.success(),
         "{}",
@@ -198,6 +202,7 @@ fn unicode_encodings_json_and_null_records_preserve_offsets() {
 
     let gnu16_name = gnu16.to_str().expect("UTF-8 scratch path");
     let output = run(&["-e", "l", "-n4", gnu16_name]);
+
     assert!(
         output.status.success(),
         "{}",

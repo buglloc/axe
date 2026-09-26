@@ -48,11 +48,13 @@ pub(super) async fn server_endpoint(
             format!("invalid QUIC control address {address:?}: {error}"),
         )
     })?;
+
     let private_key = load_server_private_key(private_key_path).await?;
     let server_certificate =
         load_certificate(server_certificate_path, "QUIC server certificate").await?;
     let client_certificate =
         load_certificate(client_certificate_path, "QUIC client certificate").await?;
+
     Endpoint::server(
         server_config(private_key, server_certificate, client_certificate)?,
         address,
@@ -77,6 +79,7 @@ pub(super) async fn handle_control(
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "QUIC handshake timed out"))?
         .map_err(|error| io::Error::other(format!("QUIC handshake failed: {error}")))?;
+
     let (mut response, mut request) =
         tokio::time::timeout(registration_timeout, connection.accept_bi())
             .await
@@ -127,6 +130,7 @@ async fn serve_registration(
 ) -> io::Result<()> {
     let public = bind_port(endpoint.bind, ports).await?;
     let public_address = advertised_address(&endpoint.host, public.local_addr()?.port());
+
     write_cbor_frame(
         &mut response,
         &RegistrationResponse::Accepted {
@@ -142,6 +146,7 @@ async fn serve_registration(
     let peer = resolve_peer(resolver, connection.remote_address().ip()).await;
     let _client = monitor.register("quic", &registration.client_id, &peer, public_address);
     let mut tunnels = JoinSet::new();
+
     loop {
         tokio::select! {
             accepted = public.accept() => {
@@ -209,14 +214,17 @@ fn server_config(
     client_roots
         .add(client_certificate)
         .map_err(|error| invalid(format!("load relay QUIC client trust: {error}")))?;
+
     let client_verifier = WebPkiClientVerifier::builder(Arc::new(client_roots))
         .build()
         .map_err(|error| invalid(format!("build relay QUIC client verifier: {error}")))?;
+
     let mut tls = rustls::ServerConfig::builder()
         .with_client_cert_verifier(client_verifier)
         .with_single_cert(vec![server_certificate], private_key)
         .map_err(|error| invalid(format!("load relay QUIC server identity: {error}")))?;
     tls.alpn_protocols = vec![ALPN.to_vec()];
+
     let crypto = QuicServerConfig::try_from(tls)
         .map_err(|error| invalid(format!("build relay QUIC server crypto: {error}")))?;
     let mut config = ServerConfig::with_crypto(Arc::new(crypto));
@@ -231,10 +239,12 @@ async fn load_server_private_key(path: &Path) -> io::Result<PrivateKeyDer<'stati
             format!("read QUIC server private key {}: {error}", path.display()),
         )
     })?;
+
     let mut reader = pem.as_slice();
     let private_keys = rustls_pemfile::pkcs8_private_keys(&mut reader)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| invalid(format!("invalid QUIC server private key: {error}")))?;
+
     let [private_key] = private_keys.as_slice() else {
         return Err(invalid(
             "QUIC server private key must contain exactly one PKCS#8 private key",
@@ -250,10 +260,12 @@ async fn load_certificate(path: &Path, name: &str) -> io::Result<CertificateDer<
             format!("read {name} {}: {error}", path.display()),
         )
     })?;
+
     let mut reader = pem.as_slice();
     let certificates = rustls_pemfile::certs(&mut reader)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| invalid(format!("invalid {name}: {error}")))?;
+
     let [certificate] = certificates.as_slice() else {
         return Err(invalid(format!(
             "{name} must contain exactly one certificate"

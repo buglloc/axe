@@ -93,6 +93,7 @@ fn run() -> Result<(), String> {
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| "cannot locate workspace root".to_string())?;
+
     println!("cargo:rerun-if-env-changed=AXE_EDITION_ROOT");
     let edition_root = env::var_os("AXE_EDITION_ROOT")
         .filter(|root| !root.is_empty())
@@ -115,6 +116,7 @@ fn run() -> Result<(), String> {
         };
         println!("cargo:rustc-link-arg={build_id_argument}");
     }
+
     println!(
         "cargo:rerun-if-changed={}",
         workspace.join("config/aliases.json").display()
@@ -139,16 +141,19 @@ fn run() -> Result<(), String> {
             edition_root.join(path).display()
         );
     }
+
     let store_json = read_text(&edition_root, "config/store.json")?;
     let store: StoreConfig = serde_json::from_str(&store_json)
         .map_err(|error| format!("invalid config/store.json: {error}"))?;
     validate_store(&store)?;
+
     let sshd_json = read_text(&edition_root, "config/sshd.json")?;
     let sshd: SshdConfig = serde_json::from_str(&sshd_json)
         .map_err(|error| format!("invalid config/sshd.json: {error}"))?;
     if sshd.principals.is_empty() || sshd.principals.iter().any(String::is_empty) {
         return Err("config/sshd.json principals must be non-empty".into());
     }
+
     let relay_json = read_text(&edition_root, "config/relay.json")?;
     let relay: RelayConfig = serde_json::from_str(&relay_json)
         .map_err(|error| format!("invalid config/relay.json: {error}"))?;
@@ -174,6 +179,7 @@ fn run() -> Result<(), String> {
     {
         return Err("keys/ssh/user_ca_keys must contain OpenSSH public keys".into());
     }
+
     let relay_token = if relay.tcp_endpoint.is_some() {
         read_optional_text(&edition_root, "keys/relay/token")?.unwrap_or_default()
     } else {
@@ -187,6 +193,7 @@ fn run() -> Result<(), String> {
             "enabled relay default requires keys/relay/token with at least 32 bytes".into(),
         );
     }
+
     let (
         relay_quic_server_certificate,
         relay_quic_client_certificate,

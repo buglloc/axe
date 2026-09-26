@@ -173,6 +173,7 @@ pub fn diagnose_upload(
             S3_DIAGNOSTIC_MAX_BYTES
         ));
     }
+
     let largest = usize::try_from(largest)
         .map_err(|_| "diagnostic payload does not fit this platform".to_string())?;
     let timeout = Duration::from_secs(options.timeout_secs);
@@ -281,6 +282,7 @@ fn run_upload_diagnostics(
             eprintln!("axe-store: diagnose-upload: cleanup failed for {key}: {error}");
         }
     }
+
     for mode in DiagnosticConnection::ALL {
         let index = mode.index();
         eprintln!(
@@ -290,6 +292,7 @@ fn run_upload_diagnostics(
             failures[index]
         );
     }
+
     eprintln!(
         "axe-store: diagnose-upload: cleanup attempted={} failed={cleanup_failures}",
         cleanup_keys.len()
@@ -350,6 +353,7 @@ fn publish_to(options: &PublishOptions<'_>, sink: &mut dyn ObjectSink) -> Result
 
     let staged_index = read_index(&options.input.join("index.cbor.zst"), &trusted)?;
     let manifests = read_staged_manifests(options.input, &staged_index, &trusted)?;
+
     eprintln!("axe-store: publish: reading current remote Index");
     let remote = sink.get("index.cbor.zst")?;
     let (generation, etag) = if let Some(remote) = remote {
@@ -388,6 +392,7 @@ fn publish_to(options: &PublishOptions<'_>, sink: &mut dyn ObjectSink) -> Result
                 path.display()
             ));
         }
+
         eprintln!(
             "axe-store: publish: object [{}/{}]: {relative} ({} bytes)",
             index + 1,
@@ -415,6 +420,7 @@ fn publish_to(options: &PublishOptions<'_>, sink: &mut dyn ObjectSink) -> Result
     let signed = sign_document(&index, &signing).map_err(|error| format!("sign Index: {error}"))?;
     let compressed = zstd::stream::encode_all(signed.as_slice(), 9)
         .map_err(|error| format!("compress Index: {error}"))?;
+
     eprintln!("axe-store: publish: committing Index generation {generation}");
     sink.compare_and_swap_index(&compressed, etag.as_deref())?;
     sink.put_index_json(&json, generation)?;
@@ -453,6 +459,7 @@ fn read_staged_manifests(
                 entry.manifest_sha256
             ));
         }
+
         let manifest: axe_artifact::ToolManifest = verify_document(&bytes, trusted)
             .map_err(|error| format!("verify staged manifest {}: {error}", path.display()))?;
         manifest
@@ -461,6 +468,7 @@ fn read_staged_manifests(
             .map_err(|error| format!("validate staged manifest {}: {error}", path.display()))?;
         manifests.push((relative, bytes));
     }
+
     if let Some((path, _)) = expected.first_key_value() {
         return Err(format!("Index references missing staged manifest {path}"));
     }
@@ -486,6 +494,7 @@ fn reject_target_removals(current: &PublishedIndex, staged: &StoreIndex) -> Resu
             }
         }
     }
+
     if removed.is_empty() {
         return Ok(());
     }
@@ -540,6 +549,7 @@ fn decode_published_index(bytes: &[u8], trusted: &TrustedKeys) -> Result<Publish
             })
         })
         .collect();
+
     StoreIndex {
         schema_version: index.schema_version,
         generation: index.generation,
@@ -563,6 +573,7 @@ fn should_replace_index_json(
     if current.validate().is_err() {
         return Ok(true);
     }
+
     if current.generation > generation {
         return Ok(false);
     }
@@ -578,6 +589,7 @@ fn should_replace_index_json(
             "Index JSON generation {generation} already exists with different contents"
         ));
     }
+
     Ok(true)
 }
 
@@ -633,6 +645,7 @@ impl ObjectSink for DirectorySink {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(format!("read {}: {error}", path.display())),
         };
+
         Ok(Some(RemoteObject {
             etag: format!("{}", Digest::of(&bytes)),
             bytes,
@@ -661,6 +674,7 @@ impl ObjectSink for DirectorySink {
     fn compare_and_swap_index(&mut self, bytes: &[u8], etag: Option<&str>) -> Result<(), String> {
         let _lock = self.lock_index()?;
         let current = self.get("index.cbor.zst")?;
+
         match (etag, current.as_ref()) {
             (None, None) => {}
             (Some(expected), Some(current)) if current.etag == expected => {}
@@ -700,6 +714,7 @@ enum MultipartCompletion {
 fn multipart_part_bytes(total_bytes: u64) -> Result<usize, String> {
     let required = total_bytes.div_ceil(S3_MULTIPART_MAX_PARTS);
     let part_bytes = required.max(S3_MULTIPART_MIN_PART_BYTES);
+
     if part_bytes > S3_MULTIPART_MAX_PART_BYTES {
         return Err(format!(
             "S3 object is too large for multipart upload: {total_bytes} bytes"
@@ -798,6 +813,7 @@ impl S3Sink {
             .endpoint
             .parse()
             .map_err(|error| format!("parse S3 endpoint: {error}"))?;
+
         let bucket = Bucket::new(
             endpoint,
             UrlStyle::Path,
@@ -805,6 +821,7 @@ impl S3Sink {
             config.region.clone(),
         )
         .map_err(|error| format!("configure S3 bucket: {error}"))?;
+
         Ok(Self {
             agent: s3_agent(None),
             bucket,
@@ -851,6 +868,7 @@ impl S3Sink {
             .limit(S3_ERROR_BODY_LIMIT)
             .read_to_string()
             .unwrap_or_default();
+
         let detail = detail.trim();
         if detail.is_empty() {
             format!(
@@ -893,6 +911,7 @@ impl S3Sink {
         for &(name, value) in &headers {
             request = request.header(name, value);
         }
+
         let mut response = request.send(bytes).map_err(|error| DiagnosticFailure {
             class: diagnostic_request_error_class(&error),
             detail: self.request_error("diagnostic PUT", key, error),
@@ -907,6 +926,7 @@ impl S3Sink {
         .find_map(|name| response.headers().get(*name))
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
+
         if response.status().is_success() {
             Ok((status, request_id))
         } else {
@@ -971,6 +991,7 @@ impl S3Sink {
             request = request.header(name, value);
         }
         let file = File::open(path).map_err(ureq::Error::Io)?;
+
         request.send(file)
     }
 
@@ -1007,6 +1028,7 @@ impl S3Sink {
                 }
                 Err(error) => return Err(self.request_error(operation, key, error)),
             };
+
             let delay = s3_retry_delay(attempt);
             eprintln!(
                 "axe-store: {failure}; retrying {operation} in {}s (attempt {}/{})",
@@ -1044,6 +1066,7 @@ impl S3Sink {
         if !response.status().is_success() {
             return Err(self.response_error("create multipart upload", key, &mut response));
         }
+
         let body = response
             .body_mut()
             .with_config()
@@ -1093,6 +1116,7 @@ impl S3Sink {
         if !response.status().is_success() {
             return Err(self.response_error(&operation, key, &mut response));
         }
+
         response
             .headers()
             .get("etag")
@@ -1132,6 +1156,7 @@ impl S3Sink {
             .headers_mut()
             .insert("content-type".to_owned(), "application/xml".to_owned());
         let url = action.sign(S3_SIGNED_URL_TTL);
+
         let body = action.body();
         self.agent
             .post(url.as_str())
@@ -1280,6 +1305,7 @@ impl S3Sink {
             }
             self.complete_multipart_immutable(key, &upload_id, &etags, expected_size, digest)
         })();
+
         self.finish_multipart(key, &upload_id, result, || {
             format!("immutable object {key} already exists with different bytes")
         })
@@ -1322,6 +1348,7 @@ impl S3Sink {
             }
             self.complete_multipart_immutable(key, &upload_id, &etags, expected_size, digest)
         })();
+
         self.finish_multipart(key, &upload_id, result, || {
             format!("immutable Axe release {key} already exists with different bytes")
         })
@@ -1356,6 +1383,7 @@ impl S3Sink {
             .limit(limit)
             .read_to_vec()
             .map_err(|error| format!("read s3://{}/{key}: {error}", self.bucket.name()))?;
+
         Ok(Some(RemoteObject { bytes, etag }))
     }
 
@@ -1387,6 +1415,7 @@ impl S3Sink {
         let expected_size = fs::metadata(path)
             .map_err(|error| format!("inspect {}: {error}", path.display()))?
             .len();
+
         if expected_size > S3_MULTIPART_MIN_PART_BYTES {
             return self.put_multipart_file_immutable(
                 key,
@@ -1396,6 +1425,7 @@ impl S3Sink {
                 &object_headers,
             );
         }
+
         let headers = [object_headers[0], object_headers[1], ("if-none-match", "*")];
         let mut response = self.retryable_put_response("immutable PUT", key, || {
             self.send_put_file(key, path, &headers)
@@ -1488,6 +1518,7 @@ impl ObjectSink for S3Sink {
             let headers = [("cache-control", IMMUTABLE_CACHE)];
             return self.put_multipart_bytes_immutable(key, bytes, digest, &headers);
         }
+
         let headers = [("cache-control", IMMUTABLE_CACHE), ("if-none-match", "*")];
         let mut response = self.retryable_put_response("immutable PUT", key, || {
             self.send_put_bytes(key, bytes, &headers)
@@ -1522,6 +1553,7 @@ impl ObjectSink for S3Sink {
             None => ("if-none-match", "*"),
         };
         let headers = [("cache-control", METADATA_CACHE), condition];
+
         let mut response = self.put_bytes_response("index.cbor.zst", bytes, &headers)?;
         if response.status().is_success() {
             return Ok(());
@@ -1584,6 +1616,7 @@ fn load_s3_credentials(workspace: &Path) -> Result<Credentials, String> {
         ),
         _ => return Err("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set together".into()),
     };
+
     if access.is_empty() || secret.is_empty() {
         return Err("S3 credentials must not be empty".into());
     }
@@ -1600,6 +1633,7 @@ fn files_under(root: &Path) -> Result<Vec<PathBuf>, String> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(format!("read {}: {error}", root.display())),
     };
+
     let mut files = Vec::new();
     collect_file_entries(entries, &mut files).map_err(|error| error.to_string())?;
     files.sort_unstable();
@@ -1627,6 +1661,7 @@ fn collect_file_entries(entries: fs::ReadDir, files: &mut Vec<PathBuf>) -> io::R
     }
     Ok(())
 }
+
 fn relative_key(root: &Path, path: &Path) -> Result<String, String> {
     path.strip_prefix(root)
         .map_err(|error| error.to_string())?
@@ -1915,6 +1950,7 @@ mod tests {
                 },
             )]),
         };
+
         let current = PublishedIndex {
             schema_version: axe_artifact::SCHEMA_VERSION,
             generation: 1,
@@ -1962,6 +1998,7 @@ mod tests {
                 },
             )]),
         };
+
         let signed = sign_document(&index, &signing).expect("sign published Index");
         let compressed =
             zstd::stream::encode_all(signed.as_slice(), 1).expect("compress published Index");
@@ -1995,6 +2032,7 @@ mod tests {
                     .map(|byte| format!("{byte:02x}"))
                     .collect::<String>()
             };
+
             fs::write(keys.join("signing.key"), hex(&signing.to_bytes()))
                 .expect("write test signing key");
             let id = KeyId::for_key(&signing.verifying_key());
@@ -2045,6 +2083,7 @@ mod tests {
                 },
             )]),
         };
+
         let bytes = sign_document(&manifest, signing).expect("sign staged manifest");
         let entry = StoreIndexEntry {
             id: manifest.id.clone(),
@@ -2056,9 +2095,11 @@ mod tests {
             )]),
             synopsis: None,
         };
+
         let path = input.join(entry.manifest_path());
         fs::create_dir_all(path.parent().unwrap()).expect("create manifest directory");
         fs::write(path, &bytes).expect("stage manifest");
+
         let index = StoreIndex {
             schema_version: axe_artifact::SCHEMA_VERSION,
             generation: 1,
@@ -2071,6 +2112,7 @@ mod tests {
             zstd::stream::encode_all(signed.as_slice(), 1).expect("compress staged Index"),
         )
         .expect("stage Index");
+
         (input, index, bytes)
     }
 
@@ -2117,6 +2159,7 @@ mod tests {
         let signed_other = sign_document(&other, &signing).expect("sign mismatched identity");
         let mut mismatched = index;
         mismatched.tools.get_mut("tool").unwrap().manifest_sha256 = Digest::of(&signed_other);
+
         let path = input.join(mismatched.tools["tool"].manifest_path());
         fs::write(path, signed_other).expect("stage correctly hashed, mismatched manifest");
         let signed_index = sign_document(&mismatched, &signing).expect("sign mismatched Index");
@@ -2183,11 +2226,13 @@ mod tests {
             inner: sink,
             winner: options(&winner),
         };
+
         assert!(
             publish_to(&options(&loser), &mut race)
                 .unwrap_err()
                 .contains("Index changed concurrently")
         );
+
         let mut trusted = TrustedKeys::new();
         trusted.insert(signing.verifying_key());
         let published = decode_index(
@@ -2208,6 +2253,7 @@ mod tests {
             published.tools["tool"].manifest_sha256,
             losing_index.tools["tool"].manifest_sha256
         );
+
         let immutable = race
             .get(&published.tools["tool"].manifest_path())
             .unwrap()

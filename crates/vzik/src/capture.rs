@@ -138,6 +138,7 @@ pub fn execute(
             return Err(Error::Collector(error));
         }
     };
+
     capture_file
         .flush()
         .map_err(|source| io_error("flush capture", source))?;
@@ -155,6 +156,7 @@ pub fn execute(
 
     let receipt = build_receipt(&capture_path, &stderr_path).map_err(Error::Stream)?;
     write_receipt(&receipt_path, &receipt_requested, &receipt)?;
+
     if let Err(error) = verify_receipt(&receipt_path, &capture_path, &stderr_path, &receipt) {
         let _ = fs::remove_file(&receipt_path);
         return Err(error);
@@ -192,6 +194,7 @@ fn build_receipt(capture_path: &Path, stderr_path: &Path) -> Result<Value, strea
     let summary = stream::inspect(capture_path)?;
     let (capture_sha256, capture_bytes) = hash_file(capture_path).map_err(stream::Error::Read)?;
     let (stderr_sha256, stderr_bytes) = hash_file(stderr_path).map_err(stream::Error::Read)?;
+
     let capabilities = summary
         .capabilities
         .iter()
@@ -205,11 +208,13 @@ fn build_receipt(capture_path: &Path, stderr_path: &Path) -> Result<Value, strea
             })
         })
         .collect::<Vec<_>>();
+
     let started_capabilities = summary
         .capabilities
         .iter()
         .map(|capability| capability.id.as_str())
         .collect::<Vec<_>>();
+
     let capability_counts = json!({
         "planned":summary.planned_capabilities.len(),
         "started":started_capabilities.len(),
@@ -262,6 +267,7 @@ fn write_receipt(path: &Path, requested_path: &Path, receipt: &Value) -> Result<
         file.sync_all()
             .map_err(|source| io_error("sync receipt", source))
     })();
+
     drop(file);
     if result.is_err() {
         let _ = fs::remove_file(path);
@@ -278,15 +284,18 @@ fn verify_receipt(
     let encoded = fs::read(receipt_path).map_err(|source| io_error("read receipt", source))?;
     let observed: Value = serde_json::from_slice(&encoded)
         .map_err(|source| Error::Invalid(format!("decode receipt: {source}")))?;
+
     if &observed != expected {
         return Err(Error::Invalid("receipt changed after sealing".into()));
     }
+
     let rebuilt = build_receipt(capture_path, stderr_path).map_err(Error::Stream)?;
     if rebuilt != observed {
         return Err(Error::Invalid(
             "capture or stderr changed after sealing".into(),
         ));
     }
+
     Ok(())
 }
 
@@ -303,6 +312,7 @@ fn hash_file(path: &Path) -> io::Result<(String, u64)> {
         digest.update(&buffer[..count]);
         bytes = bytes.saturating_add(count as u64);
     }
+
     let mut encoded = String::with_capacity(64);
     for byte in digest.finalize() {
         write!(encoded, "{byte:02x}").expect("writing to String cannot fail");
@@ -314,10 +324,12 @@ fn prepare_path(path: &Path) -> Result<PathBuf, Error> {
     let file_name = path
         .file_name()
         .ok_or_else(|| Error::Invalid(format!("path must name a file: {}", path.display())))?;
+
     let parent = path
         .parent()
         .filter(|value| !value.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
+
     let parent = fs::canonicalize(parent)
         .map_err(|source| io_path_error("resolve output directory", parent, source))?;
     Ok(parent.join(file_name))

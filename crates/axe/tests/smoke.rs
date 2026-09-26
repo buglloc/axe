@@ -1078,6 +1078,7 @@ fn shell_builtin_kill_accepts_numeric_signal_and_job_spec() {
     );
     assert_eq!(output.stderr, b"");
 }
+
 #[cfg(feature = "bundled-coreutils")]
 #[test]
 fn shell_tracks_bundled_background_process_lifecycle() {
@@ -1110,6 +1111,7 @@ fn shell_tracks_bundled_background_process_lifecycle() {
     assert!(pid.parse::<u32>().is_ok(), "invalid background PID: {pid}");
     assert_eq!(lines.collect::<Vec<_>>(), ["alive=0", "wait=124", "dead=1"]);
 }
+
 #[test]
 fn shell_exposes_internal_background_jobs_as_waitable_job_specs() {
     let scratch = Scratch::new("internal-background-job");
@@ -1178,6 +1180,7 @@ fn xargs_children_cannot_consume_the_input_stream() {
     );
     assert!(output.stdout.is_empty());
 }
+
 #[cfg(target_os = "linux")]
 #[test]
 fn applet_path_bridge_is_inherited_and_repairs_stale_state() {
@@ -1309,6 +1312,7 @@ fn install_hostile_exec_policy() -> std::io::Result<()> {
             k: value,
         }
     }
+
     const fn jump(code: u16, value: u32, yes: u8, no: u8) -> libc::sock_filter {
         libc::sock_filter {
             code,
@@ -1390,6 +1394,7 @@ fn install_spawn_denial_policy() -> std::io::Result<()> {
             k: value,
         }
     }
+
     const fn jump(code: u16, value: u32, yes: u8, no: u8) -> libc::sock_filter {
         libc::sock_filter {
             code,

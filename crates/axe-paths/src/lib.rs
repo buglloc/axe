@@ -25,18 +25,23 @@ pub fn store_candidate_roots(
     for root in persistent_roots {
         push_unique(&mut roots, root.clone());
     }
+
     if let Some(root) = store_platform_cache_root() {
         push_unique(&mut roots, root);
     }
+
     for root in detected_store_mount_roots(false) {
         push_unique(&mut roots, root);
     }
+
     for root in tmpfs_roots {
         push_unique(&mut roots, root.clone());
     }
+
     for root in detected_store_mount_roots(true) {
         push_unique(&mut roots, root);
     }
+
     push_unique(&mut roots, std::env::temp_dir().join("axe-store"));
     roots
 }
@@ -119,9 +124,11 @@ fn automatic_runtime_roots_from(
         #[cfg(not(target_os = "macos"))]
         push_unique(&mut roots, home.join(".cache/axe"));
     }
+
     if let Some(runtime) = xdg_runtime_dir.filter(|path| path.is_absolute()) {
         push_unique(&mut roots, runtime.join("axe"));
     }
+
     let temporary = if temporary_dir.is_absolute() {
         temporary_dir
     } else {
@@ -254,6 +261,7 @@ fn detected_store_mount_roots(tmpfs_only: bool) -> Vec<PathBuf> {
     let Ok(bytes) = fs::read("/proc/self/mountinfo") else {
         return Vec::new();
     };
+
     let mut roots = Vec::new();
     for line in bytes.split(|byte| *byte == b'\n') {
         let fields = line
@@ -266,14 +274,17 @@ fn detected_store_mount_roots(tmpfs_only: bool) -> Vec<PathBuf> {
         if fields.len() <= separator + 3 || fields.len() <= 5 {
             continue;
         }
+
         let is_tmpfs = fields[separator + 1] == b"tmpfs";
         if is_tmpfs != tmpfs_only || !has_option(fields[5], b"rw") {
             continue;
         }
+
         let mount = decode_mount(fields[4]);
         if !mount.is_dir() {
             continue;
         }
+
         let root = if mount == Path::new("/") {
             std::env::temp_dir().join("axe-store")
         } else {
@@ -303,6 +314,7 @@ pub fn mount_execution_policy(path: &Path) -> MountExecutionPolicy {
         return MountExecutionPolicy::Unknown;
     };
     let mut best = None;
+
     for line in bytes.split(|byte| *byte == b'\n') {
         let fields = line
             .split(|byte| byte.is_ascii_whitespace())
@@ -314,6 +326,7 @@ pub fn mount_execution_policy(path: &Path) -> MountExecutionPolicy {
         if fields.len() <= separator + 3 || fields.len() <= 5 {
             continue;
         }
+
         let mount = decode_mount(fields[4]);
         if path.starts_with(&mount)
             && best
@@ -327,6 +340,7 @@ pub fn mount_execution_policy(path: &Path) -> MountExecutionPolicy {
             best = Some((mount, noexec));
         }
     }
+
     match best {
         Some((_, true)) => MountExecutionPolicy::NoExec,
         Some((_, false)) => MountExecutionPolicy::Supported,

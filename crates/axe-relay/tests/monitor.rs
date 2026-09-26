@@ -56,6 +56,7 @@ fn watch(
     if let Some(client_id) = client_id {
         command.args(["--client-id", client_id]);
     }
+
     let child = command
         .stdout(Stdio::piped())
         .spawn()
@@ -71,6 +72,7 @@ fn watch(
             }
         }
     });
+
     (watcher, rx, reader)
 }
 
@@ -194,6 +196,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
         response["public_address"],
         format!("relay.example.test:{public}")
     );
+
     let awaited = waiter.wait_with_output().expect("wait for registration");
     assert!(
         awaited.status.success(),
@@ -225,6 +228,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
         connected["events"][0]["client"]["public_address"],
         format!("relay.example.test:{public}")
     );
+
     TcpStream::connect(("127.0.0.1", public))
         .expect("public listener binds separately from advertised DNS");
     let output = Command::new(env!("CARGO_BIN_EXE_axe-relay"))
@@ -243,6 +247,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
     );
     let clients: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(clients[0]["client_id"], "test-agent");
+
     let expired = Command::new(env!("CARGO_BIN_EXE_axe-relay"))
         .args([
             "--api",
@@ -262,6 +267,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
         "old registration should not satisfy --after-id"
     );
     assert!(String::from_utf8_lossy(&expired.stderr).contains("timed out"));
+
     let (mut watcher, rx, reader) = watch(api, Some("test-agent"));
     let (mut all, all_rx, all_reader) = watch(api, None);
     let present = rx
@@ -303,6 +309,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
         .expect("unfiltered disconnect event");
     assert_eq!(all_disconnected["seq"], 2);
     assert_eq!(all_disconnected["kind"], "disconnected");
+
     let conflict = ureq::get(&format!(
         "http://127.0.0.1:{api}/api/v1/events?epoch={epoch}&after=999"
     ))
@@ -315,6 +322,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
     .call()
     .unwrap_err();
     assert!(matches!(restarted, ureq::Error::StatusCode(409)));
+
     let mut other = TcpStream::connect(("127.0.0.1", tcp)).unwrap();
     let mut frame = Vec::new();
     ciborium::into_writer(
@@ -335,6 +343,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
         ciborium::from_reader::<Value, _>(body.as_slice()).unwrap()["status"],
         "accepted"
     );
+
     let registered = await_status(api, 1);
     assert_eq!(registered["clients"][0]["client_id"], "other-agent");
     drop(other);
@@ -346,6 +355,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
             .len(),
         2
     );
+
     let other_connected = all_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("short-lived new client");

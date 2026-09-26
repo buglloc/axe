@@ -54,6 +54,7 @@ async fn events(
                 .into_response();
         }
     };
+
     match monitor.events(cursor) {
         Ok(batch) => (
             [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],

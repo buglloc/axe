@@ -183,6 +183,7 @@ pub(crate) fn execute_controlled(
         deadline,
         interruption,
     };
+
     let planned_capabilities = execution
         .invocations
         .iter()
@@ -245,6 +246,7 @@ pub(crate) fn execute_controlled(
     } else {
         StreamOutcome::Complete
     };
+
     let before_end = sink.counters();
     sink.emit(
         json!({
@@ -257,6 +259,7 @@ pub(crate) fn execute_controlled(
         Priority::Terminal,
     )?;
     sink.flush()?;
+
     Ok(CollectionCompletion { outcome })
 }
 
@@ -279,6 +282,7 @@ fn run_capability<W: Write>(
         "capability":invocation.capability.id(),
         "request":invocation.request.normalized(),
     });
+
     match sink.emit(start, Priority::Data) {
         Ok(()) => {}
         Err(error) if error.is_acquisition_limit() => {
@@ -347,6 +351,7 @@ fn abort_stream(
         _ => return Ok(()),
     };
     let counters = sink.counters();
+
     sink.emit(
         json!({
             "type":"stream_abort",
@@ -543,6 +548,7 @@ pub(crate) fn check_deadline(context: ExecutionContext<'_>) -> Result<(), Protoc
             return Err(ProtocolError::Interrupted(signal));
         }
     }
+
     if Instant::now() >= context.deadline {
         Err(ProtocolError::Deadline)
     } else {

@@ -10,13 +10,19 @@ If the package inventory or signed snapshot needs updating, run `just store-sync
 
 ## Prepare the reviewed source
 
-From a clean `main`, choose the SemVer change:
+From a clean `main`, use `initial` for the first release (there is no `vX.Y.Z` tag yet):
+
+```bash
+just release-prepare initial
+```
+
+For later releases, choose the SemVer change:
 
 ```bash
 just release-prepare patch  # or minor / major
 ```
 
-`release-prepare` calculates the next version from the last `vX.Y.Z` tag, updates the workspace version and lockfile, then asks `omp -p` to draft `release-notes/vX.Y.Z.md` from public Git history and changed source. These notes are not in Hugo's content tree and do not appear on the website before publication. OMP runs without tools; it does not choose the version or approve the release. Check every claim against the code and commits. Correct or remove unsupported claims, then commit the version, lockfile, and notes and push `main`:
+`release-prepare` uses the current workspace version for the first release; thereafter it calculates the next version from the last `vX.Y.Z` tag. It updates the workspace version and lockfile, then asks `omp -p` to draft `release-notes/vX.Y.Z.md` from public Git history and changed source. These notes are not in Hugo's content tree and do not appear on the website before publication. OMP does not choose the version or approve the release. Check every claim against the code and commits. Correct or remove unsupported claims, then commit the version, lockfile, and notes and push `main`:
 
 ```bash
 git add Cargo.toml Cargo.lock release-notes/

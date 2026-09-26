@@ -68,6 +68,7 @@ fn list<W: Write>(
             return Ok(unavailable_report(coverage));
         }
     };
+
     let mut partial = false;
     if let Some(error) = discovery_error {
         partial = true;
@@ -79,6 +80,7 @@ fn list<W: Write>(
             &mut coverage,
         )?;
     }
+
     let mut successful_buses = 0_u64;
 
     for target in targets {
@@ -91,6 +93,7 @@ fn list<W: Write>(
                 continue;
             }
         };
+
         let proxy = match DBusProxy::new(&connection) {
             Ok(proxy) => proxy,
             Err(error) => {
@@ -119,6 +122,7 @@ fn list<W: Write>(
                 continue;
             }
         };
+
         let activatable = match proxy.list_activatable_names() {
             Ok(names) => names,
             Err(error) => {
@@ -134,6 +138,7 @@ fn list<W: Write>(
                 Vec::new()
             }
         };
+
         let own_name = connection.unique_name().map(|name| name.as_str());
         let owned = owned
             .into_iter()
@@ -144,6 +149,7 @@ fn list<W: Write>(
             .into_iter()
             .map(|name| name.as_str().to_owned())
             .collect::<BTreeSet<_>>();
+
         successful_buses += 1;
         coverage.scanned = coverage
             .scanned
@@ -165,6 +171,7 @@ fn list<W: Write>(
                 summary_errors,
             )?;
         }
+
         if !emit_provider(
             sink,
             capability,
@@ -265,6 +272,7 @@ fn inspect<W: Write>(
             return Ok(unavailable_report(coverage));
         }
     };
+
     check_deadline(deadline)?;
 
     let connection = match connect(&target.socket, deadline) {
@@ -301,6 +309,7 @@ fn inspect<W: Write>(
             return Ok(unavailable_report(coverage));
         }
     };
+
     let owned = match proxy.name_has_owner(bus_name.clone()) {
         Ok(owned) => owned,
         Err(error) => {
@@ -314,6 +323,7 @@ fn inspect<W: Write>(
             return Ok(unavailable_report(coverage));
         }
     };
+
     let (activatable, activatable_error) = match proxy.list_activatable_names() {
         Ok(names) => (
             names.iter().any(|candidate| candidate.as_str() == name),
@@ -321,6 +331,7 @@ fn inspect<W: Write>(
         ),
         Err(error) => (false, Some(error.to_string())),
     };
+
     coverage.scanned += 1;
 
     let mut data = manager_data(&target, "name");

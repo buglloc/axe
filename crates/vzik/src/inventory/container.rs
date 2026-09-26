@@ -108,6 +108,7 @@ fn container_list<W: Write>(
     let mut coverage = Coverage::default();
     let (containers, partial, limit_hit) =
         discover_native(sink, capability, max_items, deadline, &mut coverage)?;
+
     emit_provider_selected(sink, capability, "procfs")?;
     for container in containers {
         let observed = native_observation(container, false);
@@ -185,6 +186,7 @@ fn porto_list<W: Write>(
         include_streams: *include_streams,
         max_stream_bytes: *max_stream_bytes,
     };
+
     let capability = CapabilityId::PortoList;
     let mut coverage = Coverage::default();
     let observation = match collect_porto(options, deadline) {
@@ -245,6 +247,7 @@ fn porto_inspect<W: Write>(
             "porto.inspect request mismatch".into(),
         ));
     };
+
     let options = Options {
         name: Some(name),
         socket,
@@ -569,6 +572,7 @@ fn porto_observation(
             });
             continue;
         };
+
         let error_code = value.error.unwrap_or(rpc::EError::Success as i32);
         if error_code != rpc::EError::Success as i32 {
             property_errors += 1;
@@ -893,6 +897,7 @@ fn discover_native<W: Write>(
                 continue;
             }
         };
+
         let Some((runtime, id, cgroup)) = detect_container(&bytes) else {
             continue;
         };
@@ -903,6 +908,7 @@ fn discover_native<W: Write>(
         {
             continue;
         }
+
         let mut container = NativeContainer {
             id,
             runtime,

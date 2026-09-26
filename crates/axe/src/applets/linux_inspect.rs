@@ -363,6 +363,7 @@ struct IoSnapshot {
     cpu: [u64; 8],
     disks: BTreeMap<String, DiskStat>,
 }
+
 #[derive(Clone, Default)]
 struct DiskStat {
     reads: u64,
@@ -506,6 +507,7 @@ fn delta_array(current: [u64; 8], old: Option<[u64; 8]>) -> [u64; 8] {
     let old = old.unwrap_or([0; 8]);
     std::array::from_fn(|index| current[index].saturating_sub(old[index]))
 }
+
 fn disk_delta(current: &DiskStat, old: Option<&DiskStat>) -> DiskStat {
     let old = old.cloned().unwrap_or_default();
     DiskStat {
@@ -519,6 +521,7 @@ fn disk_delta(current: &DiskStat, old: Option<&DiskStat>) -> DiskStat {
         weighted_ms: current.weighted_ms.saturating_sub(old.weighted_ms),
     }
 }
+
 fn uptime_seconds() -> u64 {
     fs::read_to_string("/proc/uptime")
         .ok()
@@ -919,6 +922,7 @@ impl OpenEmitter<'_> {
         );
     }
 }
+
 fn parse_pid_list(value: &str, output: &mut BTreeSet<u32>) -> Result<(), String> {
     for pid in value.split(',') {
         output.insert(
@@ -1222,6 +1226,7 @@ fn process_uid(base: &Path) -> Option<u32> {
             .ok()
     })
 }
+
 fn truncate(value: &str, length: usize) -> &str {
     value.get(..length).unwrap_or(value)
 }
@@ -1440,6 +1445,7 @@ fn scsi_type(value: &str) -> &'static str {
         _ => "unknown",
     }
 }
+
 fn human_size(bytes: u64) -> String {
     let units = ["B", "K", "M", "G", "T", "P"];
     let mut value = bytes as f64;
@@ -1572,12 +1578,14 @@ fn read_module(path: &Path) -> io::Result<Vec<u8>> {
 fn sys_hex(path: &Path) -> String {
     sys_text(path).trim_start_matches("0x").to_string()
 }
+
 fn sys_text(path: &Path) -> String {
     fs::read_to_string(path)
         .unwrap_or_default()
         .trim()
         .to_string()
 }
+
 fn utf8_args(args: Vec<OsString>) -> Result<Vec<String>, String> {
     args.into_iter()
         .map(|value| {
@@ -1595,6 +1603,7 @@ fn read_dir_optional(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
         Err(error) => Err(error.to_string()),
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
