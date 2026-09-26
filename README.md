@@ -22,7 +22,16 @@ env -i HOME=/tmp PATH=/nonexistent AXE_STORE_MODE=off \
 
 ## Downloads
 
-No tagged OSS release has been verified for this checkout yet. Published binaries and SHA-256 hashes will appear here after verification. [Release history](https://github.com/buglloc/axe/releases).
+Release [v0.1.0](https://github.com/buglloc/axe/releases/tag/v0.1.0). Verify the binary's SHA-256 before installation; [SHA256SUMS](https://github.com/buglloc/axe/releases/download/v0.1.0/SHA256SUMS) lists every asset.
+
+| Target | Binary | SHA-256 |
+| --- | --- | --- |
+| AXE x86_64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.1.0/axe-x86_64-unknown-linux-musl) · [immutable S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.1.0/x86_64-linux/axe) | `b66b71323b794edcce6a77db17aba9bda9c408b6ee0d649429d4bc9426004586` |
+| AXE aarch64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.1.0/axe-aarch64-unknown-linux-musl) · [immutable S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.1.0/aarch64-linux/axe) | `a5426ff7d2d5db63c3f0a47d5ac0ff4e84a23dc338e343b39ecdff5e0749b781` |
+| AXE aarch64-darwin | [GitHub](https://github.com/buglloc/axe/releases/download/v0.1.0/axe-aarch64-apple-darwin) · [immutable S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.1.0/aarch64-darwin/axe) | `85a979757f24cc5f439da4179e7914e683522ab15b7eb1dc2f9c70556c09dd22` |
+| axe-relay x86_64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.1.0/axe-relay-x86_64-unknown-linux-musl) | `2cfae05b8bab2c46f97a3d2add9c37b3c5b7f93aa831eac0100c031e91cfe3f7` |
+| axe-relay aarch64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.1.0/axe-relay-aarch64-unknown-linux-musl) | `52b6b851568d3a0a8e343768211d644b8082f303be398c453ac4527074320b95` |
+| axe-relay aarch64-darwin | [GitHub](https://github.com/buglloc/axe/releases/download/v0.1.0/axe-relay-aarch64-apple-darwin) | `aeec80e823c65df997d94e45c8756abc22fe1c57f06581fd58498df6bf59c3d7` |
 
 ## What's inside
 

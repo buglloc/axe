@@ -274,10 +274,11 @@
     <div class="download-copy">
       <p class="kicker"><span>08</span> Downloads and builds</p>
       <h2 id="download-title">Get AXE before you need it.</h2>
-      <p>Check GitHub Releases for an OSS binary and verify its SHA-256. If no release is available, build from public source. Older pre-split binaries do not establish edition identity.</p>
+      <p>Download an OSS binary for your target from GitHub Releases. You can also build from source.</p>
       <div class="target-links" aria-label="AXE releases and source">
-        <a href="https://github.com/buglloc/axe/releases">Verified releases →</a>
-        <a href="https://github.com/buglloc/axe">Source and build instructions →</a>
+        <a href="https://github.com/buglloc/axe/releases/latest">Latest release →</a>
+        <a href="https://github.com/buglloc/axe/blob/main/README.md#downloads">Binaries and SHA-256 →</a>
+        <a href="https://github.com/buglloc/axe#building-from-source">Source and build instructions →</a>
       </div>
     </div>
     <div class="install-block">
@@ -285,7 +286,7 @@
       <pre id="install-command"><code>nix develop .#default
 just build-linux-amd64
 ./dist/axe-x86_64-unknown-linux-musl --version</code></pre>
-      <p><span class="status"><i></i> edition: oss</span> check the release manifest and SHA-256 before installing a binary</p>
+      <p><span class="status"><i></i> edition: oss</span> verify the downloaded binary against SHA256SUMS before installing</p>
     </div>
   </section>
 </main>
