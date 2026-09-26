@@ -316,6 +316,27 @@ fn unresolved_current_identity_uses_numeric_fallbacks() {
         bind_identity_file(c"/dev/null", c"/etc/passwd");
         bind_identity_file(c"/dev/null", c"/etc/group");
 
+        // glibc can consult a host nscd socket under /run even with a
+        // files-only NSS policy. Hide it inside the child's mount namespace
+        // so the empty passwd/group files actually control name lookup.
+        // SAFETY: all strings are static and NUL-terminated. The test child
+        // owns its mount namespace, so this does not alter the host /run.
+        let result = unsafe {
+            libc::mount(
+                c"tmpfs".as_ptr(),
+                c"/run".as_ptr(),
+                c"tmpfs".as_ptr(),
+                libc::MS_NOSUID | libc::MS_NODEV,
+                c"mode=700".as_ptr().cast(),
+            )
+        };
+        assert_eq!(
+            result,
+            0,
+            "hide host NSS sockets: {}",
+            std::io::Error::last_os_error()
+        );
+
         // --map-root-user maps our primary IDs, but supplementary host groups
         // can survive as unmapped IDs (usually 65534). Read the kernel's
         // groups rather than assuming it cleared them.
