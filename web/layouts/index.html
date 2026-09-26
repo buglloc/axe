@@ -11,7 +11,7 @@
       <p class="hero__intro">{{ .Params.intro }}</p>
       <div class="hero__actions">
         <a class="button button--primary" href="#download">[ Download AXE ]</a>
-        <a class="button button--ghost" href="#tools">Explore the toolbox <span aria-hidden="true">→</span></a>
+        <a class="button button--ghost" href="#tools">See the tools <span aria-hidden="true">→</span></a>
       </div>
       <dl class="hero__facts" aria-label="AXE inventory">
         <div><dt>targets</dt><dd>Linux {amd64, arm64}<br>macOS {arm64}</dd></div>
@@ -65,7 +65,7 @@
 
   <section class="section" id="survival" aria-labelledby="survival-title">
     <div class="section-heading">
-      <p class="kicker"><span>02</span> Failure is the environment</p>
+      <p class="kicker"><span>02</span> Failure modes</p>
       <h2 id="survival-title">{{ .Params.sections.survivalTitle }}</h2>
       <p>{{ .Params.sections.survivalLead }}</p>
     </div>
@@ -83,7 +83,7 @@
 
   <section class="section environment-section" id="environment" aria-labelledby="environment-title">
     <div class="section-heading">
-      <p class="kicker"><span>03</span> Read the runtime</p>
+      <p class="kicker"><span>03</span> Host inspection</p>
       <h2 id="environment-title">{{ .Params.sections.environmentTitle }}</h2>
       <p>{{ .Params.sections.environmentLead }}</p>
     </div>
@@ -102,8 +102,8 @@
         </article>
         <article>
           <span>03</span>
-          <h3>Evidence, not guesses</h3>
-          <p>Heuristic conclusions carry confidence and the evidence behind them.</p>
+          <h3>Evidence and confidence</h3>
+          <p>Heuristic conclusions include confidence levels and supporting evidence.</p>
         </article>
       </div>
 
@@ -125,8 +125,8 @@
     </div>
 
     <div class="environment-modes">
-      <article><code>doctor</code><p>Immediate, human-readable diagnosis of the current AXE process.</p></article>
-      <article><code>vzik collect</code><p>Bounded, structured evidence for deeper inspection and incident analysis.</p></article>
+      <article><code>doctor</code><p>Human-readable diagnostics for the current AXE process.</p></article>
+      <article><code>vzik collect</code><p>Bounded, structured evidence for incident analysis.</p></article>
     </div>
   </section>
 
@@ -159,7 +159,7 @@
 
   <section class="section tool-section" id="tools" aria-labelledby="tools-title">
     <div class="section-heading">
-      <p class="kicker"><span>05</span> Runtime Inventory</p>
+      <p class="kicker"><span>05</span> Command inventory</p>
       <h2 id="tools-title">{{ .Params.sections.toolsTitle }}</h2>
       <p>{{ .Params.sections.toolsLead }}</p>
     </div>
@@ -255,7 +255,7 @@
 
   <section class="section resolution-section" aria-labelledby="resolution-title">
     <div class="section-heading section-heading--compact">
-      <p class="kicker"><span>07</span> No surprises</p>
+      <p class="kicker"><span>07</span> Lookup order</p>
       <h2 id="resolution-title">{{ .Params.sections.resolutionTitle }}</h2>
       <p>{{ .Params.sections.resolutionLead }}</p>
     </div>
@@ -272,10 +272,11 @@
 
   <section class="section download-section" id="download" aria-labelledby="download-title">
     <div class="download-copy">
-      <p class="kicker"><span>08</span> Build an AXE</p>
-      <h2 id="download-title">Carry the rescue environment before you need it.</h2>
-      <p>The OSS edition does not reuse pre-split binaries without a verifiable edition identity. Build the audited source until the first OSS release is published.</p>
-      <div class="target-links" aria-label="AXE source">
+      <p class="kicker"><span>08</span> Downloads and builds</p>
+      <h2 id="download-title">Get AXE before you need it.</h2>
+      <p>Check GitHub Releases for an OSS binary and verify its SHA-256. If no release is available, build from public source. Older pre-split binaries do not establish edition identity.</p>
+      <div class="target-links" aria-label="AXE releases and source">
+        <a href="https://github.com/buglloc/axe/releases">Verified releases →</a>
         <a href="https://github.com/buglloc/axe">Source and build instructions →</a>
       </div>
     </div>
@@ -284,7 +285,7 @@
       <pre id="install-command"><code>nix develop .#default
 just build-linux-amd64
 ./dist/axe-x86_64-unknown-linux-musl --version</code></pre>
-      <p><span class="status"><i></i> edition: oss</span> publication adds immutable URLs and SRI hashes only after release verification</p>
+      <p><span class="status"><i></i> edition: oss</span> check the release manifest and SHA-256 before installing a binary</p>
     </div>
   </section>
 </main>

@@ -23,10 +23,11 @@ html {
   scroll-behavior: smooth;
   scroll-padding-top: 92px;
   background: var(--background);
+  overflow-x: clip;
 }
 
 body {
-  min-width: 320px;
+  min-width: 0;
   font-family: "DejaVu Sans Mono", "Liberation Mono", Consolas, monospace;
   background:
     radial-gradient(circle at 79% 11%, rgb(100 181 198 / 10%), transparent 25rem),

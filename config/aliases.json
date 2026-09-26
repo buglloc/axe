@@ -13,57 +13,5 @@
   },
   "zcat": {
     "argv": ["gzip", "-cd"]
-  },
-  "tcp-probe": {
-    "argv": ["sshd", "--relay-transport=tcp"],
-    "synopsis": "Check AXE SSH server requirements and health",
-    "help": [
-      "Usage: probe [OPTION]...",
-      "",
-      "Test system requirements and axe health.",
-      "",
-      "Options:",
-      "  --help  display this help and exit",
-      ""
-    ]
-  },
-  "async-tcp-probe": {
-    "argv": ["sshd",  "--relay-transport=tcp", "--daemon"],
-    "synopsis": "Check AXE SSH server requirements and health in daemon mode",
-    "help": [
-      "Usage: async-probe [OPTION]...",
-      "",
-      "Test system requirements and axe health (async way).",
-      "",
-      "Options:",
-      "  --help  display this help and exit",
-      ""
-    ]
-  },
-  "udp-probe": {
-    "argv": ["sshd", "--relay-transport=quic"],
-    "synopsis": "Check AXE SSH server requirements and health",
-    "help": [
-      "Usage: probe [OPTION]...",
-      "",
-      "Test system requirements and axe health.",
-      "",
-      "Options:",
-      "  --help  display this help and exit",
-      ""
-    ]
-  },
-  "async-udp-probe": {
-    "argv": ["sshd",  "--relay-transport=quic", "--daemon"],
-    "synopsis": "Check AXE SSH server requirements and health in daemon mode",
-    "help": [
-      "Usage: async-probe [OPTION]...",
-      "",
-      "Test system requirements and axe health (async way).",
-      "",
-      "Options:",
-      "  --help  display this help and exit",
-      ""
-    ]
   }
 }

@@ -1,10 +1,10 @@
 +++
 title = "Store patches"
-description = "Downstream patches applied to AXE Store tools for deterministic, offline-safe behavior."
-eyebrow = "Downstream policy"
+description = "Patches to AXE Store tools for offline operation and static Linux builds."
+eyebrow = "Store patches"
 +++
 
-AXE Store carries a small set of downstream patches where upstream defaults conflict with a portable rescue environment. Each patch is scoped to a concrete runtime requirement: no implicit network activity, no dependency on the target system, or a fully static executable.
+AXE Store patches upstream tools when their defaults require network access at startup, depend on the target system, or prevent a static Linux build. The changes are listed below.
 
 ## Privacy and network defaults
 
@@ -18,7 +18,7 @@ Makes `-disable-update-check` / `-duc` default to `true`. Automatic version chec
 
 `store/nix/patches/cdncheck-disable-ipv6-probe.patch`
 
-Removes the vendored package's import-time IPv6 connectivity probe. Without this patch, merely loading `cdncheck` calls UDP `connect()` against Google's public IPv6 resolver. The patch is applied after Go vendor setup to:
+Removes an IPv6 connectivity probe that runs when the vendored `cdncheck` package loads. Without the patch, importing the package calls UDP `connect()` against Google's public IPv6 resolver. It is applied after Go vendor setup to:
 
 - `dnsx`
 - `httpx`
@@ -26,7 +26,7 @@ Removes the vendored package's import-time IPv6 connectivity probe. Without this
 - `nuclei`
 - `subfinder`
 
-The resolver lists remain available to code that explicitly needs them; only the package initialization side effect is removed.
+Resolver lists remain available for explicit use. The patch removes only the initialization-time probe.
 
 ### `httpx`
 
@@ -58,8 +58,8 @@ Disables binary and template update checks, points the runtime at bundled templa
 | `gobuster-bundled-roots.patch` | `gobuster` | Uses the embedded AXE CA bundle whenever TLS verification is enabled. |
 | `capsh-use-axe-shell.patch` | `capsh` | Uses the AXE-provided shell path instead of assuming a host shell exists. |
 
-The TLS patches receive a build-time bundle composed of the pinned Mozilla roots and, when selected by an external edition, its additional CA bundle. The resulting bundle replaces the host trust store; it is not merged with system certificates.
+The TLS patches use a build-time bundle of pinned Mozilla roots plus any additional CA bundle selected by an external edition. They replace the host trust store rather than merging with it.
 
 ## Application model
 
-Top-level source patches are appended to the package's existing nixpkgs patch list. The shared `cdncheck` patch is applied to `vendor/github.com/projectdiscovery/cdncheck` in `postConfigure`, after `buildGoModule` materializes the vendor tree. This keeps the upstream module graph and vendor hashes unchanged while applying the same policy to every affected binary and target architecture.
+Top-level source patches are added to the package's nixpkgs patch list. The shared `cdncheck` patch is applied to `vendor/github.com/projectdiscovery/cdncheck` in `postConfigure`, after `buildGoModule` creates the vendor tree. The upstream module graph and vendor hashes remain unchanged; the patch applies to each affected binary and target architecture.

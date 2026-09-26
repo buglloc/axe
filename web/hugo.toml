@@ -62,6 +62,10 @@ copyright = "AXE is open source under the MIT License."
   url = "/patches/"
   weight = 40
 [[menus.main]]
+  name = "Changelog"
+  url = "/changelog/"
+  weight = 45
+[[menus.main]]
   name = "Download"
   url = "/#download"
   weight = 50

@@ -1,295 +1,174 @@
-# Как AXE переживает unlink, отсутствие procfs и запреты на exec
+# AXE self-exec after unlink, without procfs, and under exec restrictions
 
-У AXE есть два уровня выполнения:
+AXE has two execution paths:
 
-- **in-process entry dispatch** — текущий процесс уже вошёл в applet через
-  BusyBox-style `argv[0]`, `axe --applet`, positional command или hidden
-  dispatch; сюда же относятся shell alias/function и builtin;
-- **self-exec** — новый процесс AXE для bundled-команды из уже работающего
-  Brush, вложенного запуска через `xargs`, daemon worker-а, SSH shell/exec
-  session или BusyBox-style PATH bridge.
+- **In-process entry dispatch:** the current process enters an applet through BusyBox-style `argv[0]`, `axe --applet`, a positional command, or hidden dispatch. Shell aliases, functions, and builtins also run in-process.
+- **Self-exec:** a running AXE process starts another AXE process for a bundled command from Brush, a nested `xargs` invocation, a daemon worker, an SSH shell/exec session, or a BusyBox-style PATH bridge.
 
-Первому уровню собственный executable не нужен. Но это не означает, что живой
-Brush умеет выполнить любой bundled applet без spawn: обычный applet shim
-создаёт дочерний AXE process. Native callback `doctor` выполняется в shell
-process и получает snapshot live shell state. При потере self-exec shell
-сохраняет builtins, aliases и functions.
+Entry dispatch does not need access to the executable. That does not mean a running Brush can execute every bundled applet without spawning: the usual applet shim starts a child AXE process. The native `doctor` callback runs in the shell process and reads a snapshot of live shell state. If self-exec is unavailable, the shell still has its builtins, aliases, and functions.
 
-При запуске нового процесса AXE сохраняет:
+When starting a new process, AXE preserves:
 
-- исходный `argv[0]` applet-а;
-- byte-oriented `OsString`-аргументы и non-UTF-8 paths;
-- окружение после всех изменений caller-а;
-- stdin/stdout/stderr и shell redirections;
-- session/process-group setup тех launch boundary, которые его явно задают;
-- порядок caller `pre_exec` hooks;
-- Tokio `kill_on_drop` и lifetime дочернего процесса.
+- the applet's original `argv[0]`;
+- byte-oriented `OsString` arguments and non-UTF-8 paths;
+- the caller's modified environment;
+- stdin, stdout, stderr, and shell redirections;
+- session and process-group setup at launch boundaries that specify it;
+- the order of caller `pre_exec` hooks;
+- Tokio `kill_on_drop` behavior and child-process lifetime.
 
-## Что AXE сохраняет при старте
+## Capabilities retained at startup
 
-`crates/axe/src/executable.rs` создаёт единственного process-wide владельца
-self-exec capabilities и runtime root. Это происходит до сборки registry,
-запуска Tokio runtime и появления других потоков.
+`crates/axe/src/executable.rs` creates the sole process-wide owner of self-exec capabilities and the runtime root before building the registry, starting the Tokio runtime, or creating other threads.
 
-На Linux AXE последовательно ищет:
+On Linux, AXE checks these sources in order:
 
-1. inherited descriptor из внутреннего handoff предыдущего процесса AXE;
-2. `/proc/self/exe`, если procfs действительно работает;
-3. filesystem candidate из `current_exe()`, а затем из байтов `AT_EXECFN`,
-   разрешённых относительно startup current directory;
-4. private filesystem relay, если до него дойдёт дело.
+1. An inherited descriptor handed off by a previous AXE process.
+2. `/proc/self/exe`, if procfs works.
+3. A filesystem candidate from `current_exe()`, then from the bytes of `AT_EXECFN`, resolved relative to the startup working directory.
+4. A private filesystem relay, if needed.
 
-Descriptor и path привязаны к device/inode текущего image. Filesystem candidate
-принимается только после canonicalization и проверки, что это executable regular
-file. Если descriptor уже известен, path с другим inode отбрасывается.
+The descriptor and path are tied to the current image's device and inode. AXE accepts a filesystem candidate only after canonicalizing it and checking that it is an executable regular file. If a descriptor is already known, AXE rejects a path to a different inode.
 
-Inherited descriptor и runtime root не принимаются на веру: AXE проверяет живой
-fd и identity, а root повторно проверяет перед использованием. Descriptor сразу
-получает `FD_CLOEXEC`; внутренние environment variables handoff-а удаляются до
-запуска потоков и наружу не торчат.
+AXE validates an inherited descriptor and runtime root rather than trusting the handoff: it checks the live fd and its identity, and rechecks the root before use. It immediately sets `FD_CLOEXEC` on the descriptor and removes the internal handoff environment variables before starting any threads.
 
-Здесь есть фундаментальное стартовое окно. Если Linux запустил AXE только по
-pathname, procfs недоступен, а pathname удалили до того, как `initialize()`
-успел открыть исходный inode, восстановить этот inode уже невозможно. Полную
-гарантию против такого окна даёт только executable fd, унаследованный от
-launcher-а.
+There is an unavoidable startup window. If Linux starts AXE only by pathname, procfs is unavailable, and the pathname is removed before `initialize()` opens the original inode, AXE cannot recover that inode. Only an executable fd inherited from the launcher closes this window completely.
 
-Retained descriptor AXE readable. Это сильнее минимально необходимого exec-only
-capability и позволяет создать relay. `O_PATH`/exec-only descriptor не
-моделируется как независимая capability: возможность исполнить inode не
-считается доказательством, что его байты можно прочитать и скопировать.
+AXE's retained descriptor is readable. This is stronger than the minimum exec-only capability and lets AXE create a relay. AXE does not treat an `O_PATH` or exec-only descriptor as an independent capability: being able to execute an inode does not prove that its bytes can be read and copied.
 
-На Darwin descriptor backend нет. Там capability — это проверенный canonical
-filesystem path.
+Darwin has no descriptor backend. Its capability is a verified canonical filesystem path.
 
-## Как AXE запускает себя на Linux
+## Linux self-exec order
 
-Backend-ы bundled child идут в фиксированном порядке:
+Bundled child backends run in a fixed order:
 
-1. **`execveat(fd, "", ..., AT_EMPTY_PATH)`** — прямой запуск retained
-   descriptor;
-2. **`fexecve(fd, ...)`** — libc/POSIX fallback;
-3. **один checked filesystem path** — исходный inode, если mount policy
-   подтверждает execution, или private relay при `noexec`/потере original.
-   При `unknown`/неподдерживаемом policy сначала пробуется relay, затем original.
+1. **`execveat(fd, "", ..., AT_EMPTY_PATH)`** executes the retained descriptor directly.
+2. **`fexecve(fd, ...)`** provides a libc/POSIX fallback.
+3. **One checked filesystem path** points to the original inode if mount policy confirms execution, or to a private relay if the original is lost or on a `noexec` mount. If policy is `unknown` or unsupported, AXE tries the relay first, then the original.
 
-`/proc/self/fd/<fd>` не передаётся Brush как простой path: его child sanitation
-закрывает unrelated descriptors до `exec`, после чего pathname становится
-dangling. Published bridge использует выбранный original-or-relay path; live
-`/proc/<pid>/exe` используется только при отсутствии conventional path.
+AXE does not pass `/proc/self/fd/<fd>` to Brush as a plain path. Brush's child sanitation closes unrelated descriptors before `exec`, leaving that pathname dangling. A published bridge uses the selected original or relay path; live `/proc/<pid>/exe` is used only when there is no conventional path.
 
-Ошибка одного descriptor backend-а не обрывает цепочку. Например, `fexecve` на
-конкретной libc может внутри снова упереться в `execveat` или procfs — на старом
-ядре и в зажатом seccomp-профиле это ожидаемо.
+A failure in one descriptor backend does not stop the sequence. On some libc implementations, for example, `fexecve` can depend on `execveat` or procfs; that can fail on an older kernel or under a restrictive seccomp profile.
 
-Перед descriptor launch AXE дублирует fd через `F_DUPFD_CLOEXEC`. Сначала
-пробует диапазон от 256, чтобы не пересечься с обычными application descriptors;
-при маленьком `RLIMIT_NOFILE` откатывается к диапазону от 3. Если ядро не знает
-`F_DUPFD_CLOEXEC`, используется `F_DUPFD` с отдельной установкой `FD_CLOEXEC`.
+Before a descriptor launch, AXE duplicates the fd with `F_DUPFD_CLOEXEC`. It first tries numbers starting at 256 to avoid ordinary application descriptors, then falls back to numbers starting at 3 under a low `RLIMIT_NOFILE`. If the kernel does not support `F_DUPFD_CLOEXEC`, AXE uses `F_DUPFD` and sets `FD_CLOEXEC` separately.
 
-Полные C-массивы `argv` и `envp` собираются в parent. Последний `pre_exec` только
-снимает `CLOEXEC` и вызывает syscalls — никаких allocation и Rust
-synchronization после `fork`. Перед path fallback AXE открывает fallback path,
-сравнивает fd с сохранёнными device/inode и именно этот проверенный fd передаёт
-следующему процессу.
+The parent builds the complete C `argv` and `envp` arrays. The final `pre_exec` hook only clears `CLOEXEC` and calls syscalls: no allocation or Rust synchronization occurs after `fork`. Before falling back to a path, AXE opens it, compares the fd against the retained device and inode, and passes that checked fd to the next process.
 
-Во внутренних callsite descriptor hook регистрируется последним. Новый
-`pre_exec`, добавленный после него, не должен вызывать `close_range`,
-`closefrom` или иначе закрывать retained fd; если такой sanitation появится,
-descriptor необходимо явно включить в whitelist.
+Internal call sites register the descriptor hook last. A new `pre_exec` hook added after it must not call `close_range`, `closefrom`, or otherwise close the retained fd. If such sanitation is added, the descriptor must be explicitly allowlisted.
 
-## Зачем нужен private filesystem relay
+## Why AXE keeps a private filesystem relay
 
-Retained descriptor подходит не всем. Relay закрывает два случая:
+A retained descriptor is not enough when:
 
-- kernel, libc или seccomp запрещают descriptor exec;
-- consumer принимает только path и не умеет работать с retained descriptor.
+- the kernel, libc, or seccomp policy blocks descriptor execution;
+- a consumer accepts only a path.
 
-Relay создаётся только на Linux и только из readable descriptor. Process-wide
-runtime root выбирается один раз в порядке: явный `AXE_WORK_DIR`, проверенный
-root descriptor-backed родителя, `$XDG_CACHE_HOME/axe`, Linux
-`$HOME/.cache/axe` или Darwin `$HOME/Library/Caches/axe`,
-`$XDG_RUNTIME_DIR/axe`, `$TMPDIR/axe-<uid>`. Автоматический root является
-private directory с mode `0700`; runtime selection не перебирает mounts. Если
-выбранный root имеет `noexec`, relay пробует только
-фиксированные `$XDG_RUNTIME_DIR/axe` и `$TMPDIR/axe-<uid>`. Явный
-`AXE_WORK_DIR` запрещает этот fallback.
+AXE creates a relay only on Linux and only from a readable descriptor. It selects one process-wide runtime root in this order: explicit `AXE_WORK_DIR`, a verified descriptor-backed parent root, `$XDG_CACHE_HOME/axe`, Linux `$HOME/.cache/axe` or Darwin `$HOME/Library/Caches/axe`, `$XDG_RUNTIME_DIR/axe`, then `$TMPDIR/axe-<uid>`. An automatically selected root is a private directory with mode `0700`; runtime selection does not search arbitrary mounts. If the selected root is on a `noexec` mount, the relay tries only the fixed `$XDG_RUNTIME_DIR/axe` and `$TMPDIR/axe-<uid>` locations. Explicit `AXE_WORK_DIR` disables this fallback.
 
-Публикация устроена так:
+Publication follows these steps:
 
-1. AXE создаёт user-owned каталог `.axe-self` с mode `0700`; symlink и чужой
-   владелец запрещены;
-2. через `create_new` открывает уникальный temporary regular file с mode `0700`;
-3. копирует image bounded-вызовами `read_at`, не меняя offset исходного
-   descriptor;
-4. повторно проверяет device/inode/size/mtime source;
-5. делает `fsync` и меняет mode на `0500`;
-6. читает linker-generated SHA-1 ELF build ID и публикует hard link
-   `.axe-self/<40 hex>`;
-7. при доступном `flock` удерживает shared lease на принятом relay до завершения
-   процесса;
-8. запускает hidden probe из опубликованного файла;
-9. принимает path только после успешного probe.
+1. AXE creates a user-owned `.axe-self` directory with mode `0700`, rejecting symlinks and other owners.
+2. It opens a unique temporary regular file with mode `0700` using `create_new`.
+3. It copies the image with bounded `read_at` calls without changing the source descriptor's offset.
+4. It rechecks the source device, inode, size, and mtime.
+5. It calls `fsync` and changes the mode to `0500`.
+6. It reads the linker-generated SHA-1 ELF build ID and publishes a hard link at `.axe-self/<40 hex>`.
+7. Where `flock` is available, it holds a shared lease on the accepted relay until the process exits.
+8. It runs a hidden probe from the published file.
+9. It accepts the path only if the probe succeeds.
 
-Одинаковый ELF build ID даёт один relay независимо от inode исходного файла.
-Под exclusive directory lock AXE оставляет current и один предыдущий relay;
-дополнительные unlocked файлы удаляет. Relay с shared lease живого процесса
-не удаляется и будет собран после освобождения lease. Если filesystem или
-sandbox запрещает `flock` (`ENOSYS`, `EOPNOTSUPP`, `ENOLCK`, `EPERM` или
-`EACCES`), AXE использует relay `nolock-<40 hex>`, который обычный GC не
-трогает. Публикация доступна, но такие relay автоматически не удаляются.
+The same ELF build ID produces one relay regardless of the source file's inode. Under an exclusive directory lock, AXE keeps the current relay and one previous relay and removes additional unlocked files. It does not remove a relay with a live process's shared lease; it collects that relay after the lease is released. If the filesystem or sandbox blocks `flock` (`ENOSYS`, `EOPNOTSUPP`, `ENOLCK`, `EPERM`, or `EACCES`), AXE uses `nolock-<40 hex>`. Normal garbage collection does not touch these relays, so publication works but they are not removed automatically.
 
-Noexec mount, недоступный или read-only root, повреждённый файл и упавший probe
-исключают этот root; после исчерпания roots при неопределённой policy выбирается
-checked original path.
+A `noexec` mount, an unavailable or read-only root, a corrupt file, or a failed probe rules out that root. Once the roots are exhausted, AXE selects the checked original path if its execution policy is unknown.
 
-Relay лежит в private directory, но path execution всё равно оставляет окно
-между последней inode-проверкой и `execve`. Retained descriptor сильнее. Relay
-здесь не замена, а контролируемый fallback для policy и path-only consumers.
+The relay sits in a private directory, but path execution still leaves a window between the last inode check and `execve`. A retained descriptor is stronger; the relay is a controlled fallback for execution policy and path-only consumers, not a replacement.
 
-Relay сохраняет запускаемые байты AXE, но не является тем же filesystem security
-object. У нового inode нет исходных file capabilities, LSM labels, security
-xattrs и setuid/setgid semantics; mode намеренно фиксируется в `0500`.
+A relay preserves AXE's executable bytes, not the original filesystem security object. Its new inode has none of the original file capabilities, LSM labels, security xattrs, or setuid/setgid semantics. AXE deliberately sets its mode to `0500`.
 
-Bundled executable provider заново выбирает fallback перед каждым launch. Если
-original path потерян между запусками, relay готовится в parent до `fork`:
-копирование и filesystem mutation внутри `pre_exec` небезопасны. Relay может
-быть materialized до успешного descriptor exec, потому что path fallback должен
-быть полностью подготовлен до входа в child.
+The bundled executable provider selects a fallback again before each launch. If the original path disappears between launches, AXE prepares the relay in the parent before `fork`: copying and filesystem mutations are unsafe inside `pre_exec`. A relay may be materialized even when descriptor execution later succeeds, because the path fallback must be ready before entering the child.
 
-## Что продолжит работать
+## What remains available
 
 <!-- markdownlint-disable MD013 -->
 
-| Состояние | Bundled child / daemon / SSH session | PATH bridge | `SHELL` | `AXE_SHELL` |
+| State | Bundled child / daemon / SSH session | PATH bridge | `SHELL` | `AXE_SHELL` |
 | --- | --- | --- | --- | --- |
-| Linux, original path executable | descriptor, затем original path | original path | original path | original path |
-| Linux, original path `noexec` или потерян, relay есть | descriptor, затем relay | relay | relay | relay |
-| Linux, original path policy unknown, relay недоступен | descriptor, затем checked original path | original path | original path | original path |
-| Linux, original path удалён, relay нет, descriptor exec разрешён | descriptor-aware launch работает | отсутствует или ранее опубликованный bridge становится dangling | унаследованное значение | удалена |
-| Linux, descriptor exec запрещён, relay и original path недоступны | новый процесс AXE не запускается; Brush builtins продолжают работу | отсутствует | унаследованное значение | удалена |
-| Darwin, canonical path существует | path launch | canonical path | canonical path | canonical path |
-| Darwin, path удалён или заменён | только in-process dispatch | отсутствует или dangling | унаследованное значение | удалена |
+| Linux, original path executable | Descriptor, then original path | Original path | Original path | Original path |
+| Linux, original path `noexec` or lost, relay available | Descriptor, then relay | Relay | Relay | Relay |
+| Linux, original path policy unknown, relay unavailable | Descriptor, then checked original path | Original path | Original path | Original path |
+| Linux, original path removed, no relay, descriptor exec allowed | Descriptor-aware launch works | Absent, or an earlier bridge is dangling | Inherited value | Unset |
+| Linux, descriptor exec blocked, relay and original path unavailable | Cannot start a new AXE process; Brush builtins still work | Absent | Inherited value | Unset |
+| Darwin, canonical path exists | Path launch | Canonical path | Canonical path | Canonical path |
+| Darwin, path removed or replaced | In-process dispatch only | Absent or dangling | Inherited value | Unset |
 
 <!-- markdownlint-enable MD013 -->
 
-`SHELL` и `AXE_SHELL` содержат только реальные публикуемые paths. AXE не
-записывает туда `/dev/fd`, внутренний fd number или выдуманный path.
+`SHELL` and `AXE_SHELL` contain only real, publishable paths. AXE does not put `/dev/fd`, an internal fd number, or a fabricated path in either variable.
 
-## Что происходит в плохом окружении
+## Failure cases
 
-### Нет procfs
+### No procfs
 
-Отсутствующий `/proc`, masked proc mount или неработающий `/proc/self/fd`
-отключает только proc backend. Если filesystem image читается, AXE всё равно
-получает retained descriptor. После первого descriptor launch этот capability
-передаётся следующим процессам без участия procfs.
+A missing `/proc`, a masked proc mount, or an unusable `/proc/self/fd` disables only the proc backend. If the filesystem image can be read, AXE still obtains a retained descriptor. After the first descriptor launch, AXE hands that capability to later processes without procfs.
 
-### Image удалили или заменили
+### Image removed or replaced
 
-Открытый descriptor продолжает указывать на исходный inode после unlink и atomic
-replace. Descriptor-aware launch запускает image открытого inode; filesystem
-path с новым inode отклоняется.
+An open descriptor continues to refer to the original inode after unlink or atomic replacement. Descriptor-aware launch executes that inode's image; AXE rejects a filesystem path to a new inode.
 
-Уже опубликованный PATH bridge на исходный path автоматически пережить unlink не
-может. Если AXE стартовал без original path, для нового bridge потребуется
-private relay.
+An existing PATH bridge to the original path cannot survive unlink automatically. If AXE started without an original path, a new bridge requires a private relay.
 
-### Нет `execveat` или его запрещает seccomp
+### `execveat` unavailable or blocked by seccomp
 
-`ENOSYS`, `EPERM` и другие ошибки `execveat` переводят запуск на `fexecve`, а
-затем на один заранее выбранный checked path. При подтверждённом executable
-mount это original; при `noexec` или потерянном original — relay. Если policy
-запрещает descriptor syscalls, но разрешает обычный `execve` выбранного path,
-bundled children, workers и SSH sessions продолжают работать.
+`ENOSYS`, `EPERM`, and other `execveat` errors move execution to `fexecve`, then to one preselected checked path. That path is the original on a confirmed executable mount, or the relay if the original is lost or on `noexec`. If policy blocks descriptor syscalls but permits ordinary `execve` on the selected path, bundled children, workers, and SSH sessions still run.
 
-Если запрещены и descriptor exec, и filesystem execution, маскировать это
-внешней командой из `PATH` AXE не будет. Новый процесс завершится с status 126
-или `NotFound` — точный результат зависит от caller-а.
+If neither descriptor nor filesystem execution is allowed, AXE does not disguise the failure by running an external command from `PATH`. Starting a new process fails with status 126 or `NotFound`, depending on the caller.
 
-### MDWE, W^X и запрет `memfd_create`
+### MDWE, W^X, and blocked `memfd_create`
 
-Self-exec не вызывает `memfd_create`, executable `mmap` или
-`mprotect(PROT_EXEC)`. AXE исполняет уже executable descriptor либо обычный relay
-file. Поэтому `PR_SET_MDWE`/W^X не требуют отдельного обхода, а запрет
-`memfd_create` ничего здесь не меняет.
+Self-exec does not call `memfd_create`, use executable `mmap`, or call `mprotect(PROT_EXEC)`. AXE executes an already executable descriptor or an ordinary relay file. `PR_SET_MDWE` and W^X therefore need no separate workaround; blocking `memfd_create` does not affect self-exec.
 
-Sealed `memfd` AXE Store запускает single-file package payload и не участвует в
-повторном запуске AXE.
+AXE Store uses a sealed `memfd` to run single-file package payloads. It is not part of AXE self-exec.
 
-### Нет writable executable filesystem
+### No writable executable filesystem
 
-Если ни один runtime root нельзя создать, заполнить и исполнить, relay
-отключается. Descriptor-aware Brush, supervisor и SSH launchers используют
-retained descriptor через `execveat` или `fexecve`.
+If AXE cannot create, fill, and execute a relay in any runtime root, the relay is unavailable. Descriptor-aware Brush, supervisor, and SSH launchers use the retained descriptor through `execveat` or `fexecve`.
 
-Path-only consumer после удаления original path запустить нельзя. AXE вернёт
-контролируемую ошибку, а не подменит bundled-команду внешним executable.
+After the original path is removed, a path-only consumer cannot launch. AXE returns a controlled error rather than substituting an external executable for a bundled command.
 
-### Окружение сломано
+### Broken environment
 
-Пустой `PATH`, stale `AXE_APPLET_DIR`, неверный `AXE_WORK_DIR` и недоступный
-`HOME` не выключают in-process registry. AXE удаляет stale bridge marker и его
-точные PATH-компоненты. Ошибка публикации нового bridge остаётся warning:
-direct entry dispatch и Brush builtins от bridge не зависят.
+An empty `PATH`, stale `AXE_APPLET_DIR`, invalid `AXE_WORK_DIR`, or inaccessible `HOME` does not disable the in-process registry. AXE removes a stale bridge marker and its exact PATH components. Failure to publish a new bridge remains a warning: direct entry dispatch and Brush builtins do not depend on it.
 
-Descriptor handoff имеет приоритет только после проверки fd и identity.
-Некорректное значение environment игнорируется и удаляется.
+Descriptor handoff takes priority only after fd and identity checks. AXE ignores and removes an invalid environment value.
 
-### Нет возможности создать process
+### Unable to create a process
 
-Non-interactive/minimal Brush использует current-thread Tokio runtime и не
-создаёт worker threads при старте. Reedline требует blocking pool, поэтому
-interactive shell использует multi-thread runtime. Если `clone`/`fork`
-возвращает `EAGAIN`, `ENOMEM` или запрещён policy, ошибка относится к конкретному
-spawn; уже живой shell может выполнить следующий native builtin.
+Non-interactive/minimal Brush uses a current-thread Tokio runtime and starts without worker threads. Reedline needs a blocking pool, so the interactive shell uses a multi-thread runtime. If `clone` or `fork` returns `EAGAIN` or `ENOMEM`, or policy blocks it, that spawn fails; the running shell can still execute another native builtin.
 
-Обычные bundled applets внутри Brush относятся к process-required пути: shim
-запускает новый AXE process. `doctor` — native callback и остаётся доступен без
-spawn, включая вывод через shell redirection. Остальные bundled applets при
-полном запрете spawn не выполняются in-process.
+Ordinary bundled applets in Brush require a new process: the shim starts a child AXE process. `doctor` is a native callback and remains available without spawn, including output through shell redirection. With spawning completely blocked, other bundled applets do not run in-process.
 
-## Как этим пользуются разные consumers
+## Consumers
 
 ### Brush
 
-Bundled shim получает Linux `BundledExecutable::Descriptor` либо проверенный
-filesystem path, затем собирает `SimpleCommand`. Он сохраняет `argv[0]`,
-environment и redirections и добавляет descriptor exec последним перед spawn.
+The bundled shim receives either a Linux `BundledExecutable::Descriptor` or a checked filesystem path, then builds a `SimpleCommand`. It preserves `argv[0]`, the environment, and redirections, and adds descriptor execution last before spawn.
 
-Builtin adapter ждёт завершения child внутри builtin и не получает pipeline PGID
-из dispatcher-а. Bundled stage поэтому не гарантирует полную параллельность
-pipeline и job-control semantics.
+The builtin adapter waits for the child inside the builtin and does not receive the pipeline PGID from the dispatcher. A bundled pipeline stage therefore does not guarantee full pipeline concurrency or job-control semantics.
 
-При недоступном self-exec Brush сохраняет builtins, aliases и functions;
-bundled applet сообщает ошибку конкретного spawn.
+When self-exec is unavailable, Brush retains builtins, aliases, and functions; a bundled applet reports its own spawn failure.
 
 ### Supervisor
 
-Daemon re-exec использует тот же `ExecutableCommand`. Internal supervisor/worker
-flags, detached stdio, session setup и log files применяются до descriptor exec.
-Launcher получает success только после bind воркера через inherited readiness
-descriptor. Супервизор владеет worker process group, пересылает
-TERM/INT/QUIT/HUP и ждёт graceful shutdown; Linux worker получает
-parent-death signal, поэтому не переживает аварийный выход супервизора.
+Daemon re-exec uses the same `ExecutableCommand`. Internal supervisor/worker flags, detached stdio, session setup, and log files are configured before descriptor execution. The launcher reports success only after the worker binds and signals through an inherited readiness descriptor. The supervisor owns the worker process group, forwards TERM/INT/QUIT/HUP, and waits for graceful shutdown. On Linux, the worker receives a parent-death signal, so it does not outlive an unexpected supervisor exit.
 
 ### SSHD
 
-Один `Arc<Executable>` создаётся до bind и затем используется всеми shell/exec
-sessions. Tokio wrapper переносит std command уже после окончательной подготовки
-descriptor backend-а и сохраняет `kill_on_drop`.
+One `Arc<Executable>` is created before bind and shared by all shell/exec sessions. The Tokio wrapper takes the standard command only after the descriptor backend is fully prepared and preserves `kill_on_drop`.
 
-Bridge для SSHD является best-effort: ошибка публикации не мешает
-descriptor-aware session launch. Но если при старте нет ни descriptor, ни
-executable path, `sshd` завершается до bind — создавать сессии ему всё равно
-будет нечем.
+The SSHD bridge is best-effort: failure to publish it does not prevent descriptor-aware session launch. If neither a descriptor nor an executable path is available at startup, however, `sshd` exits before bind because it cannot start sessions.
 
 ### Path-only consumers
 
-Обычный `execvp`, BusyBox-style symlink и внешняя launcher library принимают
-только path. Им нужен live proc bridge, проверенный original path или relay. Один
-retained descriptor PATH bridge не заменяет.
+Ordinary `execvp`, a BusyBox-style symlink, and an external launcher library accept only a path. They need a live proc bridge, a checked original path, or a relay. A retained descriptor alone cannot replace a PATH bridge.
 
-`capsh --` отдельно открывает path из `AXE_SHELL` до изменения capabilities и
-запускает его через `fexecve`. Это работает, пока `AXE_SHELL` указывает на
-исходный filesystem path.
+Separately, `capsh --` opens the path from `AXE_SHELL` before changing capabilities and executes it through `fexecve`. This works while `AXE_SHELL` points to the original filesystem path.

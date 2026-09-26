@@ -1420,6 +1420,24 @@ impl S3Sink {
         }
     }
 
+    pub(crate) fn verify_file_immutable(
+        &self,
+        key: &str,
+        path: &Path,
+        digest: Digest,
+    ) -> Result<(), String> {
+        let size = fs::metadata(path)
+            .map_err(|error| format!("inspect {}: {error}", path.display()))?
+            .len();
+        match self.remote_digest_matches(key, size, digest)? {
+            Some(true) => Ok(()),
+            Some(false) => Err(format!(
+                "immutable Axe release {key} already exists with different bytes"
+            )),
+            None => Err(format!("immutable Axe release {key} does not exist")),
+        }
+    }
+
     #[cfg(test)]
     fn create_bucket(&self) -> Result<(), String> {
         let action = self.bucket.create_bucket(&self.credentials);

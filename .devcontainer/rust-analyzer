@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-root=$(cd "$(dirname "$0")/.." && pwd)
-cd "$root"
-exec nix develop .#default --command rust-analyzer "$@"

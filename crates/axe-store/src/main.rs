@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use build_pipeline::{BuildOptions, build};
 use publish::{Backend, DiagnoseUploadOptions, PublishOptions, diagnose_upload, publish};
-use release::{ReleaseOptions, release};
+use release::{ReleaseOptions, ReleasePhase, release};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -110,6 +110,10 @@ struct ReleaseArgs {
     backend: BackendArg,
     #[arg(long)]
     directory: Option<PathBuf>,
+    #[arg(long, conflicts_with = "stable_only")]
+    immutable_only: bool,
+    #[arg(long)]
+    stable_only: bool,
 }
 
 #[derive(Clone, Debug, clap::Args)]
@@ -211,6 +215,13 @@ fn run(cli: Cli) -> Result<(), String> {
                 backend: args.backend.into(),
                 directory: args.directory.as_deref(),
                 config: &cli.config,
+                phase: if args.immutable_only {
+                    ReleasePhase::ImmutableOnly
+                } else if args.stable_only {
+                    ReleasePhase::StableOnly
+                } else {
+                    ReleasePhase::All
+                },
             })?;
             println!("published {published} Axe release artifacts");
         }

@@ -7,9 +7,7 @@ bin := "axe"
 out := env_var_or_default("AXE_RELEASE_DIR", source_root + "/dist")
 store_output := env_var_or_default("AXE_STORE_OUTPUT_DIR", edition_root + "/store")
 store_flake := env_var_or_default("AXE_STORE_FLAKE", source_root)
-release_metadata := env_var_or_default("AXE_RELEASE_METADATA", edition_root + "/nix/axe-releases.json")
 web_inventory := env_var_or_default("AXE_WEB_INVENTORY", edition_root + "/web/data/registry.json")
-release_targets := env_var_or_default("AXE_RELEASE_TARGETS", "x86_64-linux aarch64-linux aarch64-darwin")
 store_image := "axe-store"
 store_volume := env_var_or_default("AXE_STORE_VOLUME", "axe-store-nix")
 apple_sdk_url := env_var_or_default("AXE_APPLE_SDK_URL", "https://storage.yandexcloud.net/axe-store/toolchain/MacOSX26.2.sdk.tar.gz")
@@ -122,35 +120,20 @@ build-relay-darwin-arm64: apple-sdk
 build-relay-all: build-relay-linux-amd64 build-relay-linux-arm64 build-relay-darwin-arm64
 
 
-[positional-arguments]
-_build-axe-release *targets: _require-bootstrap-index
-    targets=("$@"); if ((${#targets[@]} == 0)); then read -r -a targets <<< "{{release_targets}}"; fi; for target in "${targets[@]}"; do case "$target" in x86_64-linux) recipe=build-linux-amd64 ;; aarch64-linux) recipe=build-linux-arm64 ;; aarch64-darwin) recipe=build-darwin-arm64 ;; *) echo "unsupported Axe release target: $target" >&2; exit 2 ;; esac; just "$recipe"; done
 
+# Local release preparation never publishes or creates a tag. Review and commit its output.
 [positional-arguments]
-_publish-axe-release *targets:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    targets=("$@")
-    if ((${#targets[@]} == 0)); then read -r -a targets <<< "{{release_targets}}"; fi
-    args=()
-    for target in "${targets[@]}"; do args+=(--target "$target"); done
-    metadata="{{release_metadata}}"
-    metadata_dir=$(dirname "$metadata")
-    mkdir -p "$metadata_dir"
-    staged_dir=$(mktemp -d "$metadata_dir/.axe-release-metadata.XXXXXX")
-    trap 'rm -rf "$staged_dir"' EXIT
-    staged_metadata="$staged_dir/$(basename "$metadata")"
-    if [[ -f "$metadata" ]]; then cp "$metadata" "$staged_metadata"; fi
-    ${CONTAINER_RUNTIME:-podman} run --rm --init -v "{{edition_root}}/config:/workspace/config:ro" -v "{{out}}:/workspace/dist:ro" -v "{{edition_root}}/keys/store:/workspace/keys/store:ro" -v "$staged_dir:/workspace/release-metadata" {{store_image}} release --input /workspace/dist --metadata "/workspace/release-metadata/$(basename "$metadata")" "${args[@]}"
-    mv -f "$staged_metadata" "$metadata"
+release-prepare bump:
+    python3 tools/release.py prepare "$1"
 
-_require-bootstrap-index:
-    test -s "{{edition_root}}/store/bootstrap-index.cbor.zst" || { echo "missing signed Store bootstrap Index: {{edition_root}}/store/bootstrap-index.cbor.zst (run just store-sync)" >&2; exit 1; }
+# Run only from the trusted publisher machine, after pushing the reviewed commit.
+release-publish:
+    python3 tools/release.py publish --edition-root "{{edition_root}}" --output "{{out}}"
 
+# Exercise both publisher phases without touching GitHub, S3, or tags.
 [positional-arguments]
-axe-release *targets: _require-bootstrap-index
-    just _build-axe-release "$@"
-    just _publish-axe-release "$@"
+release-check directory:
+    python3 tools/release.py publish --edition-root "{{edition_root}}" --output "{{out}}" --local-directory "$1"
 
 store-image:
     TMPDIR=/tmp ${CONTAINER_RUNTIME:-podman} build -f store/Containerfile -t {{store_image}} .
@@ -234,9 +217,6 @@ _sync-store-snapshot: store-bootstrap store-image _store-volume
     snapshot="{{edition_root}}/store/bootstrap-index.cbor.zst"; staged="{{store_output}}/dist/index.cbor.zst"; test -s "$staged" || { echo "Store sync did not produce signed Index: $staged" >&2; exit 1; }; mkdir -p "$(dirname "$snapshot")"; tmp=$(mktemp "$snapshot.XXXXXX"); trap 'rm -f "$tmp"' EXIT; cp "$staged" "$tmp"; mv -f "$tmp" "$snapshot"; trap - EXIT
 
 store-sync: _sync-store-snapshot
-    just _build-axe-release
-    just _web-inventory {{out}}/axe-x86_64-unknown-linux-musl
-    just _publish-axe-release
 
 store-sync-remote:
     AXE_STORE_REMOTE=1 just store-sync

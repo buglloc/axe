@@ -1,6 +1,6 @@
 # Bootstrapping AXE
 
-This guide is for operators who build AXE with their own identities, publish an AXE Store, or configure remote builders. For a local build without production identities, start with [Building from source](README.md#building-from-source). No published OSS release is assumed: the release metadata is initially empty, so build from this checkout until the first edition-specific publication.
+This guide covers building AXE with your own identities, publishing an AXE Store, and configuring remote builders. For a local build without production identities, start with [Building from source](README.md#building-from-source). Release metadata is initially empty, so build from this checkout until the first edition-specific publication.
 
 ## Choose your path
 
@@ -16,7 +16,7 @@ This guide is for operators who build AXE with their own identities, publish an 
 
 ## Files that stay local
 
-`keys/` and `nix/builders.conf` are Git-ignored. Publisher, AXE runtime, SSH CA, relay, and builder identities serve different purposes; do not reuse them. The “Embedded in AXE” column describes production builds when the corresponding endpoint is configured, not permission to publish these files.
+`keys/` and `nix/builders.conf` are Git-ignored. Use separate publisher, AXE runtime, SSH CA, relay, and builder identities. The “Embedded in AXE” column applies to production builds with the corresponding endpoint configured; it does not mean these files should be published.
 
 | Path | Purpose | Embedded in `axe`? |
 | --- | --- | --- |
@@ -35,11 +35,11 @@ This guide is for operators who build AXE with their own identities, publish an 
 | `keys/nix/id_ed25519` | Private identity for AXE Store remote builders | No |
 | `keys/nix/known_hosts` | Pinned SSH host keys for builders | No |
 
-Keep the production user CA private key outside the checkout and build artifacts. Only the publisher needs the private Store signing key: AXE embeds public trust material and, after a Store sync, a signed bootstrap Index. AXE does **not** embed the signing key or S3 credentials. The SSH host key and configured relay client credentials **are** embedded; protect release binaries accordingly.
+Keep the production user CA private key outside the checkout and build artifacts. Only the publisher needs the private Store signing key. AXE embeds public trust material and, after a Store sync, a signed bootstrap Index; it does not embed the signing key or S3 credentials. The SSH host key and configured relay client credentials are embedded, so protect release binaries accordingly.
 
 ## Edition root
 
-This checkout contains the OSS edition and its `edition.json` (`id: oss`). The build reads `config/store.json`, `config/sshd.json`, `config/relay.json`, `keys/`, `store/bootstrap.json`, the signed `store/bootstrap-index.cbor.zst` when present, `nix/axe-releases.json`, and optionally `store/nix/assets/trusted_ca.pem` from **one** edition root. Sources, `config/aliases.json`, and the shared package API remain in the public workspace.
+This checkout contains the OSS edition and its `edition.json` (`id: oss`). The build reads `config/store.json`, `config/sshd.json`, `config/relay.json`, `keys/`, `store/bootstrap.json`, and, when present, the signed `store/bootstrap-index.cbor.zst` from one edition root. Release metadata (`nix/axe-releases.json`) belongs to the publishing/Nix package layer, not the executable build. Sources, `config/aliases.json`, and the shared package API remain in the public workspace.
 
 For an external distribution, replace the illustrative absolute path below with its actual edition root before running the commands:
 
@@ -48,24 +48,23 @@ export AXE_EDITION_ROOT=/path/to/your-edition
 export AXE_STORE_FLAKE="$AXE_EDITION_ROOT"
 export AXE_RELEASE_DIR="$AXE_EDITION_ROOT/dist"
 export AXE_STORE_OUTPUT_DIR="$AXE_EDITION_ROOT/store"
-export AXE_RELEASE_METADATA="$AXE_EDITION_ROOT/nix/axe-releases.json"
 export AXE_WEB_INVENTORY="$AXE_EDITION_ROOT/web/data/registry.json"
 ```
 
-Missing required files are **not** borrowed from the public checkout: an incomplete edition bundle fails with the missing path. `axe --version` and `doctor --json` identify the selected edition. The root flake exports `lib.axeStore.mkPackageSet`; an external flake can supply `additionalCaBundle` and `extraCategories` while sharing the build, signing, metadata, and publication code. The public package set does not inherit that external CA or private package definitions.
+Missing required files are not borrowed from the public checkout: an incomplete edition bundle fails with the missing path. `axe --version` and `doctor --json` identify the selected edition. The root flake exports `lib.axeStore.mkPackageSet`; an external flake can supply `additionalCaBundle` and `extraCategories` while sharing build and Store code. This checkout's GitHub release workflow is OSS-only.
 
 Unless noted otherwise, the commands below assume the OSS checkout is the edition root. When using an external edition, inspect and adjust the paths, config, target bucket, and expected edition ID before publishing.
 
 ## Development shell and local keys
 
-Enter the development shell and create any missing **local development** identities:
+Enter the development shell and create any missing local development identities:
 
 ```bash
 nix develop .#default
 just generate-dev-keys
 ```
 
-`generate-dev-keys` keeps existing complete key pairs; it does not rotate them. If a Store signing/trusted pair or relay identity is incomplete, it fails rather than silently replacing half a pair. Never distribute generated development private keys or treat them as production trust material. In production, supply independently provisioned identities and verify the trust set before building.
+`generate-dev-keys` preserves complete key pairs; it does not rotate them. If a Store signing/trusted pair or relay identity is incomplete, it fails rather than replacing half a pair. Never distribute generated development private keys or use them as production trust material. For production, provision identities independently and verify the trust set before building.
 
 AXE Store recipes run a container via Podman by default. To use Docker explicitly:
 
@@ -73,7 +72,7 @@ AXE Store recipes run a container via Podman by default. To use Docker explicitl
 CONTAINER_RUNTIME=docker just store-build
 ```
 
-Install Podman or Docker on the host; the development shell does not provide the container runtime. The Dev Container sets `CONTAINER_RUNTIME=docker`.
+Install Podman or Docker on the host; the development shell does not provide the container runtime.
 
 ## Production configuration
 
@@ -91,7 +90,7 @@ The allowlist comes from `config/sshd.json`:
 
 At login, the username must be on this list and must match a principal in the OpenSSH user certificate. Ordinary public-key authentication and certificates with critical options are rejected.
 
-Create a production host identity once and keep it safe; the following commands create a **new** key, not a rotation of an existing one:
+Create a production host identity once and keep it safe. These commands create a new key; they do not rotate an existing one:
 
 ```bash
 mkdir -p keys/ssh
@@ -100,7 +99,7 @@ rm -f keys/ssh/host_ed25519.pub
 chmod 0600 keys/ssh/host_ed25519
 ```
 
-A separate `.pub` file is unnecessary: the OpenSSH private-key file contains the public component. Extract it without writing another file:
+The OpenSSH private-key file already contains the public component, so a separate `.pub` file is unnecessary. Extract it without writing another file:
 
 ```bash
 ssh-keygen -y -f keys/ssh/host_ed25519
@@ -119,7 +118,7 @@ At runtime, `--principals alice,bob` or `AXE_SSHD_PRINCIPALS=alice,bob` can repl
 
 ### AXE Store in SSH sessions
 
-`AXE_STORE_MODE=auto|cache-only|off` sets an upper bound on Store access. `sshd --store-mode MODE` can only make it stricter for child shell/exec sessions. In `cache-only`, HTTP fetches are disallowed but verified cached packages remain available. In `off`, Store commands are not registered, the derived `.axe-store` is not created, and Store names do not enter the PATH bridge. A CLI flag cannot loosen the environment limit.
+`AXE_STORE_MODE=auto|cache-only|off` sets an upper bound on Store access. `sshd --store-mode MODE` can only tighten that bound for child shell/exec sessions. In `cache-only`, HTTP fetches are disallowed but verified cached packages remain available. In `off`, Store commands are not registered, the derived `.axe-store` is not created, and Store names do not enter the PATH bridge. A CLI flag cannot loosen the environment limit.
 
 To disable the Store entirely:
 
@@ -127,7 +126,7 @@ To disable the Store entirely:
 AXE_STORE_MODE=off axe sshd --daemon
 ```
 
-For temporary network loss, leave it in `auto`: a transient failure triggers a short persistent retry backoff before AXE tries the Store again. Do not change a deployment to `off` because of a single failed network probe.
+For temporary network loss, leave the mode at `auto`: a transient failure triggers a short persistent retry backoff before AXE tries the Store again. Do not switch a deployment to `off` because of one failed network probe.
 
 ### Relay endpoints and identities
 
@@ -140,7 +139,7 @@ QUIC uses two independent Ed25519 identities:
 | `keys/relay/quic_client_cert.pem` | Public certificate identifying `sshd` to the relay | Embedded in `axe` if configured; runtime file for `axe-relay` |
 | `keys/relay/quic_client_key.pem` | Private `sshd` identity | Embedded in `axe` |
 
-`relay-id` identifies a registration in its address and logs; mTLS provides authentication. The checked-in `config/relay.json` disables the relay by default and sets both endpoints to `null`. The following is an **opt-in deployment example** using example DNS names, not the checkout's default configuration.
+`relay-id` identifies a registration in its address and logs; mTLS authenticates it. The checked-in `config/relay.json` disables the relay by default and sets both endpoints to `null`. The example below opts in with illustrative DNS names; it is not the checkout's default configuration.
 
 #### 1. Configure endpoints and generate identities
 
@@ -154,7 +153,7 @@ For a deployment that uses TCP by default and permits QUIC, set `config/relay.js
 }
 ```
 
-An enabled default requires a TCP endpoint and an adequate TCP token even when a particular session uses QUIC. In the development shell, generate deployment-specific credentials (on a controlled machine, not by recycling development keys):
+An enabled default requires a TCP endpoint and an adequate TCP token even when a session uses QUIC. In the development shell, generate deployment-specific credentials on a controlled machine. Do not reuse development keys:
 
 ```bash
 mkdir -p keys/relay
@@ -165,7 +164,9 @@ cargo run --quiet -p axe-store -- keys relay-identities \
   --output keys/relay
 ```
 
-The generator makes a server certificate with `serverAuth` and a client certificate with `clientAuth`. The relay server private key is not read by `crates/axe/build.rs` and is not embedded. The standalone `axe-relay` server reads its private key and both certificates from runtime files; keep its copy of the client certificate in sync with the certificates issued to `sshd`. If `enabled_by_default` is `false` and endpoints are `null`, relay credentials are not embedded and a normal `sshd` launch does not require them. An explicit `--relay` still requires transport credentials before binding: TCP reads `AXE_RELAY_TOKEN`; QUIC uses `AXE_RELAY_QUIC_SERVER_CERT_FILE`, `AXE_RELAY_QUIC_CLIENT_CERT_FILE`, and `AXE_RELAY_QUIC_CLIENT_KEY_FILE` if credentials were not embedded. `--no-relay` disables relay and conflicts with `--relay`.
+The generator creates a server certificate with `serverAuth` and a client certificate with `clientAuth`. The relay server private key is not read by `crates/axe/build.rs` or embedded. The standalone `axe-relay` server reads its private key and both certificates from runtime files. Keep its client certificate in sync with the certificates issued to `sshd`.
+
+If `enabled_by_default` is `false` and both endpoints are `null`, relay credentials are not embedded and a normal `sshd` launch does not require them. An explicit `--relay` still requires transport credentials before binding: TCP reads `AXE_RELAY_TOKEN`; QUIC uses `AXE_RELAY_QUIC_SERVER_CERT_FILE`, `AXE_RELAY_QUIC_CLIENT_CERT_FILE`, and `AXE_RELAY_QUIC_CLIENT_KEY_FILE` if credentials were not embedded. `--no-relay` disables relay and conflicts with `--relay`.
 
 #### 2. Build and place the artifacts
 
@@ -174,7 +175,7 @@ just build-linux-amd64
 just build-relay-linux-amd64
 ```
 
-Install verified `axe` on target hosts and a separate verified `axe-relay` binary on the relay host. Place `quic_server_key.pem`, `quic_server_cert.pem`, and `quic_client_cert.pem` on the relay host with restricted permissions; the target needs no additional QUIC files when configured QUIC credentials are embedded. The following installation is performed by the operator on the intended relay host:
+Install verified `axe` on target hosts and a separate verified `axe-relay` binary on the relay host. Place `quic_server_key.pem`, `quic_server_cert.pem`, and `quic_client_cert.pem` on the relay host with restricted permissions. Targets need no additional QUIC files when configured QUIC credentials are embedded. The operator runs the following installation on the intended relay host:
 
 ```bash
 sudo install -D -m 0755 dist/axe-relay-x86_64-unknown-linux-musl /usr/local/bin/axe-relay
@@ -193,7 +194,7 @@ Provide the TCP token in a root-only environment file. The following command mus
 sudo chmod 0600 /etc/axe/relay.env
 ```
 
-Save this example unit as `/etc/systemd/system/axe-relay.service`. `--public-bind` is the local listener interface, whereas `--public-host` is the **externally reachable** DNS name or IP advertised to SSH clients; behind NAT forward the allocated TCP range to the bind address. Adjust endpoints, firewall and DNS for the real deployment:
+Save this example unit as `/etc/systemd/system/axe-relay.service`. `--public-bind` selects the local listener interface; `--public-host` names the externally reachable DNS name or IP advertised to SSH clients. Behind NAT, forward the allocated TCP range to the bind address. Adjust endpoints, firewall, and DNS for the deployment:
 
 ```systemd
 [Unit]
@@ -227,7 +228,7 @@ Allow the following ports in the deployment's firewall:
 - UDP `11000` for QUIC control;
 - TCP `3000-4000` for assigned public ports.
 
-`axe-relay` serves its read-only dashboard at `http://127.0.0.1:7000/` and `GET /api/v1/status` on loopback only. For remote operators and agents, put an **authenticated HTTPS reverse proxy** in front of this local listener; do not expose it directly or forward it without access control. The proxy owns TLS and authentication. Locally, inspect with `axe-relay status`, `axe-relay clients --json`, or a browser. From an agent workstation use `axe-relay --api https://ops.example.net status --json`; when the proxy accepts a bearer token, set `AXE_RELAY_API_TOKEN` in the CLI environment. The proxy hostname may differ from the public SSH address advertised by `--public-host`.
+`axe-relay` serves its read-only dashboard at `http://127.0.0.1:7000/` and `GET /api/v1/status` on loopback only. For remote operators and agents, use an authenticated HTTPS reverse proxy; do not expose or forward the local listener without access control. The proxy handles TLS and authentication. Locally, inspect with `axe-relay status`, `axe-relay clients --json`, or a browser. From an agent workstation, use `axe-relay --api https://ops.example.net status --json`; if the proxy accepts a bearer token, set `AXE_RELAY_API_TOKEN` in the CLI environment. The proxy hostname can differ from the public SSH address advertised by `--public-host`.
 
 The operator then activates and inspects the unit on that host:
 
@@ -239,7 +240,7 @@ sudo journalctl -fu axe-relay.service
 
 #### 4. Connect a target
 
-The **operator** installs the verified `axe` artifact on a compatible target behind NAT, prepares a working directory, and starts `sshd` using QUIC transport. SSH sessions inherit the OS privileges of the `sshd` process; select its service account accordingly. The target connects **outbound** to the relay; it does not need an inbound SSH firewall rule. If the target's edition has a configured default relay endpoint, omit `--relay` and `--relay-transport` (unless changing transport). OSS has no endpoint by default, so this example selects one explicitly. There is no published release URL in this checkout; verify artifact provenance and SHA-256 before delivering it to a target.
+The operator installs a verified `axe` artifact on a compatible target behind NAT, prepares a working directory, and starts `sshd` using QUIC transport. SSH sessions inherit the OS privileges of the `sshd` process, so choose its service account accordingly. The target connects outbound to the relay and needs no inbound SSH firewall rule. If the target's edition has a configured default relay endpoint, omit `--relay` and `--relay-transport` unless changing transport. OSS has no default endpoint, so this example selects one explicitly. Verify artifact provenance and SHA-256 against the [README download table](README.md#downloads) before delivery.
 
 ```bash
 sudo install -D -m 0755 dist/axe-x86_64-unknown-linux-musl /usr/local/bin/axe
@@ -252,7 +253,7 @@ sudo /usr/local/bin/axe --applet sshd -- \
   --relay-id host-01 --daemon
 ```
 
-An explicit `--relay-id` remains stable across `sshd` restarts; the operator must choose a value unique among clients of the same relay for `wait --client-id` to identify one target. If omitted, the ID is `<pidns>@<user>@<hostname>` where `<pidns>` is the PID-namespace inode: all processes of one container report the same value, which survives `sshd` restarts, but namespace inodes can coincide across hosts, and hosts without visible procfs share the `-1` fallback. Discover the actual ID with unfiltered `watch --json`; do not assume it was derived from a previous process.
+Set `--relay-id` to a value unique among clients of the same relay so that `wait --client-id` identifies one target; an explicit ID stays stable across `sshd` restarts. Without it, the ID is `<pidns>@<user>@<hostname>`, where `<pidns>` is the PID-namespace inode. Processes in one container report the same value across `sshd` restarts, but namespace inodes can coincide across hosts, and hosts without visible procfs share the `-1` fallback. Discover the actual ID with unfiltered `watch --json`; do not assume it was derived from a previous process.
 
 While target `sshd` runs, wait from the agent workstation through the authenticated HTTPS API. The command returns the **assigned, externally reachable** `public_address`; do not guess the port:
 
@@ -260,9 +261,9 @@ While target `sshd` runs, wait from the agent workstation through the authentica
 axe-relay --api https://ops.example.net wait --client-id host-01 --transport quic --timeout 60 --json
 ```
 
-To observe all clients instead, run `axe-relay --api https://ops.example.net watch --json` before starting the target; `--client-id host-01` filters the feed. Each JSON line is `present` (already active), `connected`, or `disconnected` with the client's assigned address. To wait specifically for a **new** registration, ignore `present` and use the next `connected` record. If the bounded event history is lost or the relay restarts, `watch` exits with an error rather than silently skipping events; restart it and inspect `clients`.
+To observe all clients, run `axe-relay --api https://ops.example.net watch --json` before starting the target; `--client-id host-01` filters the feed. Each JSON line reports `present` (already active), `connected`, or `disconnected` with the client's assigned address. To wait for a new registration, ignore `present` and use the next `connected` record. If the bounded event history is lost or the relay restarts, `watch` exits with an error rather than silently skipping events; restart it and inspect `clients`.
 
-Connect to the returned host and port with an OpenSSH client that has an authorized user certificate; a registration alone does not prove forwarding, and an SSH banner alone does not prove login. For repeatable **local-only** verification of launch, wait, and SSH banner over both transports, run `just relay-live-smoke` in the development shell. Remote installation and activation are operator actions, not agent actions.
+Connect to the returned host and port with an OpenSSH client that has an authorized user certificate. A registration does not prove forwarding, and an SSH banner does not prove login. For repeatable local-only verification of launch, wait, and SSH banner over both transports, run `just relay-live-smoke` in the development shell. The operator handles remote installation and activation.
 
 #### 5. Rotate identities
 
@@ -274,7 +275,7 @@ Coordinate each cutover: each peer trusts one pinned certificate. Registration a
 
 ## AXE Store from scratch
 
-AXE Store publishes on-demand packages. Consumers read objects without S3 credentials but accept packages only after checking the signed Index and manifest, payload size, and complete SHA-256 digest. The default OSS `config/store.json` currently uses the `axe-store` bucket, the `store` package prefix, and the `axe` release prefix; these **settings are not proof** that a bucket, publisher credentials, or releases already exist. Confirm ownership of the bucket and your intended publishing destination first.
+AXE Store publishes on-demand packages. Consumers read objects without S3 credentials, but accept packages only after checking the signed Index and manifest, payload size, and complete SHA-256 digest. The default OSS `config/store.json` names the `axe-store` bucket, `store` package prefix, and `axe` release prefix. Those settings do not establish that the bucket, publisher credentials, or releases exist. Confirm bucket ownership and the intended publishing destination first.
 
 ### 1. Create a bucket
 
@@ -284,7 +285,7 @@ The following uses [Yandex Object Storage](https://yandex.cloud/en/docs/storage/
 yc init
 ```
 
-Create a dedicated bucket **only if one has not already been provisioned**. Replace the illustrative name with your approved bucket, set that exact name in `config/store.json`, and check current provider flags and permissions before execution:
+Create a dedicated bucket only if one has not already been provisioned. Replace the illustrative name with your approved bucket, set that exact name in `config/store.json`, and check current provider flags and permissions before running:
 
 ```bash
 yc storage bucket create \
@@ -293,11 +294,11 @@ yc storage bucket create \
   --public-read
 ```
 
-The consumer needs anonymous **object reads**, not bucket listing or public bucket configuration. Do not make bucket listing or configuration public. Verify the policy with an unauthenticated object request after publishing; a bucket-create flag alone does not establish that the intended Index and release objects can be fetched.
+Consumers need anonymous object reads, not bucket listing or public bucket configuration. Keep listing and configuration private. After publishing, verify the policy with an unauthenticated object request; the bucket-create flag alone does not prove that clients can fetch the intended Index and release objects.
 
 ### 2. Provision publisher credentials
 
-Use a separate service account for the publisher, not the identity used to administer bucket creation. The following creates an account only; it does **not** grant object permissions:
+Use a publisher service account separate from the identity that administers bucket creation. This command creates the account but does not grant object permissions:
 
 ```bash
 yc iam service-account create \
@@ -306,7 +307,7 @@ yc iam service-account create \
 yc iam service-account list
 ```
 
-Using current provider guidance, grant that account the **minimum bucket-scoped object permissions** needed to read existing objects and upload/update published objects, including the conditional Index update. Confirm that the provider's role, bucket binding scope, and conditional-write behavior actually work in your environment; do not assume a role name or an access key creation automatically provides these permissions. Keep bucket administration in a separate identity.
+Following current provider guidance, grant the account only the bucket-scoped object permissions needed to read existing objects and upload or update published objects, including the conditional Index update. Verify the role, bucket binding scope, and conditional-write behavior in your environment. Neither a role name nor access key creation guarantees those permissions. Keep bucket administration under a separate identity.
 
 After the authorization has been verified, create a static access key for this service account:
 
@@ -316,18 +317,18 @@ yc iam access-key create \
   --description "axe-store publisher"
 ```
 
-Write the resulting access key ID and secret, without trailing whitespace, to these **edition-local** files:
+Write the resulting access key ID and secret, without trailing whitespace, to these edition-local files:
 
 ```text
 keys/store/s3_access_key_id
 keys/store/s3_secret_access_key
 ```
 
-Keep both on the publisher machine only, restrict their permissions, and never put them in the release binary. The documented `just` publication recipes mount `keys/store` into the container; they do **not** forward arbitrary host AWS credential environment variables. File-based credentials are therefore the reliable path for these recipes. The publisher reads the private signing key from this same edition-local directory; a successful key-generation command is not a test of bucket authorization.
+Keep both credentials on the publisher machine, restrict their permissions, and never include them in the release binary. The documented `just` publication recipes mount `keys/store` into the container; they do not forward arbitrary host AWS credential environment variables. Use file-based credentials for these recipes. The publisher reads its private signing key from the same edition-local directory. Generating a key does not verify bucket authorization.
 
 ### 3. Set the endpoint and consumer addresses
 
-The OSS checkout already contains these values under `storage` in `config/store.json`; change them **only** if your actual endpoint, bucket, or prefixes differ:
+The OSS checkout already has these values under `storage` in `config/store.json`. Change them only if your endpoint, bucket, or prefixes differ:
 
 ```json
 {
@@ -341,7 +342,7 @@ The OSS checkout already contains these values under `storage` in `config/store.
 }
 ```
 
-This is a fragment, not a replacement for the file: keep `consumer` settings intact. Consumer URLs are `<endpoint>/<bucket>/<prefix>/...`; AXE connects only to addresses permitted by `consumer.addresses`. If the endpoint or CDN changes, update both its URL and the approved A/AAAA addresses before rebuilding AXE. To inspect currently returned DNS addresses (then independently verify which should be pinned):
+This fragment does not replace the file; keep `consumer` settings intact. Consumer URLs are `<endpoint>/<bucket>/<prefix>/...`, and AXE connects only to addresses permitted by `consumer.addresses`. If the endpoint or CDN changes, update its URL and the approved A/AAAA addresses before rebuilding AXE. Inspect the current DNS responses, then independently verify which addresses to pin:
 
 ```bash
 dig +short A storage.yandexcloud.net
@@ -381,7 +382,7 @@ just check-store-bootstrap
 nix flake check --no-build .
 ```
 
-Do not hand-edit `store/bootstrap.json`. Regenerate it after package changes. It is **not** the signed Index: `store/bootstrap-index.cbor.zst` is a separate signed snapshot copied from the Store sync output. A release build validates that snapshot against the embedded trust keys and bootstrap inventory. Package helper selection is documented in [Adding a package to AXE Store](README.md#adding-a-package-to-axe-store).
+Do not hand-edit `store/bootstrap.json`; regenerate it after package changes. It is not the signed Index. `store/bootstrap-index.cbor.zst` is a separate signed snapshot copied from the Store sync output. A release build validates the snapshot against the embedded trust keys and bootstrap inventory. See [Adding a package to AXE Store](README.md#adding-a-package-to-axe-store) for package helper selection.
 
 ### 6. Build and check locally
 
@@ -391,76 +392,34 @@ Build the staged AXE Store tree in its persistent container volume:
 just store-build
 ```
 
-The staged tree appears under `store/dist/` for the default edition/output settings. Its staged Index is signed, but **`store-build` alone does not publish the Index or install the signed bootstrap snapshot for AXE releases**. Before first publication, exercise both smoke paths:
+With default edition and output settings, the staged tree appears under `store/dist/`. Its staged Index is signed, but `store-build` alone neither publishes the Index nor installs the signed bootstrap snapshot for AXE releases. Before the first publication, exercise both smoke paths:
 
 ```bash
 just store-smoke
 just store-nix-smoke
 ```
 
-`store-smoke` checks signing, deterministic rebuilds, directory publication, cache behavior, and consumer failure policy. `store-nix-smoke` builds real Nix outputs and checks that static Linux artifacts contain no `/nix/store` references. Run development smoke checks with isolated development identities; build and publish the production snapshot with the intended edition's signing identity.
+`store-smoke` checks signing, deterministic rebuilds, directory publication, cache behavior, and consumer failure policy. `store-nix-smoke` builds real Nix outputs and checks that static Linux artifacts contain no `/nix/store` references. Run development smoke checks with isolated development identities. Build and publish the production snapshot with the intended edition's signing identity.
 
-### 7. Publish Store first, then AXE releases
+### 7. Publish the Store snapshot separately
 
-Publication recipes use the edition selected by `AXE_EDITION_ROOT` and the bucket in that edition's `config/store.json`. Before publishing, verify `edition.json`, `config/store.json`, bucket ownership, and the intended destination. No separate `AXE_STORE_EXPECT_*` authorization is required.
-
-The complete pipeline is:
+Store publication uses the edition selected by `AXE_EDITION_ROOT` and its `config/store.json`. Check `edition.json`, bucket ownership, the signing identity, and the intended destination first. From the trusted local publisher, run:
 
 ```bash
 just store-sync
 ```
 
-It runs in this order:
+`store-sync` regenerates `store/bootstrap.json`, builds and publishes signed Store objects and the Index, then copies the signed staged Index to the ignored edition-local `store/bootstrap-index.cbor.zst`. It does not build or publish AXE binaries. Keep the snapshot and corresponding trust keys on the publisher for each release build. The public Index can have different bytes because of its publication generation; the release build checks the snapshot signature and inventory.
 
-1. Regenerate `store/bootstrap.json` for the selected edition.
-2. Build and publish AXE Store objects, manifests, and the signed Index under the configured `store` prefix (or that edition's configured prefix).
-3. Copy the signed **staged** `store/dist/index.cbor.zst` produced by that sync into the edition root as `store/bootstrap-index.cbor.zst`. The publisher signs the public Index with its publication generation, so subsequent public and embedded snapshots need not have identical bytes.
-4. Build AXE for `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`; build-time verification checks the signed bootstrap Index against the embedded Store trust set and inventory. A missing bootstrap Index in a standalone development build results in no embedded Index, **not** a ready-to-publish signed bootstrap; release recipes require the file to exist.
-5. Generate `web/data/registry.json` from the built `x86_64-linux` release binary.
-6. Publish AXE binaries to immutable release paths, update stable AXE objects, and atomically write `nix/axe-releases.json` for the published targets.
+`just store-build && just store-publish` publishes Store metadata without installing a bootstrap snapshot; do not substitute an old staged Index. `just store-diagnose-upload` tests temporary S3 uploads without publishing an Index. Even with `AXE_STORE_ALLOW_TARGET_REMOVAL=1 just store-sync`, review affected Store consumers explicitly.
 
-The initial `nix/axe-releases.json` contains `{}`; Nix release packages appear only after this edition-specific release publication. Darwin release builds additionally require the configured Apple SDK input; see the build recipes and [Building from source](README.md#building-from-source). Do not infer from a successful Store build that all configured release targets can build.
-
-To publish **only the Store** from a staged build, without building or publishing AXE binaries:
-
-```bash
-just store-build
-just store-publish
-```
-
-This publishes Store metadata but does **not** install `store/bootstrap-index.cbor.zst`. Run the complete `just store-sync` before the first AXE release; do not substitute an older or unpublished staged Index. `just store-diagnose-upload` can check S3 upload behavior without building or publishing the Index: it uploads temporary payloads without retry, prints latency, throughput, error class, and request ID, and deletes created objects. Its sizes, repetitions, and timeout are configurable via command flags.
-
-Once a current signed bootstrap snapshot exists, release binaries can be built and published separately for selected targets:
-
-```bash
-just axe-release x86_64-linux
-just axe-release aarch64-linux aarch64-darwin
-```
-
-With no arguments, `just axe-release` processes all three targets. It refuses to start without `store/bootstrap-index.cbor.zst` and still requires the edition/bucket publication guard for upload. Keep the Store inventory and snapshot synchronized; build-time verification rejects a mismatch.
-
-After the first complete publication, verify **anonymous HTTP access** to both entry points in the **intended** bucket. The following example matches the checked-in OSS `bucket`, `prefix`, and `release_prefix`; adapt all three for another edition or bucket:
-
-```bash
-curl -fI https://storage.yandexcloud.net/axe-store/store/index.cbor.zst
-curl -fI https://storage.yandexcloud.net/axe-store/axe/stable/x86_64-linux/axe
-```
-
-The first object serves the AXE Store consumer; the second serves direct AXE download. Neither command authenticates to S3 or tests bucket listing. A successful header response checks public readability of those objects, **not** signature validity; AXE verifies the signed Index and artifacts separately. Compare the URL with `config/store.json` and the destination acknowledged by the publication guard; publishing to the wrong bucket cannot be fixed by checking a different one.
-
-Publisher safeguards reject accidental removal of a published package, channel, or target. Only after explicitly reviewing the affected consumers, authorize removal for one run:
-
-```bash
-AXE_STORE_ALLOW_TARGET_REMOVAL=1 just store-sync
-```
-
-This alters the published contract; do not set the flag as a default. Consult the publication output and package metadata before proceeding.
+For AXE binary and GitHub release publication, see [docs/release.md](docs/release.md). Store publication and website deployment remain separate operations.
 
 ## Website publication
 
-The OSS website is built from `web/` and the checked-in `web/data/registry.json`. To refresh the command inventory before committing a website change, run `just web-inventory` in the development shell and review the generated diff. The CI website build does not generate development keys, build AXE, or publish Store releases.
+The OSS website uses `web/` and the checked-in `web/data/registry.json`. Before committing a website change, run `just web-inventory` in the development shell to refresh the command inventory, then review the generated diff. The CI website build does not generate development keys, build AXE, or publish Store releases.
 
-`.github/workflows/deploy-web.yml` runs only on a push to `main`: it builds with Hugo 0.166.0 and synchronizes `web/public/` to `s3://axe.buglloc.com/` with `--delete`. Configure GitHub Actions secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for an identity with object write/delete access **only** to that website bucket. Optional secrets: `AWS_REGION` (default `ru-central1`) and `S3_ENDPOINT_URL` (default `https://storage.yandexcloud.net`). Do not use the AXE Store publisher identity for this website.
+`.github/workflows/deploy-web.yml` runs only on a push to `main`. It builds with Hugo 0.166.0 and synchronizes `web/public/` to `s3://axe.buglloc.com/` with `--delete`. Set GitHub Actions secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for an identity with object write/delete access only to that website bucket. Optional secrets are `AWS_REGION` (default `ru-central1`) and `S3_ENDPOINT_URL` (default `https://storage.yandexcloud.net`). Do not use the AXE Store publisher identity for the website.
 
 Check the build locally, without uploading:
 
@@ -486,7 +445,7 @@ ssh-keygen -q -t ed25519 -N '' \
   -f keys/nix/id_ed25519
 ```
 
-Do not reuse an administrator key or host deployment identity. Register the public half on each builder as a restricted Nix daemon key. These example `authorized_keys` entries are **alternatives**, not two lines to install together:
+Do not reuse an administrator key or host deployment identity. Register the public half on each builder as a restricted Nix daemon key. The example `authorized_keys` entries are alternatives: install only one:
 
 ```text
 command="/run/current-system/sw/bin/nix-daemon --stdio",restrict <builder-public-key> axe-store-nix-builder
@@ -504,7 +463,7 @@ builders = ssh-ng://builder@linux-builder.example.net x86_64-linux - 8 1 kvm,big
 builders-use-substitutes = true
 ```
 
-After the system name, Nix expects `maxJobs`, `speedFactor`, and features. Declare only features the remote daemon really supports. The same feature set must be available on the builder: the Darwin package graph uses LLVM derivations requiring `big-parallel`; declaring it only on the client is insufficient. For a nix-darwin host, for example:
+After the system name, Nix expects `maxJobs`, `speedFactor`, and features. Declare only features the remote daemon supports. The builder must advertise the same features: the Darwin package graph uses LLVM derivations requiring `big-parallel`, so declaring it only on the client is insufficient. For example, on a nix-darwin host:
 
 ```nix
 nix.settings.system-features = ["benchmark" "big-parallel"];
@@ -520,7 +479,7 @@ Generate `known_hosts` from configured hosts:
 just keyscan-nix-builders
 ```
 
-This is trust-on-first-use: network replies are **not** an independent verification of the builder identity. Before the first remote build, compare the fingerprints with each builder through a separate trusted channel:
+This is trust-on-first-use: network replies cannot independently verify builder identity. Before the first remote build, compare fingerprints with each builder through a separate trusted channel:
 
 ```bash
 ssh-keygen -lf keys/nix/known_hosts
@@ -534,7 +493,7 @@ keys/nix/id_ed25519
 keys/nix/known_hosts
 ```
 
-The recipe passes `nix/builders.conf` via `NIX_USER_CONF_FILES`, mounts the private key at `/root/.ssh/id_ed25519`, and mounts the pinned host keys at `/etc/ssh/ssh_known_hosts`. A missing file or incomplete configuration makes the remote recipe fail. For a one-off host-side Nix command, load the same dedicated identity into your SSH agent:
+The recipe passes `nix/builders.conf` via `NIX_USER_CONF_FILES`, mounts the private key at `/root/.ssh/id_ed25519`, and mounts the pinned host keys at `/etc/ssh/ssh_known_hosts`. Remote recipes fail if a file is missing or the configuration is incomplete. For a one-off host-side Nix command, load the same dedicated identity into your SSH agent:
 
 ```bash
 ssh-add keys/nix/id_ed25519
@@ -556,7 +515,7 @@ readelf -lW dist/axe-x86_64-unknown-linux-musl
 readelf -dW dist/axe-x86_64-unknown-linux-musl
 ```
 
-After checking the executable format, exercise bundled commands without host tools or ambient Store state. `AXE_STORE_MODE=off` deliberately tests the local pipeline, not on-demand package access:
+After checking the executable format, exercise bundled commands without host tools or ambient Store state. `AXE_STORE_MODE=off` tests the local pipeline, not on-demand package access:
 
 ```bash
 env -i HOME=/tmp PATH=/nonexistent AXE_STORE_MODE=off \

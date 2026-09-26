@@ -8,6 +8,7 @@ target/
 /store/.axe-store-work*/
 /store/bootstrap.json.*
 /store/bootstrap-index.cbor.zst
+/tools/__pycache__/
 *.tar
 /web/public/
 /.axe-*

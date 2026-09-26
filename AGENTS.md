@@ -1,6 +1,6 @@
 # AGENTS.md
 
-These instructions apply to the repository. Keep operational rules here; put user-facing behavior in `README.md`, build and release procedures in `BOOTSTRAP.md`, and design rationale in `docs/architecture.md`.
+These instructions apply to the repository. Keep operational rules here; put user-facing behavior in `README.md`, build and release procedures in `BOOTSTRAP.md`.
 
 ## Before changing code
 
@@ -24,7 +24,7 @@ These instructions apply to the repository. Keep operational rules here; put use
 - `store/packages/` is the package source of truth. Add packages to an existing category when possible and use its package constructors. Keep package IDs unique, pin upstream sources, and do not ship Linux executables with dynamic or `/nix/store` runtime dependencies.
 - Generate `store/bootstrap.json` with `just store-bootstrap`; do not edit it by hand. The build embeds the signed `store/bootstrap-index.cbor.zst` snapshot and public trust from the selected edition root. The `axe` build must never receive the Store private signing key or S3 credentials.
 - Keep private keys and credentials under ignored edition-local `keys/` paths. `keys/ssh/user_ca_keys` contains only public CA keys. Remote builders are opt-in through `store-build-remote` or `store-sync-remote`; do not load their identities in local builds.
-- Update the command help and README software inventory when the command surface or generated Store metadata changes. Update `BOOTSTRAP.md` or `docs/architecture.md` only when their contracts change.
+- Update the command help and README software inventory when the command surface or generated Store metadata changes. Update `BOOTSTRAP.md` or `docs/release.md` only when their contracts change.
 
 ## Verification
 
