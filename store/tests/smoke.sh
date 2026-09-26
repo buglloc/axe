@@ -178,7 +178,7 @@ PY
 manifest_relative=$(cat "$tmp/manifest-relative")
 
 
-trusted_key=$(cat "$tmp/workspace"/keys/store/trusted/*.pub)
+trusted_key=$(cat "$tmp/workspace"/store/trusted/*.pub)
 fixture_shell=$(command -v sh)
 cat >"$tmp/path/rg" <<EOF
 #!$fixture_shell

@@ -272,7 +272,7 @@ def render_downloads(readme: str, tag: str, records: dict, assets: dict) -> str:
         digest = base64.b64decode(record["hash"].removeprefix("sha256-"), validate=True).hex()
         if record["hash"] != "sha256-" + base64.b64encode(bytes.fromhex(assets[name])).decode() or digest != assets[name]:
             raise ReleaseError(f"metadata hash does not match GitHub asset: {target}")
-        lines.append(f"| AXE {target} | [GitHub]({github}/{name}) · [immutable S3]({record['url']}) | `{digest}` |")
+        lines.append(f"| axe {target} | [GitHub]({github}/{name}) · [S3]({record['url']}) | `{digest}` |")
 
     for target, name in zip(TARGETS, RELAY, strict=True):
         lines.append(f"| axe-relay {target} | [GitHub]({github}/{name}) | `{assets[name]}` |")

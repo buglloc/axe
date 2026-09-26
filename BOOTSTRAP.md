@@ -9,14 +9,14 @@ This guide covers building AXE with your own identities, publishing an AXE Store
 | Run AXE locally | [Building from source](README.md#building-from-source) |
 | Develop Rust code | Development shell and development keys |
 | Add an on-demand AXE Store package | Development shell, development keys, and package checks |
-| Build AXE with your own SSH/AXE Store identity | Edition root, production configuration, and release build |
+| Build your edition using an existing AXE Store | [Use an existing AXE Store](#use-an-existing-axe-store) |
 | Run an SSH relay | Relay endpoints and identities |
 | Publish your own AXE Store and AXE releases | Bucket, publisher, signing key, package build, Store sync, and release publication |
 | Accelerate AXE Store builds | Remote builders (optional) |
 
 ## Files that stay local
 
-`keys/` and `nix/builders.conf` are Git-ignored. Use separate publisher, AXE runtime, SSH CA, relay, and builder identities. The “Embedded in AXE” column applies to production builds with the corresponding endpoint configured; it does not mean these files should be published.
+`keys/` and `nix/builders.conf` are Git-ignored. Store verification keys in `store/trusted/`, the signed bootstrap snapshot, and the Store consumer configuration are public tracked inputs. Use separate publisher, AXE runtime, SSH CA, relay, and builder identities. The “Embedded in AXE” column applies to production builds with the corresponding endpoint configured; it does not mean private files should be published.
 
 | Path | Purpose | Embedded in `axe`? |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ This guide covers building AXE with your own identities, publishing an AXE Store
 | `keys/ssh/user_ca_keys` | Trusted OpenSSH user CA public keys, one per line | Yes |
 | `keys/ssh/dev_user_ca` | Private CA for local development only | No |
 | `keys/store/signing.key` | Private Ed25519 key for signing AXE Store metadata | No |
-| `keys/store/trusted/*.pub` | AXE Store public verification keys | Yes |
+| `store/trusted/*.pub` | AXE Store public verification keys (tracked) | Yes |
 | `keys/store/s3_access_key_id` | Publisher S3 access key ID | No |
 | `keys/store/s3_secret_access_key` | Publisher S3 secret access key | No |
 | `keys/relay/token` | Shared secret for the TCP relay and `sshd` | Only with a configured TCP endpoint |
@@ -39,32 +39,54 @@ Keep the production user CA private key outside the checkout and build artifacts
 
 ## Edition root
 
-This checkout contains the OSS edition and its `edition.json` (`id: oss`). The build reads `config/store.json`, `config/sshd.json`, `config/relay.json`, `keys/`, `store/bootstrap.json`, and, when present, the signed `store/bootstrap-index.cbor.zst` from one edition root. Release metadata (`nix/axe-releases.json`) belongs to the publishing/Nix package layer, not the executable build. Sources, `config/aliases.json`, and the shared package API remain in the public workspace.
+This checkout contains the OSS edition and its `edition.json` (`id: oss`). The build reads `config/store.json`, `config/sshd.json`, `config/relay.json`, `keys/`, `store/trusted/`, `store/bootstrap.json`, and, when present, the signed `store/bootstrap-index.cbor.zst` from one edition root. Release metadata (`nix/axe-releases.json`) belongs to the publishing/Nix package layer, not the executable build. Sources, `config/aliases.json`, and the shared package API remain in the public workspace.
 
-For an external distribution, replace the illustrative absolute path below with its actual edition root before running the commands:
+Set only `AXE_EDITION_ROOT` to select a separate edition for an AXE build:
 
 ```bash
 export AXE_EDITION_ROOT=/path/to/your-edition
-export AXE_STORE_FLAKE="$AXE_EDITION_ROOT"
-export AXE_RELEASE_DIR="$AXE_EDITION_ROOT/dist"
-export AXE_STORE_OUTPUT_DIR="$AXE_EDITION_ROOT/store"
-export AXE_WEB_INVENTORY="$AXE_EDITION_ROOT/web/data/registry.json"
 ```
 
-Missing required files are not borrowed from the public checkout: an incomplete edition bundle fails with the missing path. `axe --version` and `doctor --json` identify the selected edition. The root flake exports `lib.axeStore.mkPackageSet`; an external flake can supply `additionalCaBundle` and `extraCategories` while sharing build and Store code. This checkout's GitHub release workflow is OSS-only.
+The Store publisher and release workflows have additional output, flake, and inventory settings in the sections below. They are not needed to build a consumer of an existing Store. Missing required edition files are not borrowed from the public checkout: an incomplete bundle fails with the missing path. `axe --version` and `doctor --json` identify the selected edition. The root flake exports `lib.axeStore.mkPackageSet`; an external flake can supply `additionalCaBundle` and `extraCategories` while sharing build and Store code. This checkout's GitHub release workflow is OSS-only.
 
 Unless noted otherwise, the commands below assume the OSS checkout is the edition root. When using an external edition, inspect and adjust the paths, config, target bucket, and expected edition ID before publishing.
 
+## Use an existing AXE Store
+
+To build a development edition against the OSS Store immediately after checkout, copy only its tracked consumer inputs. Do not copy `keys/`: that directory contains local identities and publisher credentials.
+
+```bash
+nix develop .#default
+export AXE_EDITION_ROOT="$HOME/my-axe"
+export AXE_RELEASE_DIR="$AXE_EDITION_ROOT/dist"
+umask 077
+mkdir "$AXE_EDITION_ROOT"
+mkdir -p "$AXE_EDITION_ROOT/config" "$AXE_EDITION_ROOT/store"
+cp config/{store,sshd,relay}.json "$AXE_EDITION_ROOT/config/"
+cp store/bootstrap.json store/bootstrap-index.cbor.zst "$AXE_EDITION_ROOT/store/"
+cp -R store/trusted "$AXE_EDITION_ROOT/store/"
+printf '%s\n' '{"schema_version":1,"id":"my-axe"}' > "$AXE_EDITION_ROOT/edition.json"
+just build-linux-amd64
+"$AXE_RELEASE_DIR/axe-x86_64-unknown-linux-musl" --version
+AXE_STORE_MODE=cache-only "$AXE_RELEASE_DIR/axe-x86_64-unknown-linux-musl" commands
+```
+
+The version must say `edition my-axe`; the last command reads the signed built-in inventory without contacting the Store. `just build-linux-amd64` creates missing **development** SSH and relay identities in your edition root. Before distributing this binary, replace them with your own SSH host key and public user CA in `keys/ssh/`, set your principals in `config/sshd.json`, configure relay credentials if needed, and rebuild. Do not ship the automatically generated development identities.
+
+The copied Store URL, pinned IP addresses, trusted keys, bootstrap inventory, and signed snapshot must describe the **same** Store. Public trust keys authenticate Store metadata; the publisher's private signing key and S3 credentials are not needed to build or run this edition. For another Store, get those public inputs from its owner instead of copying the OSS files. If you omit the signed snapshot, AXE can fetch and verify the published Index at runtime with network access, but it has no built-in Store inventory when offline; the release publisher currently requires a snapshot. Neither the build nor the runtime downloads a replacement snapshot file.
+
+For other targets use `just build-linux-arm64` or `just build-darwin-arm64`. You do not need `AXE_STORE_FLAKE`, `AXE_STORE_OUTPUT_DIR`, or `AXE_WEB_INVENTORY` unless you are publishing your own Store or release metadata.
+
 ## Development shell and local keys
 
-Enter the development shell and create any missing local development identities:
+Enter the development shell and create keys when setting up a **new development Store**:
 
 ```bash
 nix develop .#default
 just generate-dev-keys
 ```
 
-`generate-dev-keys` preserves complete key pairs; it does not rotate them. If a Store signing/trusted pair or relay identity is incomplete, it fails rather than replacing half a pair. Never distribute generated development private keys or use them as production trust material. For production, provision identities independently and verify the trust set before building.
+Use `generate-dev-keys` for a new Store with no trusted keys yet, not for the checked-in OSS Store: a fresh checkout has public trust but no matching private signing key, and the recipe correctly refuses to invent one. A consumer edition needs only the public keys and can run `just build` without this recipe. The generator preserves complete key pairs; it does not rotate them. Never distribute generated development private keys or use them as production trust material. For production, provision identities independently and verify the trust set before building.
 
 AXE Store recipes run a container via Podman by default. To use Docker explicitly:
 
@@ -351,7 +373,7 @@ dig +short AAAA storage.yandexcloud.net
 
 ### 4. Generate the AXE Store signing identity
 
-In a controlled publisher environment, generate the private signing key and first public trust key:
+For a **new Store** whose `store/trusted/` is empty, generate its private signing key and first public trust key in a controlled publisher environment. The OSS Store already has a tracked public key: its publisher must retain the matching private key; a new key cannot recreate it.
 
 ```bash
 cargo run --quiet -p axe-store -- keys generate --output keys/store
@@ -362,12 +384,12 @@ The generator creates:
 
 ```text
 keys/store/signing.key
-keys/store/trusted/<key-id>.pub
+store/trusted/<key-id>.pub
 ```
 
-The private key stays with the publisher. All public keys in `keys/store/trusted/` are embedded in AXE. Do not use `just generate-dev-keys` as a substitute for provisioning a production identity. Rotate without stranding consumers:
+The private key stays with the publisher. Commit the matching public keys in `store/trusted/` when the Store trust set changes. All public keys there are embedded in AXE. Do not use `just generate-dev-keys` as a substitute for provisioning a production identity. Rotate without stranding consumers:
 
-1. Add the new public key to `keys/store/trusted/`, rebuild AXE, and distribute that build.
+1. Add the new public key to `store/trusted/`, rebuild AXE, and distribute that build.
 2. Once consumers have the new trust key, switch the publisher to the matching private key.
 
 Keep an old trusted key until no consumer needs metadata signed by it. Also keep the signed bootstrap Index aligned with the current trust set and package inventory; a release build verifies it.
@@ -409,7 +431,7 @@ Store publication uses the edition selected by `AXE_EDITION_ROOT` and its `confi
 just store-sync
 ```
 
-`store-sync` regenerates `store/bootstrap.json`, builds and publishes signed Store objects and the Index, then copies the signed staged Index to the ignored edition-local `store/bootstrap-index.cbor.zst`. It does not build or publish AXE binaries. Keep the snapshot and corresponding trust keys on the publisher for each release build. The public Index can have different bytes because of its publication generation; the release build checks the snapshot signature and inventory.
+`store-sync` regenerates `store/bootstrap.json`, builds and publishes signed Store objects and the Index, then copies the signed staged Index to the edition-local `store/bootstrap-index.cbor.zst`. Commit the updated public bootstrap inventory and snapshot together with public trust changes after reviewing the published Store; never commit `keys/`. It does not build or publish AXE binaries. The public Index can have different bytes because of its publication generation; the release build checks the snapshot signature and inventory.
 
 `just store-build && just store-publish` publishes Store metadata without installing a bootstrap snapshot; do not substitute an old staged Index. `just store-diagnose-upload` tests temporary S3 uploads without publishing an Index. Even with `AXE_STORE_ALLOW_TARGET_REMOVAL=1 just store-sync`, review affected Store consumers explicitly.
 

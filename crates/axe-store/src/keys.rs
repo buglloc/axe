@@ -10,9 +10,8 @@ use rcgen::{
     date_time_ymd,
 };
 
-pub fn generate(root: &Path) -> Result<(), String> {
+pub fn generate(root: &Path, trusted_dir: &Path) -> Result<(), String> {
     let signing_path = root.join("signing.key");
-    let trusted_dir = root.join("trusted");
     if trusted_dir
         .read_dir()
         .ok()
@@ -24,7 +23,7 @@ pub fn generate(root: &Path) -> Result<(), String> {
         ));
     }
 
-    fs::create_dir_all(&trusted_dir)
+    fs::create_dir_all(trusted_dir)
         .map_err(|error| format!("create {}: {error}", trusted_dir.display()))?;
 
     let seed = rand::rng().random::<[u8; 32]>();

@@ -343,7 +343,7 @@ fn validate_config(config: &StoreConfig) -> Result<(), String> {
 fn publish_to(options: &PublishOptions<'_>, sink: &mut dyn ObjectSink) -> Result<u64, String> {
     eprintln!("axe-store: publish: validating signing keys and staged Index");
     let signing = load_signing_key(options.workspace)?;
-    let trusted = load_trusted_keys(&options.workspace.join("keys/store/trusted"))?;
+    let trusted = load_trusted_keys(&options.workspace.join("store/trusted"))?;
     let signing_id = KeyId::for_key(&signing.verifying_key());
     if trusted.get(&signing_id).is_none() {
         return Err(format!(
@@ -2025,7 +2025,9 @@ mod tests {
                     .as_nanos()
             ));
             let keys = root.join("keys/store");
-            fs::create_dir_all(keys.join("trusted")).expect("create test keys");
+            let trusted = root.join("store/trusted");
+            fs::create_dir_all(&keys).expect("create test signing key directory");
+            fs::create_dir_all(&trusted).expect("create test trust directory");
             let hex = |bytes: &[u8]| {
                 bytes
                     .iter()
@@ -2037,7 +2039,7 @@ mod tests {
                 .expect("write test signing key");
             let id = KeyId::for_key(&signing.verifying_key());
             fs::write(
-                keys.join(format!("trusted/{id}.pub")),
+                trusted.join(format!("{id}.pub")),
                 hex(signing.verifying_key().as_bytes()),
             )
             .expect("write trusted test key");

@@ -45,25 +45,25 @@ _prepare-axe-dev-keys:
     #!/usr/bin/env bash
     set -euo pipefail
     root="{{edition_root}}"
-    mkdir -p "$root/keys/ssh" "$root/keys/relay" "$root/keys/store/trusted"
+    mkdir -p "$root/keys/ssh" "$root/keys/relay" "$root/store/trusted"
     if ! test -s "$root/keys/ssh/host_ed25519"; then ssh-keygen -q -t ed25519 -N '' -C axe-bundled-host -f "$root/keys/ssh/host_ed25519"; fi
     rm -f "$root/keys/ssh/host_ed25519.pub"
     if ! test -s "$root/keys/ssh/user_ca_keys"; then ssh-keygen -q -t ed25519 -N '' -C axe-dev-user-ca -f "$root/keys/ssh/dev_user_ca"; cp "$root/keys/ssh/dev_user_ca.pub" "$root/keys/ssh/user_ca_keys"; fi
-    if ! test -s "$root/keys/relay/token"; then (cd "$root" && cargo run --quiet --manifest-path "{{source_root}}/Cargo.toml" -p axe-store -- keys relay-token); fi
-    if ! test -s "$root/keys/relay/quic_server_cert.pem" && ! test -s "$root/keys/relay/quic_server_key.pem" && ! test -s "$root/keys/relay/quic_client_cert.pem" && ! test -s "$root/keys/relay/quic_client_key.pem"; then (cd "$root" && cargo run --quiet --manifest-path "{{source_root}}/Cargo.toml" -p axe-store -- keys relay-identities); elif ! test -s "$root/keys/relay/quic_server_cert.pem" || ! test -s "$root/keys/relay/quic_server_key.pem" || ! test -s "$root/keys/relay/quic_client_cert.pem" || ! test -s "$root/keys/relay/quic_client_key.pem"; then echo "$root/keys/relay QUIC identities are incomplete" >&2; exit 1; fi
+    if ! test -s "$root/keys/relay/token"; then cargo run --quiet --manifest-path "{{source_root}}/Cargo.toml" -p axe-store -- keys relay-token --output "$root/keys/relay/token"; fi
+    if ! test -s "$root/keys/relay/quic_server_cert.pem" && ! test -s "$root/keys/relay/quic_server_key.pem" && ! test -s "$root/keys/relay/quic_client_cert.pem" && ! test -s "$root/keys/relay/quic_client_key.pem"; then cargo run --quiet --manifest-path "{{source_root}}/Cargo.toml" -p axe-store -- keys relay-identities --output "$root/keys/relay"; elif ! test -s "$root/keys/relay/quic_server_cert.pem" || ! test -s "$root/keys/relay/quic_server_key.pem" || ! test -s "$root/keys/relay/quic_client_cert.pem" || ! test -s "$root/keys/relay/quic_client_key.pem"; then echo "$root/keys/relay QUIC identities are incomplete" >&2; exit 1; fi
     shopt -s nullglob
-    trusted_keys=("$root"/keys/store/trusted/*.pub)
-    if ((${#trusted_keys[@]} == 0)); then echo "$root/keys/store/trusted has no public keys; run just generate-dev-keys" >&2; exit 1; fi
+    trusted_keys=("$root"/store/trusted/*.pub)
+    if ((${#trusted_keys[@]} == 0)); then echo "$root/store/trusted has no public keys; run just generate-dev-keys for a new Store or supply the existing Store's trusted keys" >&2; exit 1; fi
     chmod 0600 "$root/keys/ssh/host_ed25519" "$root/keys/relay/token" "$root/keys/relay/quic_server_key.pem" "$root/keys/relay/quic_client_key.pem"
 
 generate-dev-keys:
     #!/usr/bin/env bash
     set -euo pipefail
     root="{{edition_root}}"
-    mkdir -p "$root/keys/store/trusted"
+    mkdir -p "$root/store/trusted"
     shopt -s nullglob
-    trusted_keys=("$root"/keys/store/trusted/*.pub)
-    if ! test -s "$root/keys/store/signing.key" && ((${#trusted_keys[@]} == 0)); then (cd "$root" && cargo run --quiet --manifest-path "{{source_root}}/Cargo.toml" -p axe-store -- keys generate); elif ! test -s "$root/keys/store/signing.key" || ((${#trusted_keys[@]} == 0)); then echo "$root/keys/store signing/trusted pair is incomplete" >&2; exit 1; fi
+    trusted_keys=("$root"/store/trusted/*.pub)
+    if ! test -s "$root/keys/store/signing.key" && ((${#trusted_keys[@]} == 0)); then cargo run --quiet --manifest-path "{{source_root}}/Cargo.toml" -p axe-store -- keys generate --output "$root/keys/store" --trusted-output "$root/store/trusted"; elif ! test -s "$root/keys/store/signing.key" || ((${#trusted_keys[@]} == 0)); then echo "$root Store signing key/public trust pair is incomplete; a consumer edition does not need a signing key" >&2; exit 1; fi
     chmod 0600 "$root/keys/store/signing.key"
     just _prepare-axe-dev-keys
 
@@ -170,7 +170,7 @@ _store-run *args:
             exit 2
             ;;
     esac
-    exec ${CONTAINER_RUNTIME:-podman} run --rm --init "${run_extra[@]}" -v {{store_volume}}:/nix -v "{{store_output}}:/output" -v "{{edition_root}}/config:/workspace/config:ro" -v "{{edition_root}}/keys/store:/workspace/keys/store:ro" -v "{{store_flake}}:/flake:ro" {{store_image}} "$@"
+    exec ${CONTAINER_RUNTIME:-podman} run --rm --init "${run_extra[@]}" -v {{store_volume}}:/nix -v "{{store_output}}:/output" -v "{{edition_root}}/config:/workspace/config:ro" -v "{{edition_root}}/keys/store:/workspace/keys/store:ro" -v "{{edition_root}}/store/trusted:/workspace/store/trusted:ro" -v "{{store_flake}}:/flake:ro" {{store_image}} "$@"
 
 keyscan-nix-builders:
     #!/usr/bin/env bash
@@ -204,7 +204,7 @@ store-build-remote:
     AXE_STORE_REMOTE=1 just store-build
 
 store-publish: store-image
-    ${CONTAINER_RUNTIME:-podman} run --rm --init -v "{{edition_root}}/config:/workspace/config:ro" -v "{{store_output}}/dist:/workspace/store/dist:ro" -v "{{edition_root}}/keys/store:/workspace/keys/store:ro" {{store_image}} publish
+    ${CONTAINER_RUNTIME:-podman} run --rm --init -v "{{edition_root}}/config:/workspace/config:ro" -v "{{store_output}}/dist:/workspace/store/dist:ro" -v "{{edition_root}}/keys/store:/workspace/keys/store:ro" -v "{{edition_root}}/store/trusted:/workspace/store/trusted:ro" {{store_image}} publish
 
 [positional-arguments]
 store-diagnose-upload *args: store-image
@@ -221,10 +221,10 @@ store-sync: _sync-store-snapshot
 store-sync-remote:
     AXE_STORE_REMOTE=1 just store-sync
 
-store-smoke: generate-dev-keys
+store-smoke: _prepare-axe-dev-keys
     bash store/tests/smoke.sh
 
-store-nix-smoke: generate-dev-keys
+store-nix-smoke: _prepare-axe-dev-keys
     bash store/tests/nix-smoke.sh
 
 store-bootstrap:
@@ -238,8 +238,8 @@ nix-fmt:
 check: _prepare-axe-dev-keys check-store-bootstrap
     AXE_EDITION_ROOT="{{edition_root}}" cargo check --locked --workspace --all-targets --all-features
 
-smoke: generate-dev-keys
+smoke: _prepare-axe-dev-keys
     AXE_EDITION_ROOT="{{edition_root}}" cargo test --locked --workspace --all-features
 
-applet-parity: generate-dev-keys
+applet-parity: _prepare-axe-dev-keys
     AXE_EDITION_ROOT="{{edition_root}}" cargo test --locked -p axe --all-features --test applet_parity

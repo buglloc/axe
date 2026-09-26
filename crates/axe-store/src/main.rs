@@ -46,6 +46,8 @@ enum KeysCommand {
     Generate {
         #[arg(long, default_value = "keys/store")]
         output: PathBuf,
+        #[arg(long, default_value = "store/trusted")]
+        trusted_output: PathBuf,
     },
     RelayToken {
         #[arg(long, default_value = "keys/relay/token")]
@@ -155,11 +157,15 @@ fn run(cli: Cli) -> Result<(), String> {
         std::env::current_dir().map_err(|error| format!("read current directory: {error}"))?;
     match cli.command {
         Command::Keys { command } => match command {
-            KeysCommand::Generate { output } => {
-                keys::generate(&output)?;
+            KeysCommand::Generate {
+                output,
+                trusted_output,
+            } => {
+                keys::generate(&output, &trusted_output)?;
                 println!(
-                    "generated signing key and trusted public key in {}",
-                    output.display()
+                    "generated signing key in {} and trusted public key in {}",
+                    output.display(),
+                    trusted_output.display()
                 );
             }
             KeysCommand::RelayToken { output } => {

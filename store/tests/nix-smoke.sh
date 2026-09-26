@@ -86,7 +86,10 @@ cat >"$tmp/flake.nix" <<'EOF'
 EOF
 
 cargo build --quiet -p axe -p axe-store
-"$target_dir/debug/axe-store" build \
+"$target_dir/debug/axe-store" keys generate \
+    --output "$tmp/keys/store" --trusted-output "$tmp/store/trusted" >/dev/null
+signing_key=$(cat "$tmp/keys/store/signing.key")
+AXE_STORE_SIGNING_KEY="$signing_key" "$target_dir/debug/axe-store" build \
     --flake "$tmp" --output "$tmp/output" >"$tmp/build.log" 2>&1
 
 grep -Fq 'unsupported: nix-smoke/missing x86_64-linux:' "$tmp/build.log"
@@ -153,7 +156,7 @@ fn nibble(byte: u8) -> u8 {
     }
 }
 EOF
-trusted_path=$(printf '%s\n' "$root"/keys/store/trusted/*.pub | sort | sed -n '1p')
+trusted_path=$(printf '%s\n' "$tmp"/store/trusted/*.pub | sort | sed -n '1p')
 cargo run --quiet --manifest-path "$tmp/inspect/Cargo.toml" -- \
     "$manifest" "$trusted_path" \
     >"$tmp/manifest.txt"

@@ -4,9 +4,9 @@ Publish AXE binaries and the GitHub Release from a trusted local OSS publisher. 
 
 ## Inputs and trust
 
-Enter `nix develop .#default`. Before publishing, check that `edition.json` identifies the `oss` edition, `config/store.json` points to the intended bucket, and `gh` is authenticated to `buglloc/axe`. The publisher also needs its edition-local `keys/store/` identity and a signed `store/bootstrap-index.cbor.zst`. AXE embeds the public trust keys and signed bootstrap Index, but never the Store signing key or S3 credentials. Keep secrets in ignored edition-local paths, out of tracked files and OMP evidence.
+Enter `nix develop .#default`. Before publishing, check that `edition.json` identifies the `oss` edition, `config/store.json` points to the intended bucket, and `gh` is authenticated to `buglloc/axe`. The publisher also needs its edition-local private `keys/store/` identity. Public `store/trusted/*.pub` and the signed `store/bootstrap-index.cbor.zst` are tracked inputs. AXE embeds the public trust keys and signed bootstrap Index, but never the Store signing key or S3 credentials. Keep secrets in ignored edition-local paths, out of tracked files and OMP evidence.
 
-If the package inventory or signed snapshot needs updating, run `just store-sync` on the trusted publisher first. It publishes Store objects and replaces the ignored local bootstrap snapshot; it does not publish AXE binaries. Check the destination and target-removal safeguards in BOOTSTRAP.md before running it. An AXE release build rejects a missing snapshot or one that does not match the trusted keys and inventory.
+If the package inventory or signed snapshot needs updating, run `just store-sync` on the trusted publisher first. It publishes Store objects and replaces the local bootstrap snapshot; review and commit the updated public snapshot and inventory together before the AXE release. It does not publish AXE binaries. Check the destination and target-removal safeguards in BOOTSTRAP.md before running it. An AXE release build rejects a missing snapshot or one that does not match the trusted keys and inventory.
 
 ## Prepare the reviewed source
 

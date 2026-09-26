@@ -19,7 +19,9 @@ Repository configuration:
   config/store.json                AXE Store endpoints, limits, TTL and storage roots
   config/relay.json                compiled TCP and QUIC relay endpoints
   config/sshd.json                 compiled default SSH principals
-  keys/                            ignored SSH/relay/AXE Store trust and credentials
+  keys/                            ignored local SSH/relay identities and Store publisher credentials
+  store/trusted/*.pub, store/bootstrap-index.cbor.zst
+                                   public Store trust and signed bootstrap snapshot
   flake.nix, flake.lock, store/nix/packages/*.nix
                                    Nix producer graph and bootstrap inventory
 

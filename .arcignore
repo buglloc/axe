@@ -6,7 +6,6 @@ target/
 /store/dist/
 /store/.axe-store-stage*/
 /store/.axe-store-work*/
-/store/bootstrap.json.*
 *.tar
 /web/public/
 /.axe/

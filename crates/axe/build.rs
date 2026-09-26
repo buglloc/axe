@@ -132,7 +132,7 @@ fn run() -> Result<(), String> {
         "keys/relay/quic_server_cert.pem",
         "keys/relay/quic_client_cert.pem",
         "keys/relay/quic_client_key.pem",
-        "keys/store/trusted",
+        "store/trusted",
         "store/bootstrap.json",
         "store/bootstrap-index.cbor.zst",
     ] {
@@ -497,7 +497,7 @@ fn validate_bootstrap_inventory(edition_root: &Path, index: &StoreIndex) -> Resu
 }
 
 fn load_trusted(workspace: &Path) -> Result<Vec<(KeyId, [u8; 32])>, String> {
-    let directory = workspace.join("keys/store/trusted");
+    let directory = workspace.join("store/trusted");
     let mut paths = fs::read_dir(&directory)
         .map_err(|error| format!("read {}: {error}", directory.display()))?
         .map(|entry| entry.map(|entry| entry.path()))
@@ -506,7 +506,7 @@ fn load_trusted(workspace: &Path) -> Result<Vec<(KeyId, [u8; 32])>, String> {
     paths.retain(|path| path.extension().is_some_and(|extension| extension == "pub"));
     paths.sort_unstable();
     if paths.is_empty() {
-        return Err("keys/store/trusted contains no public keys".into());
+        return Err("store/trusted contains no public keys".into());
     }
     paths
         .into_iter()
