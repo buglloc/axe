@@ -1,12 +1,12 @@
 # AGENTS.md
 
-These instructions apply to the repository. Keep operational rules here; put user-facing behavior in `README.md`, build and release procedures in `BOOTSTRAP.md`.
+These instructions apply to the repository. Keep operational rules here; put the entry point and downloads in `README.md`, component guides in `docs/`, and build and release procedures in `BOOTSTRAP.md` and `docs/release.md`.
 
 ## Before changing code
 
 - Work in `nix develop .#default` (or run commands with `nix develop .#default --command ...`). Inspect the affected implementation, callers, tests, and crate manifests before editing.
 - The public checkout owns the shared Rust code and OSS defaults. Other editions supply their own `AXE_EDITION_ROOT`; do not introduce private configuration, trust material, or package definitions into the public checkout. Do not mix edition-specific build inputs or release outputs.
-- For command changes, inspect `crates/axe/src/registry.rs`, `config/aliases.json`, `crates/axe/src/help.txt`, and the README inventory. For Store packages, inspect `store/packages/lib.nix` and the relevant category. For target-specific changes, check the affected `cfg` branches and target ABI, not just host glibc.
+- For command changes, inspect `crates/axe/src/registry.rs`, `config/aliases.json`, `crates/axe/src/help.txt`, and `docs/commands.md`. For Store packages, inspect `store/nix/packages/lib.nix` and the relevant category. For target-specific changes, check the affected `cfg` branches and target ABI, not just host glibc.
 - Generate missing *development* keys with `just generate-dev-keys` when a build or test needs them; it does not replace existing keys. Never print, commit, or use production private material as a test fixture.
 
 ## Runtime contracts
@@ -21,10 +21,10 @@ These instructions apply to the repository. Keep operational rules here; put use
 
 ## Build and Store boundaries
 
-- `store/packages/` is the package source of truth. Add packages to an existing category when possible and use its package constructors. Keep package IDs unique, pin upstream sources, and do not ship Linux executables with dynamic or `/nix/store` runtime dependencies.
+- `store/nix/packages/` is the package source of truth. Add packages to an existing category when possible and use its package constructors. Keep package IDs unique, pin upstream sources, and do not ship Linux executables with dynamic or `/nix/store` runtime dependencies.
 - Generate `store/bootstrap.json` with `just store-bootstrap`; do not edit it by hand. The build embeds the signed `store/bootstrap-index.cbor.zst` snapshot and public trust from the selected edition root. The `axe` build must never receive the Store private signing key or S3 credentials.
 - Keep private keys and credentials under ignored edition-local `keys/` paths. `keys/ssh/user_ca_keys` contains only public CA keys. Remote builders are opt-in through `store-build-remote` or `store-sync-remote`; do not load their identities in local builds.
-- Update the command help and README software inventory when the command surface or generated Store metadata changes. Update `BOOTSTRAP.md` or `docs/release.md` only when their contracts change.
+- Update the command help and `docs/commands.md` inventory when the bundled command surface changes; update the `docs/store.md` inventory when generated Store metadata changes. Update `BOOTSTRAP.md` or `docs/release.md` only when their contracts change.
 
 ## Verification
 

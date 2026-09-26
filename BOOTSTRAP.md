@@ -404,7 +404,7 @@ just check-store-bootstrap
 nix flake check --no-build .
 ```
 
-Do not hand-edit `store/bootstrap.json`; regenerate it after package changes. It is not the signed Index. `store/bootstrap-index.cbor.zst` is a separate signed snapshot copied from the Store sync output. A release build validates the snapshot against the embedded trust keys and bootstrap inventory. See [Adding a package to AXE Store](README.md#adding-a-package-to-axe-store) for package helper selection.
+Do not hand-edit `store/bootstrap.json`; regenerate it after package changes. It is not the signed Index. `store/bootstrap-index.cbor.zst` is a separate signed snapshot copied from the Store sync output. A release build validates the snapshot against the embedded trust keys and bootstrap inventory. See [Adding a package to AXE Store](docs/store.md#adding-a-package) for the package definition entry point.
 
 ### 6. Build and check locally
 
