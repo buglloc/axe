@@ -98,48 +98,9 @@ Once a release is available, the root flake exposes `packages.<system>.axe` and 
 
 ## Building from source
 
-You need Nix with `nix-command` and flakes enabled. The development shell supplies Rust 1.98.0, `just`, Zig, `cargo-zigbuild`, a C toolchain, `ssh-keygen`, `yc`, and validation utilities:
+Enter `nix develop .#default`, then run `just build` for the Linux x86_64 binary shown in [Quick start](#quick-start). The development shell supplies Rust, Zig, and the build tools. `just generate-dev-keys` creates missing development keys without replacing existing ones. Other editions use separate configuration, trust material, and build outputs; see [`BOOTSTRAP.md`](BOOTSTRAP.md) for their setup.
 
-```bash
-nix develop .#default
-just generate-dev-keys
-cargo run -p axe -- --version
-```
-
-`generate-dev-keys` creates only missing local keys; it does not replace existing files in `keys/`.
-
-This repository builds the OSS edition. Its identity appears in `axe --version` and `.axe.edition` from `doctor --json`. Other distributions use the same Rust workspace but have separate edition roots; edition configuration, trust material, Store bootstrap, and release outputs must stay separate. An OSS-built executable is not another edition.
-
-The default `just build` builds Linux x86_64:
-
-```bash
-just build
-file dist/axe-x86_64-unknown-linux-musl
-```
-
-Other targets can be built separately:
-
-```bash
-just build-linux-arm64
-just build-linux
-just build-darwin-arm64
-just build-darwin
-just build-all
-```
-
-Artifacts are staged in `dist/`:
-
-| Target | Artifact |
-| --- | --- |
-| `x86_64-linux` | `dist/axe-x86_64-unknown-linux-musl` |
-| `aarch64-linux` | `dist/axe-aarch64-unknown-linux-musl` |
-| `aarch64-darwin` | `dist/axe-aarch64-apple-darwin` |
-
-Linux recipes verify that the result is a static ELF of type `EXEC` with neither `INTERP` nor `DT_NEEDED`. The x86_64 recipe also runs the artifact with an empty `PATH`.
-
-The Darwin recipe uses an SDK in ignored `target/toolchains/`.
-
-See [`BOOTSTRAP.md`](BOOTSTRAP.md) for keys, production configuration, AXE Store, and remote builders.
+For other targets, use `just build-linux-arm64`, `just build-darwin-arm64`, or `just build-all`. Artifacts go to `dist/`; Linux builds are static ELF binaries. See [`BOOTSTRAP.md`](BOOTSTRAP.md) for build and signing setup.
 
 ## Supported software
 
@@ -241,84 +202,26 @@ Set the mode with `AXE_STORE_MODE` or `sshd --store-mode`:
 - `cache-only`: use only the verified cache; an unavailable cache entry can permit `PATH` fallback.
 - `off`: do not initialize Store or register its commands.
 
-`sshd` passes the effective mode to shell and exec sessions; child sessions cannot relax an inherited restriction. `clean-tools` removes metadata for the current Store identity; `refresh-tools` forces an Index refresh. See [`docs/architecture.md`](docs/architecture.md) for storage, verification, and network fallback.
+`sshd` passes the effective mode to shell and exec sessions; child sessions cannot relax an inherited restriction. `clean-tools` removes metadata for the current Store identity from accessible cache roots; it skips automatically discovered roots that cannot be traversed but reports a permission error for the explicit `AXE_STORE_DIR`. `refresh-tools` forces an Index refresh.
 
 ### Adding a package to AXE Store
 
-Category modules under [`store/nix/packages/`](store/nix/packages/) define the package set. Package IDs have the form `<category>/<name>`; each attribute must be unique across that set.
-
-For one executable from nixpkgs, use `mkNixpkgsBinary` (the package name below is illustrative and must be replaced with a real nixpkgs attribute):
-
-```nix
-{
-  mkNixpkgsBinary,
-  portableSystems,
-  packageSetFor,
-  ...
-}: {
-  example = mkNixpkgsBinary {
-    name = "example";
-    synopsis = "Inspect example data";
-    systems = portableSystems;
-    packageFor = system: pkgs: (packageSetFor system pkgs).example;
-  };
-}
-```
-
-For a pinned upstream binary, use `mkUpstreamBinary`; for multiple targets, use `mkUpstreamBinaries`. Every real source needs an immutable URL and Nix hash. The example below is **not** a downloadable artifact:
-
-```nix
-example = mkUpstreamBinaries {
-  name = "example";
-  version = "1.2.3";
-  synopsis = "Inspect example data";
-  sources = {
-    x86_64-linux = {
-      url = "https://example.invalid/example-1.2.3-linux-amd64";
-      hash = "sha256-...";
-    };
-  };
-};
-```
-
-For programs that need a file tree, use `mkNixpkgsPackage` and specify `entrypoint`. The built output must not refer to `/nix/store`; Linux executables undergo additional static validation.
-
-After changing the package set, regenerate the bootstrap metadata and build Store packages:
-
-```bash
-just store-bootstrap
-just check-store-bootstrap
-nix flake check --no-build .
-just store-build
-```
-
-Keep the AXE Store table above in sync with generated `store/bootstrap.json`. See [`BOOTSTRAP.md`](BOOTSTRAP.md) for signing keys, publication credentials, and builders. Building packages does not publish a Store snapshot or AXE release.
+Package definitions live in [`store/nix/packages/`](store/nix/packages/). After changing them, regenerate `store/bootstrap.json` with `just store-bootstrap` and check it with `just check-store-bootstrap`. See [`BOOTSTRAP.md`](BOOTSTRAP.md#axe-store-from-scratch) for signing, building, and publishing packages.
 
 ## Vzik
 
-Run the bounded host/container evidence collector explicitly. For example, inside the built AXE shell (probe availability depends on the host):
+Run the bounded host/container evidence collector inside AXE:
 
 ```bash
 vzik collect
 vzik network listeners --max-items 4096
 vzik security posture
-vzik container inspect self
-vzik systemctl list --all-users
-vzik dbus inspect org.freedesktop.systemd1
-vzik portoctl inspect self --socket /run/portod.socket
-vzik filesystem privilege-surfaces . --max-items 4096 --max-entries 50000 --max-depth 16
 vzik capabilities
 vzik capabilities porto.list
 vzik capture collect --output baseline.jsonl --receipt baseline.receipt.json --stderr baseline.stderr.jsonl
 ```
 
-Some probes require host access; on systems without the relevant service (including Porto), they may report unavailable. `collect` uses the `baseline-v3` profile: all INET sockets, listening Unix sockets only, and runtime systemd units excluding automatically created `.device` units. Use `vzik network sockets` and `vzik systemctl list` for full Unix IPC and runtime-unit inventories.
-
-The collector writes bounded protocol-v3 JSONL. `stream_start` declares the complete `planned_capabilities`. A terminal `stream_end` has outcome `complete` only if every planned capability completed; otherwise it reports `degraded` and the process exits with status `3`. `not_started_capabilities` lists probes skipped because of a stream limit. Status `0` means complete; `2` invalid request; `4` internal error; `5` write error; `124` deadline; and `128+signal` signal interruption. Deadline and `SIGINT`/`SIGTERM` are checked cooperatively between bounded operations. Standalone `vzik` emits a terminal `stream_abort` on interruption; a stream without `stream_end` is always incomplete. Process-level errors go to stderr as JSON with `code`, `operation`, `retryable`, `message`, and `details`.
-
-`vzik capabilities` returns a compact machine-readable index of protocol semantics, global limits, and capability IDs. `vzik capabilities CAPABILITY_ID` returns the detailed request schema, data kinds, access class, and possible outcomes for one capability. Both views come from the typed definitions used by the Clap CLI. The collector does not execute host binaries, open INET connections, or write to the target filesystem. Where available, it reads systemd and D-Bus state directly over bounded Unix-socket connections.
-
-`vzik capture` writes a capture, saved stderr, and receipt to specified new files. It refuses to overwrite existing paths and publishes the receipt only after validating the complete capture. The files are not written as a transaction: an interruption or write failure can leave capture or stderr without a receipt. A sealed degraded capture remains valid, but the command returns status `3`.
+Probes that cannot access a host service report unavailable. `vzik capabilities` lists probes and their request schemas. `collect` writes protocol-v3 JSONL: `stream_end` marks a complete stream; degraded collection exits with status `3`. A stream without `stream_end` is incomplete. `vzik capture` refuses to overwrite output files and publishes its receipt only after validating the capture.
 
 ## SSH server and relay
 
@@ -330,26 +233,11 @@ The collector writes bounded protocol-v3 JSONL. `stream_start` declares the comp
 
 The first successful interactive PTY session on each SSH transport receives a short welcome line pointing to `skill://axe`, `doctor --json`, and `vzik capabilities`. Later shell channels on the same multiplexed transport, remote exec, SFTP, and forwarding receive no welcome output.
 
-If AXE has not started on a target, the [rescue agent skill](.agents/skills/axe-rescue/SKILL.md) helps an agent find available transfer and execution routes and prepare the smallest operator-run activation step. It does not install or launch AXE remotely on the agent's behalf. After activation, use `skill://axe` for diagnosis. An external edition checkout must expose the skill through its own agent skills directory or configured provider.
-
-After building a **development** binary, run `nix develop .#default --command bash .agents/skills/axe-rescue/scripts/live-smoke.sh "$PWD/dist/axe-x86_64-unknown-linux-musl"` to exercise local first-entry cases without contacting a remote machine. The smoke test creates disposable loopback OpenSSH servers and a network-isolated distroless Podman container. With `AXE_RESCUE_LIVE_AGENT=1`, it also asks the configured DeepSeek model to interpret the results with read-only skill access. Do not supply a production edition binary with embedded credentials to the test containers. This checks runtime mechanics, not release provenance or other editions.
-
 If a target cannot be reached from outside, `sshd` can register outbound with a relay. The OSS edition disables relay by default (`config/relay.json` sets `enabled_by_default` to `false` and configures no endpoints); without `--relay`, no relay task starts. `--relay ENDPOINT` enables the selected transport; `--no-relay` disables it even for editions with a configured default. The flags conflict.
 
-The relay supports both TCP and UDP transports:
+TCP is the default relay transport and requires `AXE_RELAY_TOKEN` (at least 32 bytes). Use `--relay-transport quic` for QUIC; its mTLS credentials can be embedded by an edition or provided through `AXE_RELAY_QUIC_SERVER_CERT_FILE`, `AXE_RELAY_QUIC_CLIENT_CERT_FILE`, and `AXE_RELAY_QUIC_CLIENT_KEY_FILE`. See [`BOOTSTRAP.md`](BOOTSTRAP.md#relay-endpoints-and-identities) for endpoint and server setup.
 
-| Transport | Control | Authentication | Data plane | When to choose |
-| --- | --- | --- | --- | --- |
-| TCP+yamux | TCP `6999` | Shared token | One yamux stream per connection | Default; lower CPU use |
-| QUIC | UDP `11000` | Separate mTLS identities | Direct bidirectional QUIC stream | Packet loss or NAT rebinding |
-
-TCP requires an `AXE_RELAY_TOKEN` of at least 32 bytes. QUIC client credentials can be embedded by an edition or provided through `AXE_RELAY_QUIC_SERVER_CERT_FILE`, `AXE_RELAY_QUIC_CLIENT_CERT_FILE`, and `AXE_RELAY_QUIC_CLIENT_KEY_FILE`. The standalone `axe-relay` server requires the server private key and both certificates as runtime files; they are not embedded in `axe-relay`.
-
-Use `--relay-transport quic` to select QUIC for `sshd`; TCP is the default. `config/relay.json` controls `enabled_by_default` and optional endpoints. Enabling a default without an endpoint for the selected transport causes configuration to fail before bind/readiness. On registration, the relay assigns a public TCP port and logs registration/disconnection with transport, relay ID, and active client count.
-
-Without `--relay-id`, `sshd` registers as `<pidns>@<user>@<hostname>` using OS identity. `<pidns>` is the inode of its PID namespace (`/proc/self/ns/pid`); the username comes from the OS account database (numeric UID if unavailable), and the hostname from the OS (`unknown` if unavailable). Processes in one PID namespace—typically one container—share the ID, which survives `sshd` restarts, including supervised worker restarts. The namespace inode is not globally unique and becomes `-1` without visible procfs; IDs can then collide across hosts. To target clients uniquely, assign each client of the relay a distinct `--relay-id`.
-
-By default, the standalone `axe-relay` serves TCP control on `6999`, QUIC control on `11000`, and assigned public TCP ports in `3000–4000`. `--public-bind` selects the local listener interface; `--public-host` sets the SSH-reachable address returned to clients. The dashboard/API listens on loopback (`127.0.0.1:7000`); remote access requires an authenticated HTTPS proxy.
+Without `--relay-id`, `sshd` uses `<pidns>@<user>@<hostname>`; this ID can collide across hosts or containers that share a PID namespace. Assign a distinct `--relay-id` when clients must be addressed uniquely. The relay dashboard/API listens on loopback by default; remote access requires an authenticated HTTPS proxy.
 
 Targets behind NAT connect outbound with `axe sshd`. `axe-relay watch [--client-id ID]` follows arrivals and departures; `axe-relay wait --client-id ID` returns one assigned SSH `HOST:PORT`. The read-only dashboard (`/`), JSON status API (`/api/v1/status`), and `status`/`clients` commands show active registrations. See [`BOOTSTRAP.md`](BOOTSTRAP.md#relay-endpoints-and-identities) for deployment.
 

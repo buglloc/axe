@@ -638,6 +638,9 @@ impl Client {
     }
 
     pub fn clean(&self) -> Result<Vec<PathBuf>, StoreError> {
+        let explicit = std::env::var_os("AXE_STORE_DIR")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
         let mut removed_roots = Vec::new();
         for root in self.storage_roots() {
             let path = root.join("metadata").join(&self.metadata_namespace);
@@ -648,6 +651,15 @@ impl Client {
                         error.kind(),
                         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
                     ) =>
+                {
+                    continue;
+                }
+                Err(error)
+                    if error.kind() == io::ErrorKind::PermissionDenied
+                        && explicit.as_deref() != Some(root.as_path())
+                        && fs::read_dir(&root).is_err_and(|root_error| {
+                            root_error.kind() == io::ErrorKind::PermissionDenied
+                        }) =>
                 {
                     continue;
                 }

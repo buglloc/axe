@@ -43,7 +43,8 @@ artifacts are signature/digest verified. Cache selection starts with
 $AXE_STORE_DIR, then platform cache and writable filesystem/tmpfs roots.
 Metadata is isolated by Store URL, trusted key IDs, and channel even when
 editions share a fallback root; clean-tools preserves shared objects and other
-editions' metadata. Linux single binaries fall back to sealed memfd.
+editions' metadata. Inaccessible automatic roots are skipped; a permission error
+on AXE_STORE_DIR is reported. Linux single binaries fall back to sealed memfd.
 Transient AXE Store failures and removal of the current target may use a
 different executable from PATH; integrity failures return 126.
 AXE_STORE_MODE=cache-only forbids Store HTTP while retaining verified cache;

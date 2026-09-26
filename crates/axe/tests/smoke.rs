@@ -235,15 +235,16 @@ fn unresolved_current_identity_uses_numeric_fallbacks() {
     const CHILD: &str = "AXE_TEST_UNRESOLVED_IDENTITY_CHILD";
     const AXE_EXECUTABLE: &str = "AXE_TEST_UNRESOLVED_IDENTITY_EXECUTABLE";
     const TEST_NAME: &str = "unresolved_current_identity_uses_numeric_fallbacks";
+    use std::ffi::{CStr, CString};
+    use std::os::unix::ffi::OsStrExt as _;
 
-    fn hide_identity_file(target: &[u8]) {
-        let source = b"/dev/null\0";
+    fn bind_identity_file(source: &CStr, target: &CStr) {
         // SAFETY: source and target are NUL-terminated and live through the
         // call. The test child owns its mount namespace.
         let result = unsafe {
             libc::mount(
-                source.as_ptr().cast(),
-                target.as_ptr().cast(),
+                source.as_ptr(),
+                target.as_ptr(),
                 std::ptr::null(),
                 libc::MS_BIND,
                 std::ptr::null::<libc::c_void>(),
@@ -252,10 +253,43 @@ fn unresolved_current_identity_uses_numeric_fallbacks() {
         assert_eq!(
             result,
             0,
-            "hide {}: {}",
-            String::from_utf8_lossy(&target[..target.len() - 1]),
+            "bind {} over {}: {}",
+            source.to_string_lossy(),
+            target.to_string_lossy(),
             std::io::Error::last_os_error()
         );
+    }
+
+    fn current_groups() -> Vec<libc::gid_t> {
+        // SAFETY: a zero count queries the number of supplementary groups
+        // without dereferencing the null pointer.
+        let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+        assert!(
+            count >= 0,
+            "query groups: {}",
+            std::io::Error::last_os_error()
+        );
+        let mut groups = vec![0; count as usize];
+        if count > 0 {
+            // SAFETY: groups contains count initialized gid_t entries.
+            let actual = unsafe { libc::getgroups(count, groups.as_mut_ptr()) };
+            assert_eq!(
+                actual,
+                count,
+                "read groups: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        groups
+    }
+
+    fn primary_first(mut groups: Vec<libc::gid_t>) -> Vec<libc::gid_t> {
+        if let Some(index) = groups.iter().position(|&gid| gid == 0) {
+            groups[..=index].rotate_right(1);
+        } else {
+            groups.insert(0, 0);
+        }
+        groups
     }
 
     fn isolated_axe(executable: &Path) -> Command {
@@ -272,49 +306,79 @@ fn unresolved_current_identity_uses_numeric_fallbacks() {
     }
 
     if std::env::var_os(CHILD).is_some() {
-        hide_identity_file(b"/etc/passwd\0");
-        hide_identity_file(b"/etc/group\0");
+        let nss = Scratch::new("identity-nss");
+        let nsswitch = nss.path().join("nsswitch.conf");
+        fs::write(&nsswitch, b"passwd: files\ngroup: files\n")
+            .expect("write files-only NSS policy");
+        let nsswitch =
+            CString::new(nsswitch.as_os_str().as_bytes()).expect("NSS policy path contains no NUL");
+        bind_identity_file(&nsswitch, c"/etc/nsswitch.conf");
+        bind_identity_file(c"/dev/null", c"/etc/passwd");
+        bind_identity_file(c"/dev/null", c"/etc/group");
 
+        // --map-root-user maps our primary IDs, but supplementary host groups
+        // can survive as unmapped IDs (usually 65534). Read the kernel's
+        // groups rather than assuming it cleared them.
+        let groups = primary_first(current_groups());
+        let group_ids = groups
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let listed_groups = groups
+            .iter()
+            .map(|gid| format!("{gid}({gid})"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let executable = std::env::var_os(AXE_EXECUTABLE).expect("AXE path is inherited");
+        let executable = Path::new(&executable);
         for (args, expected) in [
-            (&["id"][..], "uid=0(0) gid=0(0) groups=0(0)\n"),
-            (&["id", "-un"][..], "0\n"),
-            (&["id", "-Gn"][..], "0\n"),
-            (&["groups"][..], "0\n"),
+            (
+                &["id"][..],
+                format!("uid=0(0) gid=0(0) groups={listed_groups}\n"),
+            ),
+            (&["id", "-un"][..], "0\n".to_owned()),
+            (&["id", "-Gn"][..], format!("{group_ids}\n")),
+            (&["groups"][..], format!("{group_ids}\n")),
         ] {
-            let output = isolated_axe(Path::new(
-                &std::env::var_os(AXE_EXECUTABLE).expect("AXE path is inherited"),
-            ))
-            .args(args)
-            .output()
-            .expect("run identity applet");
+            let output = isolated_axe(executable)
+                .args(args)
+                .output()
+                .expect("run identity applet");
             assert!(
                 output.status.success(),
                 "{args:?} stderr: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+            assert_eq!(output.stdout, expected.as_bytes(), "{args:?}");
             assert_eq!(output.stderr, b"", "{args:?} emitted a diagnostic");
         }
 
-        let output = isolated_axe(Path::new(
-            &std::env::var_os(AXE_EXECUTABLE).expect("AXE path is inherited"),
-        ))
-        .env("PS1", r"\u")
-        .args([
-            "--no-config",
-            "--norc",
-            "--noprofile",
-            "-c",
-            r#"printf "%s\n%s\n" "${PS1@P}" "${GROUPS[*]}""#,
-        ])
-        .output()
-        .expect("expand prompt without a resolvable username");
+        let mut shell_groups = groups;
+        shell_groups.sort_unstable();
+        shell_groups.dedup();
+        let shell_group_ids = shell_groups
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let output = isolated_axe(executable)
+            .env("PS1", r"\u")
+            .args([
+                "--no-config",
+                "--norc",
+                "--noprofile",
+                "-c",
+                r#"printf "%s\n%s\n" "${PS1@P}" "${GROUPS[*]}""#,
+            ])
+            .output()
+            .expect("expand prompt without a resolvable username");
         assert!(
             output.status.success(),
             "stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(output.stdout, b"0\n0\n");
+        assert_eq!(output.stdout, format!("0\n{shell_group_ids}\n").as_bytes());
         assert_eq!(output.stderr, b"");
         return;
     }
