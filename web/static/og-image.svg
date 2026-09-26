@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="627" viewBox="0 0 1200 627">
+  <defs>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#213039" stroke-width="1" opacity=".28"/>
+    </pattern>
+    <linearGradient id="fade" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#64b5c6"/>
+      <stop offset="1" stop-color="#8ad5e3"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="627" fill="#0b0f13"/>
+  <rect width="1200" height="627" fill="url(#grid)"/>
+  <path d="M0 108H1200M840 0V627" stroke="#2b3b43" stroke-width="1"/>
+  <path d="M840 627 1200 267" stroke="#2b3b43" stroke-width="1" opacity=".55"/>
+
+  <text x="64" y="72" fill="#64b5c6" font-family="Fira Mono, monospace" font-size="34" font-weight="700" letter-spacing="6">AXE</text>
+  <text x="194" y="70" fill="#829097" font-family="Fira Mono, monospace" font-size="16" font-weight="500" letter-spacing="3">PORTABLE RESCUE SHELL</text>
+  <rect x="64" y="129" width="54" height="3" fill="#64b5c6"/>
+
+  <text x="64" y="235" fill="#eef2f3" font-family="Fira Sans, sans-serif" font-size="68" font-weight="700" letter-spacing="-2">When the system has</text>
+  <text x="64" y="317" fill="#eef2f3" font-family="Fira Sans, sans-serif" font-size="68" font-weight="700" letter-spacing="-2">nothing useful left.</text>
+
+  <text x="64" y="407" fill="#aeb8bc" font-family="Fira Sans, sans-serif" font-size="24">One executable. Shell, tools, diagnostics, and remote access.</text>
+  <text x="64" y="535" fill="#64b5c6" font-family="Fira Mono, monospace" font-size="16" font-weight="600" letter-spacing="4">ASSUME NOTHING. BRING EVERYTHING.</text>
+
+  <rect x="886" y="167" width="268" height="268" fill="#0e151a" stroke="#31444d"/>
+  <g transform="translate(902 183) scale(4)">
+    <path d="M15 10 32 28 49 9l6 7-17 17 17 17-7 5-16-17-17 17-6-7 17-16L9 16z" fill="url(#fade)"/>
+    <path d="M18 8 32 29 45 8M18 56 32 36 46 56" fill="none" stroke="#b4edf5" stroke-width="2" opacity=".55"/>
+  </g>
+  <rect x="886" y="451" width="268" height="42" fill="#64b5c6"/>
+  <text x="908" y="478" fill="#0b0f13" font-family="Fira Mono, monospace" font-size="14" font-weight="700" letter-spacing="3">STATIC // READY</text>
+</svg>

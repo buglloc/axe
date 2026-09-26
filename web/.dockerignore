@@ -1,0 +1,6 @@
+.git
+.omp
+.hugo_build.lock
+public
+Dockerfile
+justfile

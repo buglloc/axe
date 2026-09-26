@@ -1,0 +1,21 @@
+[package]
+name = "axe-store-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+axe-paths.workspace = true
+axe-artifact.workspace = true
+axe-tls-roots.workspace = true
+ciborium.workspace = true
+ed25519-dalek.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+ureq.workspace = true
+zstd.workspace = true

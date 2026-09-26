@@ -1,0 +1,36 @@
+diff --git a/libgobuster/http.go b/libgobuster/http.go
+--- a/libgobuster/http.go
++++ b/libgobuster/http.go
+@@ -3,6 +3,8 @@
+ import (
+ 	"context"
+ 	"crypto/tls"
++	"crypto/x509"
++	_ "embed"
+ 	"errors"
+ 	"fmt"
+ 	"io"
+@@ -12,6 +14,9 @@
+ 	"net/url"
+ 	"strings"
+ )
++
++//go:embed axe-ca-bundle.pem
++var axeCABundle []byte
+ 
+ // HTTPHeader holds a single key value pair of a HTTP header
+ type HTTPHeader struct {
+@@ -76,6 +81,13 @@
+ 		// enable TLS1.0 and TLS1.1 support
+ 		MinVersion: tls.VersionTLS10,
+ 	}
++	if !opt.NoTLSValidation {
++		certPool := x509.NewCertPool()
++		if ok := certPool.AppendCertsFromPEM(axeCABundle); !ok {
++			return nil, errors.New("failed to load embedded AXE CA bundle")
++		}
++		tlsConfig.RootCAs = certPool
++	}
+ 	if opt.TLSCertificate != nil {
+ 		tlsConfig.Certificates = []tls.Certificate{*opt.TLSCertificate}
+ 	}

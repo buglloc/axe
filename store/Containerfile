@@ -1,0 +1,26 @@
+FROM docker.io/library/rust:1.98.0-bookworm AS builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends clang cmake musl-tools \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /workspace
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY .cargo .cargo
+COPY tools tools
+COPY crates crates
+COPY store/nix store/nix
+COPY vendor vendor
+RUN rustup target add x86_64-unknown-linux-musl \
+    && cargo build --locked --release -p axe-store --target x86_64-unknown-linux-musl
+
+FROM docker.io/nixos/nix:2.31.2@sha256:29fc5fe207f159ceb0143c25c19c774062fee02ce5eda118f3067547b3054894
+
+WORKDIR /workspace
+COPY --from=builder /workspace/target/x86_64-unknown-linux-musl/release/axe-store /usr/local/bin/axe-store
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY flake.nix flake.lock ./
+COPY nix nix
+COPY store/nix store/nix
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV NIX_CONFIG="experimental-features = nix-command flakes"
+ENTRYPOINT ["/usr/local/bin/axe-store"]

@@ -1,0 +1,66 @@
+diff --git a/pkg/runner/banners.go b/pkg/runner/banners.go
+index 7fea4eb..f089c15 100644
+--- a/pkg/runner/banners.go
++++ b/pkg/runner/banners.go
+@@ -9,7 +9,6 @@ import (
+ 	"github.com/projectdiscovery/naabu/v2/pkg/scan"
+ 	"github.com/projectdiscovery/utils/auth/pdcp"
+ 	osutil "github.com/projectdiscovery/utils/os"
+-	updateutils "github.com/projectdiscovery/utils/update"
+ )
+ 
+ const banner = `
+@@ -91,12 +90,9 @@ func showNetworkInterfaces() error {
+ 	return nil
+ }
+ 
+-// GetUpdateCallback returns a callback function that updates naabu
++// GetUpdateCallback retains the legacy update flag as a no-op.
+ func GetUpdateCallback() func() {
+-	return func() {
+-		showBanner()
+-		updateutils.GetUpdateToolCallback("naabu", Version)()
+-	}
++	return func() {}
+ }
+ 
+ // AuthWithPDCP is used to authenticate with PDCP
+diff --git a/pkg/runner/options.go b/pkg/runner/options.go
+index 9f5b708..1f99041 100644
+--- a/pkg/runner/options.go
++++ b/pkg/runner/options.go
+@@ -18,7 +18,6 @@ import (
+ 	"github.com/projectdiscovery/goflags"
+ 	"github.com/projectdiscovery/gologger"
+ 	pdcpauth "github.com/projectdiscovery/utils/auth/pdcp"
+-	updateutils "github.com/projectdiscovery/utils/update"
+ )
+ 
+ var (
+@@ -79,8 +78,8 @@ type Options struct {
+ 	ProxyAuth         string              // Socks5 proxy authentication (username:password)
+ 	Resolvers         string              // Resolvers (comma separated or file)
+ 	baseResolvers     []string
+-	DnsOrder          string              // DNS resolution order (p/l/lp/pl)
+-	SystemResolver    bool                // Use system DNS resolver as fallback
++	DnsOrder          string          // DNS resolution order (p/l/lp/pl)
++	SystemResolver    bool            // Use system DNS resolver as fallback
+ 	OnResult          result.ResultFn // callback on final host result
+ 	OnReceive         result.ResultFn // callback on response receive
+ 	CSV               bool
+@@ -337,15 +336,6 @@ func ParseOptions() *Options {
+ 		os.Exit(0)
+ 	}
+ 
+-	if !options.DisableUpdateCheck {
+-		latestVersion, err := updateutils.GetToolVersionCallback("naabu", Version)()
+-		if err != nil {
+-			gologger.Verbose().Msgf("naabu version check failed: %v", err.Error())
+-		} else {
+-			gologger.Info().Msgf("Current naabu version %v %v", Version, updateutils.GetVersionDescription(Version, latestVersion))
+-		}
+-	}
+-
+ 	// Show network configuration and exit if the user requested it
+ 	if options.InterfacesList {
+ 		err := showNetworkInterfaces()

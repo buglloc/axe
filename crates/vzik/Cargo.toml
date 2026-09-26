@@ -1,0 +1,36 @@
+[package]
+name = "vzik"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Bounded agent-first Linux host collector"
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "vzik"
+path = "src/bin/vzik.rs"
+
+[dependencies]
+base64.workspace = true
+clap_builder.workspace = true
+serde.workspace = true
+porto-api = { path = "../porto-api" }
+serde_json.workspace = true
+glob = "0.3"
+sha2.workspace = true
+signal-hook.workspace = true
+zbus = { version = "5.19", default-features = false, features = ["async-io", "blocking-api"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1", features = ["fs"] }
+nix = { version = "0.30", features = ["net", "socket"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+nix = { version = "0.30", features = ["process", "signal"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nix = { version = "0.30", features = ["feature", "process", "user"] }

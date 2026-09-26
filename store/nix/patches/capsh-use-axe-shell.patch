@@ -1,0 +1,67 @@
+--- a/progs/capsh.c
++++ b/progs/capsh.c
+@@ -27,6 +27,7 @@
+ #include <grp.h>
+ #include <errno.h>
+ #include <ctype.h>
++#include <fcntl.h>
+ #include <sys/capability.h>
+ #include <sys/prctl.h>
+ #include <sys/securebits.h>
+@@ -512,6 +513,21 @@
+     unsigned i;
+     int strict = 0, quiet_start = 0, dont_set_env = 0;
+     const char *shell = SHELL;
++    const char *axe_shell = getenv("AXE_SHELL");
++    int axe_shell_fd = -1;
++
++    if (axe_shell != NULL && *axe_shell != 0) {
++        const char *axe_proc_shell = getenv("SHELL");
++
++        if (axe_proc_shell != NULL && *axe_proc_shell != 0) {
++            shell = axe_proc_shell;
++        }
++        axe_shell_fd = open(axe_shell, O_RDONLY | O_CLOEXEC);
++        if (axe_shell_fd == -1) {
++            perror("unable to open AXE_SHELL");
++            exit(1);
++        }
++    }
+ 
+     for (i=1; i<argc; ++i) {
+ 	if (!strcmp("--quiet", argv[i])) {
+@@ -972,6 +988,7 @@
+ 	} else if ((!strcmp("--", argv[i])) || (!strcmp("==", argv[i]))
+ 		   || (!strcmp("-+", argv[i])) ||  (!strcmp("=+", argv[i]))) {
+ 	    int launch = argv[i][1] == '+';
++	    int axe_default = 0;
+ 	    if (argv[i][0] == '=') {
+ 		if (quiet_start) {
+ 		    argv[i--] = strdup("--quiet");
+@@ -979,11 +996,15 @@
+ 	        argv[i] = find_self(argv[0]);
+ 	    } else {
+ 	        argv[i] = strdup(shell);
++		axe_default = axe_shell_fd != -1;
+ 	    }
+ 	    argv[argc] = NULL;
+ 	    /* Two ways to chain load - use cap_launch() or execve() */
+ 	    if (launch) {
+ 		do_launch(argv+i, envp);
++	    }
++	    if (axe_default && !launch) {
++		fexecve(axe_shell_fd, argv+i, envp);
+ 	    }
+ 	    execve(argv[i], argv+i, envp);
+ 	    fprintf(stderr, "execve '%s' failed!\n", argv[i]);
+@@ -991,6 +1012,10 @@
+ 	    exit(1);
+ 	} else if (!strncmp("--shell=", argv[i], 8)) {
+ 	    shell = argv[i]+8;
++	    if (axe_shell_fd != -1) {
++		close(axe_shell_fd);
++		axe_shell_fd = -1;
++	    }
+ 	} else if (!strncmp("--has-p=", argv[i], 8)) {
+ 	    cap_value_t cap;
+ 	    cap_flag_value_t enabled;

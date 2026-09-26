@@ -1,0 +1,41 @@
+diff --git a/src/axe_roots.rs b/src/axe_roots.rs
+new file mode 100644
+index 0000000..22a3cae
+--- /dev/null
++++ b/src/axe_roots.rs
+@@ -0,0 +1,15 @@
++use anyhow::{Context, Result, ensure};
++use reqwest::Certificate;
++
++const AXE_CA_BUNDLE: &[u8] = include_bytes!("axe-ca-bundle.pem");
++
++pub fn certificates() -> Result<Vec<Certificate>> {
++    let certificates = Certificate::from_pem_bundle(AXE_CA_BUNDLE)
++        .context("failed to parse embedded AXE CA bundle")?;
++    ensure!(
++        !certificates.is_empty(),
++        "embedded AXE CA bundle must contain at least one certificate"
++    );
++
++    Ok(certificates)
++}
+diff --git a/src/main.rs b/src/main.rs
+index e3b607f..725d3fb 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,5 +1,6 @@
+ #![allow(clippy::bool_assert_comparison)]
+ mod auth;
++mod axe_roots;
+ mod buffer;
+ mod cli;
+ mod content_disposition;
+@@ -211,7 +212,7 @@ fn run(args: Cli) -> Result<ExitCode> {
+         }
+     });
+     client = match verify {
+-        Verify::Yes => client,
++        Verify::Yes => client.tls_certs_only(axe_roots::certificates()?),
+         Verify::No => client.danger_accept_invalid_certs(true),
+         Verify::CustomCaBundle(path) => {
+             if args.native_tls {

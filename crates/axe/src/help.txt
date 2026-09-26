@@ -1,0 +1,53 @@
+AXE — Assume nothing. Bring everything.
+
+Usage:
+  axe [BRUSH OPTIONS] [SCRIPT]
+  axe -c COMMAND [ARG ...]
+  axe APPLET [--] [ARG ...]
+  axe --applet NAME [--] [ARG ...]
+  APPLET [ARG ...]                 when argv[0] names a bundled applet
+
+Resolution order:
+  alias/function → shell builtin → bundled applet → AXE Store → PATH on transient failure → status 127/126
+  Child processes use a best-effort BusyBox-style PATH bridge; stale bridge entries are removed.
+  Linux bundled launch uses retained-fd execveat/fexecve, then one checked original-or-relay path.
+  SHELL/AXE_SHELL expose the same selected publishable path; descriptor-only launch fabricates neither.
+  Without a usable descriptor or executable path Brush builtins remain available, bundled children cannot launch, and sshd fails before bind.
+
+Repository configuration:
+  config/aliases.json              compiled applet aliases
+  config/store.json                AXE Store endpoints, limits, TTL and storage roots
+  config/relay.json                compiled TCP and QUIC relay endpoints
+  config/sshd.json                 compiled default SSH principals
+  keys/                            ignored SSH/relay/AXE Store trust and credentials
+  flake.nix, flake.lock, store/nix/packages/*.nix
+                                   Nix producer graph and bootstrap inventory
+
+Commands:
+  axe --list                       print every compiled applet name
+  commands [NAME]                  list available AXE commands as JSON
+                                   or describe one command without running it
+  doctor [--path DIR] [--json]     diagnose runtime, shell, isolation, and restrictions
+  clean-tools                       remove metadata for the current Store identity
+  refresh-tools                     fetch and verify the current signed Index
+  axe APPLET -- --help             print applet-specific help
+  vzik [collect]                   bounded host/systemd/D-Bus JSONL collection
+  sshd --daemon [--log-file FILE]    supervised SSH service; restarts failed workers
+                                   Store mode: auto, cache-only, or off
+                                   SSH certificates only; edition-specific
+                                   principals, user CA, and host key
+  axe-relay                         separate relay service with dashboard/API/CLI
+
+AXE Store Index v2 pins immutable signed manifests by SHA-256; metadata and
+artifacts are signature/digest verified. Cache selection starts with
+$AXE_STORE_DIR, then platform cache and writable filesystem/tmpfs roots.
+Metadata is isolated by Store URL, trusted key IDs, and channel even when
+editions share a fallback root; clean-tools preserves shared objects and other
+editions' metadata. Linux single binaries fall back to sealed memfd.
+Transient AXE Store failures and removal of the current target may use a
+different executable from PATH; integrity failures return 126.
+AXE_STORE_MODE=cache-only forbids Store HTTP while retaining verified cache;
+AXE_STORE_MODE=off omits Store commands. Transient HTTP failures defer retries
+for 30 seconds across processes sharing the same Store identity and cache.
+
+Brush options such as --norc, --noprofile, -c, -e, -u, -x and -O are accepted.

@@ -1,0 +1,97 @@
+{
+  "skill_name": "vzik",
+  "evals": [
+    {
+      "id": 1,
+      "name": "слепой-локальный-инвентарь-сокетов",
+      "prompt": "На этой Linux-машине собери bounded evidence о слушающих сокетах и процессах-владельцах. Разрешаю локальное чтение procfs для этой цели; ничего не устанавливай и не сканируй сеть.",
+      "expected_output": "Выбирается vzik; агент запускает только локальную `network.listeners` с явным лимитом, проверяет terminal outcome/coverage и не подменяет наблюдение сетевым сканером или host utility.",
+      "files": [],
+      "expectations": [
+        "Запускается локальная capability `vzik network listeners --max-items N`, а не широкий `collect`",
+        "Не запускаются nmap, ss, netstat и другие внешние probes/utilities",
+        "Пустые owner records не объявляются отсутствием процесса; вывод квалифицирован namespace и terminal coverage"
+      ],
+      "covers": "Слепой позитивный маршрут; узкий bounded сбор; граница сетевого probing"
+    },
+    {
+      "id": 2,
+      "name": "слепой-негативный-владелец-ip",
+      "prompt": "Определи, какому внутреннему сервису принадлежит IP 2a02:6b8::1, и покажи его сетевого владельца.",
+      "expected_output": "vzik не выбирается: вопрос о владельце неизвестного внутреннего IP маршрутизируется к специализированному discovery владельцу, а локальная машина не исследуется.",
+      "files": [],
+      "expectations": [
+        "Не запускается локальный `vzik collect` или `vzik network ...`",
+        "Выбран инструмент или skill идентификации внутреннего IP",
+        "Ответ не выдаёт локальную namespace за источник владения удалённым IP"
+      ],
+      "covers": "Слепой adjacent negative; корректная граница владения"
+    },
+    {
+      "id": 3,
+      "name": "sealed-degraded-сохраняет-покрытие",
+      "prompt": "Используя skill://vzik, на изолированной тестовой машине собери `dbus list --socket /definitely/missing/vzik-bus` через capture в новые приватные пути. Разрешаю только этот targeted сбор; не подключайся к другим сокетам и не запускай baseline. Объясни результат и покрытие.",
+      "expected_output": "Сбор завершается кодом 3 с валидным `stream_end.outcome=degraded`, `dbus.list` unavailable; receipt существует и `summarize` возвращает 0, но не свидетельствует о существовании или отсутствии имен на настоящем bus.",
+      "files": [],
+      "expectations": [
+        "Только указанный несуществующий Unix socket; не выполняются baseline, системная D-Bus команда или сетевые probes",
+        "Сохранены отдельные capture, stderr и receipt, stdout summary указывает `artifact_status=sealed` и отражает planned/started/not-started покрытие",
+        "Сверяются статус collection 3, terminal degraded и capability unavailable; успешный status `summarize` 0 не трактуется как complete scope",
+        "Отсутствие данных на указанном socket не подменяется утверждением о всех D-Bus именах машины"
+      ],
+      "covers": "Protocol v3 sealed degraded; capture artifacts; scoped negative evidence"
+    },
+    {
+      "id": 4,
+      "name": "двухступенчатое-discovery",
+      "prompt": "Используя skill://vzik, найди точный контракт capability для чтения ограниченного содержимого одного файла, не запрашивая подробности всего каталога.",
+      "expected_output": "Агент читает компактный `vzik capabilities`, выбирает `file.read`, затем вызывает `vzik capabilities file.read` и использует его request schema и limits; эвристического recommend шага нет.",
+      "files": [],
+      "expectations": [
+        "Сначала используется компактный индекс без request schema каждой capability",
+        "Детали запрашиваются точным ID `file.read`",
+        "Не вызывается удалённая команда `vzik recommend` и не строится shell command из текста"
+      ],
+      "covers": "Compact/detail discovery; clean removal of recommendation heuristic"
+    },
+    {
+      "id": 5,
+      "name": "capture-existing-path-не-перезаписывает",
+      "prompt": "Используя skill://vzik, в свежем приватном каталоге дважды выполни `capture dbus list --socket /definitely/missing/vzik-bus` с одинаковыми output и receipt путями; проверь, что стало с артефактами первого сбора. Никаких других источников не читай.",
+      "expected_output": "Первый сбор создает запечатанный degraded capture с кодом 3; повторный завершается кодом 4 и stderr JSONL code `capture_path_exists`, не перезаписывает первый capture, stderr или receipt.",
+      "files": [],
+      "expectations": [
+        "Первый capture сохранен и имеет валидный receipt; повторный capture не портит его содержимое и хеши",
+        "Проверен статус 4 повторного запуска и структурированный `code == \"capture_path_exists\"` вместо парсинга message",
+        "Существующие файлы не удаляются и не объявляются результатом повторного сбора"
+      ],
+      "covers": "Capture non-overwrite boundary; collision failure; preserved receipt"
+    },
+    {
+      "id": 6,
+      "name": "структурированная-cli-ошибка",
+      "prompt": "Используя skill://vzik, вызови заведомо неизвестную capability `porto.unknown` через discovery и объясни ошибку программно, не разбирая message.",
+      "expected_output": "Команда завершается кодом 2; агент использует stderr JSONL `details.kind == \"unknown_capability\"` и `details.capability == \"porto.unknown\"`, а не сопоставление текста сообщения.",
+      "files": [],
+      "expectations": [
+        "Проверяется process status 2",
+        "Ветвление выполняется по `details.kind` и `details.capability`",
+        "Human-readable `message` не используется как стабильный API"
+      ],
+      "covers": "Structured CLI errors; stable machine branching"
+    },
+    {
+      "id": 7,
+      "name": "file-read-не-следует-конечной-ссылке",
+      "prompt": "Используя skill://vzik, создай в новом приватном тестовом каталоге обычный файл с маркером и symlink на него. Разрешаю читать только эти собственные тестовые пути. Сначала выполни `file stat` на ссылке, затем попробуй `file read --max-bytes 16 --` на той же ссылке; сообщи статусы и outcome, не открывая системные файлы.",
+      "expected_output": "`file.stat` показывает тип symlink и link_target; `file.read` на конечной ссылке выдает unavailable/degraded со статусом 3 и не раскрывает маркер содержимого. Агент различает конечную ссылку и ссылки в промежуточных компонентах.",
+      "files": [],
+      "expectations": [
+        "Опции `file read` стоят перед `--`, а путь после `--`; reads ограничены собственным тестовым каталогом",
+        "В `file.read` нет `file_chunk` с содержимым маркера при конечном symlink",
+        "Статус 3 сопровождается валидным stream_end degraded, а не ошибочно объявляется complete; не выполняется общий filesystem scan"
+      ],
+      "covers": "Targeted path approval; final symlink refusal; valid degraded status"
+    }
+  ]
+}

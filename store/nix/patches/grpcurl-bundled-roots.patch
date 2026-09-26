@@ -1,0 +1,59 @@
+diff --git a/grpcurl.go b/grpcurl.go
+--- a/grpcurl.go
++++ b/grpcurl.go
+@@ -11,6 +11,7 @@
+ 	"context"
+ 	"crypto/tls"
+ 	"crypto/x509"
++	_ "embed"
+ 	"encoding/base64"
+ 	"errors"
+ 	"fmt"
+@@ -40,6 +41,9 @@
+ 	"google.golang.org/protobuf/types/known/emptypb"
+ 	"google.golang.org/protobuf/types/known/structpb"
+ )
++
++//go:embed axe-ca-bundle.pem
++var axeCABundle []byte
+ 
+ // ListServices uses the given descriptor source to return a sorted list of fully-qualified
+ // service names.
+@@ -527,7 +531,7 @@
+ }
+ 
+ // ClientTLSConfig builds transport-layer config for a gRPC client using the
+-// given properties. If cacertFile is blank, only standard trusted certs are used to
++// given properties. If cacertFile is blank, the embedded AXE CA bundle is used to
+ // verify the server certs. If clientCertFile is blank, the client will not use a client
+ // certificate. If clientCertFile is not blank then clientKeyFile must not be blank.
+ func ClientTLSConfig(insecureSkipVerify bool, cacertFile, clientCertFile, clientKeyFile string) (*tls.Config, error) {
+@@ -544,19 +548,20 @@
+ 
+ 	if insecureSkipVerify {
+ 		tlsConf.InsecureSkipVerify = true
+-	} else if cacertFile != "" {
+-		// Create a certificate pool from the certificate authority
++	} else {
++		ca := axeCABundle
++		if cacertFile != "" {
++			fileCA, err := os.ReadFile(cacertFile)
++			if err != nil {
++				return nil, fmt.Errorf("could not read ca certificate: %v", err)
++			}
++			ca = fileCA
++		}
++
+ 		certPool := x509.NewCertPool()
+-		ca, err := os.ReadFile(cacertFile)
+-		if err != nil {
+-			return nil, fmt.Errorf("could not read ca certificate: %v", err)
+-		}
+-
+-		// Append the certificates from the CA
+ 		if ok := certPool.AppendCertsFromPEM(ca); !ok {
+ 			return nil, errors.New("failed to append ca certs")
+ 		}
+-
+ 		tlsConf.RootCAs = certPool
+ 	}

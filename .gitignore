@@ -1,0 +1,15 @@
+target/
+/.nuclei-config
+/nix/builders.conf
+/keys/
+/dist/
+/store/dist/
+/store/.axe-store-stage*/
+/store/.axe-store-work*/
+/store/bootstrap.json.*
+/store/bootstrap-index.cbor.zst
+*.tar
+/web/public/
+/.axe-*
+/.axe/
+*.tar.gz

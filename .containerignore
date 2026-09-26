@@ -1,0 +1,12 @@
+.git
+.omp
+.devcontainer
+.axe
+target
+**/target
+dist
+store/dist
+store/.axe-store-stage*
+store/.axe-store-work*
+keys
+store/tests

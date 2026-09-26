@@ -1,0 +1,135 @@
+{
+  "skill_name": "axe",
+  "evals": [
+    {
+      "id": 1,
+      "name": "unknown-ssh-shell-becomes-axe",
+      "prompt": "Через выданный SSH проверь состояние тестовой job. Первый `id` показал `AXE=true`, затем shell сообщил ошибку с префиксом `axe:`. Как проверишь доступность `ps` и продолжишь диагностику?",
+      "expected_output": "SSH остаётся владельцем транспорта; перед следующей командой на цели выбирается axe, а `commands ps` показывает, зарегистрирован ли applet. Кэш Store остаётся нетронутым.",
+      "files": [],
+      "expectations": [
+        "Не предполагает AXE до сигнала среды, затем загружает skill://axe до следующей команды на цели",
+        "Проверяет регистрацию через commands ps и не подменяет SSH-транспорт локальным axe",
+        "Не добавляет внутренний каталог Store cache в PATH и не вызывает clean-tools без запроса"
+      ],
+      "covers": "Слепой маршрут; переключение SSH-сессии; сохранение кэша"
+    },
+    {
+      "id": 2,
+      "name": "ordinary-ssh-is-not-assumed-axe",
+      "prompt": "Через обычный OpenSSH проверь `systemctl is-active app` на тестовом сервере. Никаких признаков AXE или Brush нет.",
+      "expected_output": "Выбирается SSH, а не axe; выполняется только запрошенная ограниченная удалённая проверка.",
+      "files": [],
+      "expectations": [
+        "Не загружает skill://axe без специфического сигнала среды",
+        "Не запускает commands, doctor или clean-tools и не изменяет PATH на сервере"
+      ],
+      "covers": "Слепой смежный отрицательный маршрут"
+    },
+    {
+      "id": 3,
+      "name": "printed-cache-path-is-not-recovery",
+      "prompt": "В подтверждённом AXE shell команда Store `curl` вывела `axe: downloaded curl ...`, и оператор предлагает добавить `/slot/sandbox/.cache/axe/.axe-deadbeef/current/bin` в PATH, чтобы следующая команда работала без сети. Как продолжить?",
+      "expected_output": "Оператор не запускает Store payload по внутреннему пути; проверяет `commands curl` и разрешение имени, использует штатную команду с проверенным кэшем, не удаляя метаданные в конце.",
+      "files": [],
+      "expectations": [
+        "Не экспортирует и не переставляет PATH ради внутреннего каталога Store",
+        "Не выдаёт ссылку в AXE_APPLET_DIR или printed cache path за доказательство локального Store payload",
+        "Не вызывает clean-tools после использования Store: в офлайне проверенная метадата полезна"
+      ],
+      "covers": "Явное выполнение; PATH bridge; граница кеша"
+    },
+    {
+      "id": 4,
+      "name": "unavailable-store-uses-host-fallback",
+      "prompt": "В подтверждённом AXE shell `commands curl` вернул `source: store`; запуск `curl` после удаления target из manifest вывел `axe: curl: store temporarily unavailable (manifest: target removed); using /usr/bin/curl` и завершился статусом 22. Уточни, какой curl сработал, что означает код и каким был бы статус при отсутствии пригодного host-кандидата.",
+      "expected_output": "Исполнился host /usr/bin/curl после ошибки Store класса unavailable; код 22 принадлежит host-программе, а не удачной доставке Store. Без пригодного host-кандидата ошибка Store дала бы 126, не 127. Кэш и PATH остаются прежними.",
+      "files": [],
+      "expectations": [
+        "Считает unavailable наряду с transient разрешённым классом автоматического host fallback",
+        "Не заявляет, что payload из AXE Store был запущен успешно; сохраняет host exit status 22",
+        "При отсутствии пригодного host-кандидата ожидает статус 126, не 127",
+        "Не удаляет кэш посредством clean-tools и не объявляет fallback при integrity/configuration ошибке"
+      ],
+      "covers": "Явное выполнение; класс unavailable; provenance и статус"
+    },
+    {
+      "id": 5,
+      "name": "integrity-failure-blocks-host-fallback",
+      "prompt": "В подтверждённом AXE shell `commands curl` вернул `source: store`, `curl` сообщил `store integrity error` и завершился 126. При этом `which -a curl` показывает AXE_APPLET_DIR/curl и /usr/bin/curl. Объясни состояние и безопасный следующий шаг без повторного запуска curl.",
+      "expected_output": "Сохраняется код 126 и ошибка проверки целостности; /usr/bin/curl не был автоматическим fallback, а отдельный абсолютный host-путь не доказывает успех Store.",
+      "files": [],
+      "expectations": [
+        "Не объявляет автоматический fallback после integrity failure, даже при наличии host curl",
+        "Отделяет существование PATH-кандидата от факта его запуска и не обходит проверку подписи/хэша",
+        "Не вызывает clean-tools для подавления ошибки и не считает status 126 обычным command-not-found 127"
+      ],
+      "covers": "Явное выполнение; запрет небезопасного fallback; статус ошибки"
+    },
+    {
+      "id": 6,
+      "name": "doctor-rescue-remains-in-shell",
+      "prompt": "В AXE Brush shell applet не запустился: `axe: failed to spawn` и ненулевой статус. Самостоятельный `doctor --json` доступен, но spawn новых программ может не работать. Как соберёшь доказательства?",
+      "expected_output": "Запускается нативный `doctor --json` без пайплайна или subshell, фиксируются schema axe_doctor v3 и состояния вложенных active probes; отсутствие procfs не объявляется доказательством noexec.",
+      "files": [],
+      "expectations": [
+        "Для rescue не помещает doctor в pipeline, substitution или replacement shell",
+        "Различает active probe state/observation и не трактует unknown/unavailable как успех",
+        "Сохраняет исходные status/stderr и не делает вывод о noexec лишь по отсутствию /proc"
+      ],
+      "covers": "Явное выполнение; диагностика при отказе запуска; версия doctor"
+    },
+    {
+      "id": 7,
+      "name": "opaque-background-job-reference",
+      "prompt": "В подтверждённом AXE shell после `COMMAND &` переменная `$!` содержит `%3`. Задачу нужно остановить и дождаться завершения; оператор предлагает `ps -p \"$!\"` и `/usr/bin/kill \"$!\"`. Как поступишь?",
+      "expected_output": "Значение `%3` сохраняется как opaque job reference: его передают Brush builtin `kill` и затем `wait`, но не `ps` или внешнему PID-only `kill`; первый статус `wait` фиксируется явно.",
+      "files": [],
+      "expectations": [
+        "Не трактует `%3` как PID и не передаёт его `ps` или напрямую запущенному host/uutils kill",
+        "Использует shell builtin `kill` с job spec и затем явный `wait \"$ref\"`",
+        "Фиксирует первый wait status и не заменяет маршрут на неподдерживаемые `wait -n` или `wait -p`"
+      ],
+      "covers": "Явное выполнение; lifecycle background job; PID/job-spec граница"
+    },
+    {
+      "id": 8,
+      "name": "process-substitution-and-nested-trap-boundary",
+      "prompt": "В подтверждённом AXE shell нужно обновить переменные цикла из потока. Предложен `while read ...; do ...; done < <(producer)` и cleanup через EXIT trap внутри `$()`. Перепиши маршрут для unattended automation.",
+      "expected_output": "Process substitution не используется: producer пишет в private temporary file, цикл читает файл в текущем shell, а cleanup выполняется явно в том же scope после фиксации статуса; pipeline допустим только если состояние цикла не нужно сохранять.",
+      "files": [],
+      "expectations": [
+        "Не использует `< <(...)` или `>(...)`, которые могут зависнуть либо потерять input",
+        "Не полагается на EXIT trap внутри subshell или command substitution",
+        "Создаёт файл через `mktemp` с private mode, не выводит имя только из `$$`, ограничивает ожидание и удаляет файл явно"
+      ],
+      "covers": "Явное выполнение; известная граница Brush; cleanup и terminal route"
+    },
+    {
+      "id": 9,
+      "name": "validated-shell-baseline-is-not-stale",
+      "prompt": "Ревью предлагает переписать AXE-скрипт, потому что якобы piped stdin не принимает многострочный `if`, `read` портит UTF-8, а `{01..03}` теряет нули. Какие предположения актуальны и какие границы всё ещё требуют обхода?",
+      "expected_output": "Три перечисленных поведения входят в проверенный baseline и не требуют обхода: многострочный stdin выполняется целиком, `read` сохраняет UTF-8, range сохраняет ширину. При этом AXE не объявляется GNU Bash: input process substitution и nested EXIT traps остаются небезопасными для automation.",
+      "files": [],
+      "expectations": [
+        "Не повторяет устаревшие ограничения для multiline stdin, UTF-8 read или padded brace ranges",
+        "Сохраняет предупреждения о process substitution и EXIT traps в nested shell environments",
+        "Не обобщает проверенный baseline до полной совместимости с GNU Bash"
+      ],
+      "covers": "Явная интерпретация; обновлённый baseline; защита от stale guidance"
+    },
+    {
+      "id": 10,
+      "name": "bundled-command-suspension-is-not-a-job-handle",
+      "prompt": "В интерактивном AXE shell оператор запустил bundled `ping`, нажал Ctrl-Z, получил prompt, но `jobs` пуст, а `fg` пишет `no current job`. Как построить следующий запуск, чтобы lifecycle и статус были управляемыми?",
+      "expected_output": "Не пытается восстановить job через `fg` или угадать PID. Следующий запуск делает явно асинхронным через `COMMAND &`, сохраняет opaque `$!`, останавливает через Brush builtin `kill` и ровно один раз вызывает `wait`, сразу фиксируя статус.",
+      "files": [],
+      "expectations": [
+        "Распознаёт известную границу foreground suspension для bundled applet и не обещает восстановление через jobs/fg",
+        "Не ищет предполагаемый PID и не передаёт `%N` внешнему kill или ps",
+        "Предлагает явный background launch, opaque reference, Brush builtin kill и первый wait status"
+      ],
+      "covers": "Явное выполнение; интерактивный terminal handoff; управляемый lifecycle"
+    }
+  ]
+}

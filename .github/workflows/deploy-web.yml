@@ -1,0 +1,39 @@
+name: Deploy website to S3
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy main → axe.buglloc.com
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Hugo
+        uses: peaceiris/actions-hugo@v3
+        with:
+          hugo-version: "0.166.0"
+          extended: true
+
+      - name: Build website
+        run: hugo --source web --gc --minify --cleanDestinationDir
+
+      - name: Sync to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'ru-central1' }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL || 'https://storage.yandexcloud.net' }}
+        run: |
+          test -s web/public/index.html
+          aws s3 sync web/public/ s3://axe.buglloc.com/ --delete \
+            --region "$AWS_DEFAULT_REGION" --endpoint-url "$S3_ENDPOINT_URL"

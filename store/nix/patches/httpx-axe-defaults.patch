@@ -1,0 +1,42 @@
+diff --git a/common/httpx/httpx.go b/common/httpx/httpx.go
+index 8b50186..ffdeece 100644
+--- a/common/httpx/httpx.go
++++ b/common/httpx/httpx.go
+@@ -50,6 +50,7 @@ type HTTPX struct {
+ func New(options *Options) (*HTTPX, error) {
+ 	httpx := &HTTPX{}
+ 	fastdialerOpts := fastdialer.DefaultOptions
++	fastdialerOpts.BaseResolvers = nil
+ 
+ 	// if the user specified any custom resolver disables system resolvers and syscall lookup fallback
+ 	if len(options.Resolvers) > 0 {
+diff --git a/runner/options.go b/runner/options.go
+index e00ca11..8662159 100644
+--- a/runner/options.go
++++ b/runner/options.go
+@@ -32,7 +32,6 @@ import (
+ 	sliceutil "github.com/projectdiscovery/utils/slice"
+ 	stringsutil "github.com/projectdiscovery/utils/strings"
+ 	"github.com/projectdiscovery/utils/structs"
+-	updateutils "github.com/projectdiscovery/utils/update"
+ 	wappalyzer "github.com/projectdiscovery/wappalyzergo"
+ )
+ 
+@@ -682,17 +681,6 @@ func ParseOptions() *Options {
+ 		os.Exit(0)
+ 	}
+ 
+-	if !options.DisableUpdateCheck {
+-		latestVersion, err := updateutils.GetToolVersionCallback("httpx", Version)()
+-		if err != nil {
+-			if options.Verbose {
+-				gologger.Error().Msgf("httpx version check failed: %v", err.Error())
+-			}
+-		} else {
+-			gologger.Info().Msgf("Current httpx version %v %v", Version, updateutils.GetVersionDescription(Version, latestVersion))
+-		}
+-	}
+-
+ 	if err := options.ValidateOptions(); err != nil {
+ 		gologger.Fatal().Msgf("%s\n", err)
+ 	}

@@ -1,0 +1,272 @@
+[package]
+name = "axe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "AXE shell with statically bundled Unix applets"
+license.workspace = true
+
+[[bin]]
+name = "axe"
+path = "src/main.rs"
+
+[features]
+default = ["bundled-all"]
+bundled-coreutils = ["dep:brush-coreutils-builtins", "applet-admin-coreutils"]
+applet-grep = ["dep:uu_grep"]
+applet-sed = ["dep:sed-rs", "dep:clap"]
+applet-findutils = ["dep:findutils"]
+applet-diffutils = ["dep:diffutils", "dep:similar"]
+applet-tar = ["dep:tar", "dep:flate2", "dep:bzip2", "dep:lzma-rust2"]
+applet-gzip = ["dep:flate2"]
+applet-awk = ["dep:awk-rs"]
+applet-file = ["dep:clap", "dep:file-format"]
+applet-http = ["dep:axe-tls-roots", "dep:clap", "dep:ureq", "dep:url"]
+applet-jq = ["dep:jaq-all"]
+applet-goblin = ["dep:clap", "dep:goblin"]
+applet-strings = ["dep:goblin"]
+applet-tree = ["dep:clap", "dep:rust_tree"]
+applet-which = ["dep:clap", "dep:which"]
+applet-admin-coreutils = [
+    "dep:clap",
+    "dep:uucore",
+    "dep:uu_chgrp",
+    "dep:uu_chmod",
+    "dep:uu_chown",
+    "dep:uu_chroot",
+    "dep:uu_groups",
+    "dep:uu_hostid",
+    "dep:uu_id",
+    "dep:uu_install",
+    "dep:uu_kill",
+    "dep:uu_logname",
+    "dep:uu_mkfifo",
+    "dep:uu_mknod",
+    "dep:uu_nice",
+    "dep:uu_nohup",
+    "dep:uu_pathchk",
+    "dep:uu_pinky",
+    "dep:uu_stat",
+    "dep:uu_stty",
+    "dep:uu_timeout",
+    "dep:uu_tty",
+    "dep:uu_uptime",
+    "dep:uu_users",
+    "dep:uu_test",
+    "dep:uu_who",
+]
+applet-procutils = [
+    "dep:clap",
+    "dep:procps-uucore",
+    "dep:procutils-free",
+    "dep:procutils-hugetop",
+    "dep:procutils-pgrep",
+    "dep:procutils-pkill",
+    "dep:procutils-pmap",
+    "dep:procutils-ps",
+    "dep:procutils-pwdx",
+    "dep:procutils-skill",
+    "dep:procutils-slabtop",
+    "dep:procutils-snice",
+    "dep:procutils-sysctl",
+    "dep:procutils-tload",
+    "dep:procutils-top",
+    "dep:procutils-vmstat",
+    "dep:procutils-w",
+    "dep:procutils-watch",
+    "dep:uu_pidof",
+    "dep:uu_pidwait",
+]
+applet-util-linux = [
+    "dep:util-linux-uucore",
+    "dep:uu_dmesg",
+    "dep:uu_hexdump",
+    "dep:uu_last",
+    "dep:uu_mountpoint",
+]
+applet-daemons = [
+    "dep:bytes",
+    "dep:ciborium",
+    "dep:clap",
+    "dep:rand",
+    "dep:quinn",
+    "dep:russh",
+    "dep:russh-sftp",
+    "dep:socket2",
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:signal-hook",
+    "dep:rustls",
+    "dep:rustls-pemfile",
+    "dep:whoami",
+    "dep:yamux",
+]
+applet-linux-network = [
+    "dep:clap",
+    "dep:futures-util",
+    "dep:hickory-resolver",
+    "dep:netlink-packet-route",
+    "dep:rtnetlink",
+    "dep:surge-ping",
+    "dep:tokio",
+]
+applet-linux-storage = ["dep:linux-raw-sys"]
+applet-compression = ["dep:bzip2", "dep:lzma-rust2"]
+applet-linux-inspect = ["dep:clap", "dep:flate2", "dep:lzma-rust2", "dep:regex"]
+applet-inotify = ["dep:chrono", "dep:clap", "dep:inotify", "dep:regex", "dep:signal-hook"]
+applet-vzik = []
+on-demand = ["dep:axe-artifact", "dep:axe-store-client", "dep:axe-tls-roots", "dep:which"]
+bundled-all = [
+    "bundled-coreutils",
+    "applet-grep",
+    "applet-sed",
+    "applet-findutils",
+    "applet-diffutils",
+    "applet-tar",
+    "applet-gzip",
+    "applet-awk",
+    "applet-http",
+    "applet-file",
+    "applet-jq",
+    "applet-goblin",
+    "applet-strings",
+    "applet-tree",
+    "applet-which",
+    "applet-procutils",
+    "applet-util-linux",
+    "applet-linux-network",
+    "applet-linux-storage",
+    "applet-compression",
+    "applet-linux-inspect",
+    "applet-inotify",
+    "applet-daemons",
+    "applet-vzik",
+    "on-demand",
+]
+
+[dependencies]
+axe-paths.workspace = true
+axe-artifact = { workspace = true, optional = true }
+axe-store-client = { workspace = true, optional = true }
+axe-tls-roots = { workspace = true, optional = true }
+awk-rs = { version = "=0.2.0", optional = true }
+base64.workspace = true
+bytes = { workspace = true, optional = true }
+brush-shell = { version = "=0.4.0", default-features = false, features = ["minimal", "reedline"] }
+brush-coreutils-builtins = { version = "=0.1.0", optional = true, features = ["coreutils.all"] }
+bzip2 = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+diffutils = { version = "0.5.0", optional = true }
+findutils = { version = "0.10.0", optional = true }
+flate2 = { workspace = true, optional = true }
+file-format = { version = "0.29.0", features = ["reader"], optional = true }
+lzma-rust2 = { workspace = true, optional = true }
+hickory-resolver = { workspace = true, optional = true }
+object.workspace = true
+regex = { workspace = true, optional = true }
+goblin = { workspace = true, optional = true }
+jaq-all = { workspace = true, optional = true }
+memmap2 = "0.9"
+sed-rs = { version = "2.0.0", optional = true }
+similar = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+serde_json.workspace = true
+sha2.workspace = true
+serde.workspace = true
+uucore = { version = "=0.12.0", optional = true }
+uu_chgrp = { version = "=0.12.0", optional = true }
+uu_chmod = { version = "=0.12.0", optional = true }
+uu_chown = { version = "=0.12.0", optional = true }
+uu_groups = { version = "=0.12.0", optional = true }
+uu_id = { version = "=0.12.0", optional = true }
+uu_kill = { version = "=0.12.0", optional = true }
+uu_logname = { version = "=0.12.0", optional = true }
+uu_mkfifo = { version = "=0.12.0", optional = true }
+uu_mknod = { version = "=0.12.0", optional = true }
+uu_nohup = { version = "=0.12.0", optional = true }
+uu_stat = { version = "=0.12.0", optional = true }
+uu_pathchk = { version = "=0.12.0", optional = true }
+uu_stty = { version = "=0.12.0", optional = true }
+uu_timeout = { version = "=0.12.0", optional = true }
+uu_test = { version = "=0.12.0", optional = true }
+uu_tty = { version = "=0.12.0", optional = true }
+uu_grep = { version = "0.2.0", optional = true }
+rand = { workspace = true, optional = true }
+quinn = { workspace = true, optional = true }
+russh = { version = "0.63.1", default-features = false, features = ["ring"], optional = true }
+rustls = { workspace = true, optional = true }
+rustls-pemfile = { workspace = true, optional = true }
+russh-sftp = { version = "=2.4.0", optional = true }
+rust_tree = { version = "=1.3.0", optional = true }
+tokio = { version = "1.52", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"], optional = true }
+which = { workspace = true, optional = true }
+ureq = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+vzik.workspace = true
+yamux = { version = "0.14.0", optional = true }
+whoami = { version = "2.1.3", optional = true }
+tokio-util = { version = "0.7.19", features = ["compat"], optional = true }
+socket2 = { version = "0.6", optional = true }
+ciborium = { workspace = true, optional = true }
+zstd.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["fs", "term"] }
+signal-hook = { workspace = true, optional = true }
+libc.workspace = true
+uu_chroot = { version = "=0.12.0", optional = true }
+uu_hostid = { version = "=0.12.0", optional = true }
+uu_install = { version = "=0.12.0", optional = true }
+uu_nice = { version = "=0.12.0", optional = true }
+uu_pinky = { version = "=0.12.0", optional = true }
+uu_uptime = { version = "=0.12.0", optional = true }
+uu_users = { version = "=0.12.0", optional = true }
+uu_who = { version = "=0.12.0", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+chrono = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+inotify = { workspace = true, optional = true }
+linux-raw-sys = { workspace = true, optional = true }
+netlink-packet-route = { workspace = true, optional = true }
+rtnetlink = { workspace = true, optional = true }
+surge-ping = { workspace = true, optional = true }
+procps-uucore = { package = "uucore", version = "=0.7.0", optional = true }
+procutils-free = { version = "=0.2.0", optional = true }
+procutils-hugetop = { version = "=0.2.0", optional = true }
+procutils-pgrep = { version = "=0.2.0", optional = true }
+procutils-pkill = { version = "=0.2.0", optional = true }
+procutils-pmap = { version = "=0.2.0", optional = true }
+procutils-ps = { version = "=0.2.0", optional = true }
+procutils-pwdx = { version = "=0.2.0", optional = true }
+procutils-skill = { version = "=0.2.0", optional = true }
+procutils-slabtop = { version = "=0.2.0", optional = true }
+procutils-snice = { version = "=0.2.0", optional = true }
+procutils-sysctl = { version = "=0.2.0", optional = true }
+procutils-tload = { version = "=0.2.0", optional = true }
+procutils-top = { version = "=0.2.0", optional = true }
+procutils-vmstat = { version = "=0.2.0", optional = true }
+procutils-w = { version = "=0.2.0", optional = true }
+procutils-watch = { version = "=0.2.0", optional = true }
+uu_pidof = { git = "https://github.com/uutils/procps", rev = "d318892db47de95ed181aab4270dd9b4a1130c43", optional = true }
+uu_pidwait = { git = "https://github.com/uutils/procps", rev = "d318892db47de95ed181aab4270dd9b4a1130c43", optional = true }
+util-linux-uucore = { package = "uucore", version = "=0.2.2", optional = true }
+uu_dmesg = { git = "https://github.com/uutils/util-linux", rev = "77b6743fb63660a6a3f9a9ad09ff1963480d0e74", optional = true }
+uu_hexdump = { git = "https://github.com/uutils/util-linux", rev = "77b6743fb63660a6a3f9a9ad09ff1963480d0e74", optional = true }
+uu_last = { git = "https://github.com/uutils/util-linux", rev = "77b6743fb63660a6a3f9a9ad09ff1963480d0e74", optional = true }
+uu_mountpoint = { git = "https://github.com/uutils/util-linux", rev = "77b6743fb63660a6a3f9a9ad09ff1963480d0e74", optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+testcontainers = "0.28"
+
+[build-dependencies]
+axe-artifact.workspace = true
+ed25519-dalek.workspace = true
+ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["std"] }
+serde.workspace = true
+serde_json.workspace = true
+rustls-pemfile.workspace = true
+zstd.workspace = true
+
+

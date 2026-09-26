@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AXE Relay</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+    body { max-width: 76rem; margin: 2rem auto; padding: 0 1rem; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+    h1 { margin: 0; }
+    p { margin: .75rem 0; }
+    .meta { display: flex; flex-wrap: wrap; gap: 1.5rem; }
+    .meta strong { display: block; }
+    .scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; text-align: left; }
+    th, td { padding: .7rem; border-bottom: 1px solid #8888; white-space: nowrap; }
+    th { font-weight: 650; }
+    #error { color: #c34; }
+  </style>
+  <script src="/dashboard.js" defer></script>
+</head>
+<body>
+  <header><h1>AXE Relay</h1><span id="updated" role="status">Connecting…</span></header>
+  <p id="error" role="alert" hidden></p>
+  <section class="meta" aria-label="Relay status">
+    <p><strong>Active clients</strong><span id="count">—</span></p>
+    <p><strong>Uptime</strong><span id="uptime">—</span></p>
+    <p><strong>TCP control</strong><span id="tcp">—</span></p>
+    <p><strong>QUIC control</strong><span id="quic">—</span></p>
+  </section>
+  <h2>Connected clients</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Client ID</th><th>Transport</th><th>Peer</th><th>Public address</th><th>Connected for</th></tr></thead>
+    <tbody id="clients"><tr><td colspan="5">Loading…</td></tr></tbody>
+  </table></div>
+</body>
+</html>

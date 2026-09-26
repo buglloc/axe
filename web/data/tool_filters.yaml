@@ -1,0 +1,34 @@
+filters:
+  - id: core
+    label: Core system
+    categories: [administration, coreutils, environment]
+  - id: text
+    label: Text & data
+    categories: [binary, data, text]
+  - id: process
+    label: Processes & debugging
+    categories: [debugging, process, system]
+  - id: network
+    label: Network
+    categories: [network]
+  - id: files
+    label: Files & search
+    categories: [filesystem, search]
+  - id: inspect
+    label: Host & storage
+    categories: [host-inspection, inspection, storage]
+  - id: archives
+    label: Archives
+    categories: [archive, compression]
+  - id: containers
+    label: Containers
+    categories: [containers]
+  - id: security
+    label: Security
+    categories: [security]
+  - id: runtime
+    label: Runtime
+    categories: [runtime]
+  - id: services
+    label: Services & AXE
+    categories: [control, service]

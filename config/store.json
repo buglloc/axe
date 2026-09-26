@@ -1,0 +1,26 @@
+{
+  "consumer": {
+    "addresses": [
+      "2a02:6b8::1d9",
+      "213.180.193.243"
+    ],
+    "max_object_bytes": 536870912,
+    "max_metadata_bytes": 8388608,
+    "index_ttl_secs": 3600,
+    "manifest_ttl_secs": 86400,
+    "metadata_timeout_secs": 3,
+    "object_timeout_secs": 45,
+    "transient_retry_secs": 30,
+    "free_space_reserve_bytes": 268435456,
+    "channel": "stable",
+    "persistent_roots": [],
+    "tmpfs_roots": []
+  },
+  "storage": {
+    "endpoint": "https://storage.yandexcloud.net",
+    "region": "ru-central1",
+    "bucket": "axe-store",
+    "prefix": "store",
+    "release_prefix": "axe"
+  }
+}

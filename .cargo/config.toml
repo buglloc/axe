@@ -1,0 +1,11 @@
+[target.x86_64-unknown-linux-musl]
+linker = "tools/rust-lld"
+rustflags = ["-C", "target-feature=+crt-static", "-C", "relocation-model=static", "-C", "linker-flavor=ld.lld", "-C", "link-arg=-no-pie"]
+
+[target.aarch64-unknown-linux-musl]
+linker = "tools/rust-lld"
+rustflags = ["-C", "target-feature=+crt-static", "-C", "relocation-model=static", "-C", "linker-flavor=ld.lld", "-C", "link-arg=-no-pie"]
+
+[alias]
+build-static-x86_64 = "build -p axe --release --target x86_64-unknown-linux-musl"
+build-static-aarch64 = "build -p axe --release --target aarch64-unknown-linux-musl"

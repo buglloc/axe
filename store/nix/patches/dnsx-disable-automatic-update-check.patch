@@ -1,0 +1,12 @@
+diff --git a/internal/runner/options.go b/internal/runner/options.go
+--- a/internal/runner/options.go
++++ b/internal/runner/options.go
+@@ -159,7 +159,7 @@ func ParseOptions() *Options {
+ 
+ 	flagSet.CreateGroup("update", "Update",
+ 		flagSet.CallbackVarP(GetUpdateCallback(), "update", "up", "update dnsx to latest version"),
+-		flagSet.BoolVarP(&options.DisableUpdateCheck, "disable-update-check", "duc", false, "disable automatic dnsx update check"),
++		flagSet.BoolVarP(&options.DisableUpdateCheck, "disable-update-check", "duc", true, "disable automatic dnsx update check"),
+ 	)
+ 
+ 	flagSet.CreateGroup("output", "Output",

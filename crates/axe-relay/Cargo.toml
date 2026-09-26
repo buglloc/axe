@@ -1,0 +1,32 @@
+[package]
+name = "axe-relay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Standalone AXE SSH relay with monitoring dashboard and API"
+
+[[bin]]
+name = "axe-relay"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+ciborium.workspace = true
+clap.workspace = true
+hickory-resolver.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+socket2 = "0.6"
+tokio = { version = "1.52", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7.19", features = ["compat"] }
+ureq.workspace = true
+url.workspace = true
+uuid = { version = "1.26", features = ["serde", "v4"] }
+yamux = "0.14.0"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true

@@ -1,0 +1,71 @@
+baseURL = "/"
+defaultContentLanguage = "en"
+enableRobotsTXT = true
+disableKinds = ["taxonomy", "term", "RSS"]
+title = "AXE — Portable rescue shell"
+copyright = "AXE is open source under the MIT License."
+
+[languages.en]
+  locale = "en-US"
+
+[markup]
+  [markup.highlight]
+    noClasses = false
+
+[params]
+  subtitle = "A portable rescue shell for Linux systems with nothing useful left."
+  keywords = "rescue shell, static linux tools, ssh server, incident response, portable shell"
+  contentTypeName = "pages"
+  showMenuItems = 6
+  fullWidthTheme = true
+  centerTheme = false
+  oneHeadingSize = false
+
+  [params.logo]
+    logoText = "AXE"
+    logoHomeLink = "/"
+
+[module]
+  [[module.imports]]
+    path = "github.com/panr/hugo-theme-terminal/v4"
+
+  [[module.mounts]]
+    source = "content"
+    target = "content"
+  [[module.mounts]]
+    source = "layouts"
+    target = "layouts"
+  [[module.mounts]]
+    source = "static"
+    target = "static"
+  [[module.mounts]]
+    source = "assets"
+    target = "assets"
+  [[module.mounts]]
+    source = "data"
+    target = "data"
+
+[[menus.main]]
+  name = "Survival"
+  url = "/#survival"
+  weight = 10
+[[menus.main]]
+  name = "Tools"
+  url = "/#tools"
+  weight = 20
+[[menus.main]]
+  name = "Remote"
+  url = "/#remote"
+  weight = 30
+[[menus.main]]
+  name = "Patches"
+  url = "/patches/"
+  weight = 40
+[[menus.main]]
+  name = "Download"
+  url = "/#download"
+  weight = 50
+[[menus.main]]
+  name = "Source"
+  url = "https://github.com/buglloc/axe"
+  weight = 60

@@ -1,0 +1,44 @@
+{
+  "name": "AXE",
+  "image": "mcr.microsoft.com/devcontainers/base:1-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/nix:1": {
+      "version": "2.31.2",
+      "multiUser": true,
+      "extraNixConfig": "experimental-features = nix-command flakes"
+    },
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": true,
+      "installDockerBuildx": true
+    }
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind,consistency=cached",
+  "workspaceFolder": "${localWorkspaceFolder}",
+  "containerEnv": {
+    "CONTAINER_RUNTIME": "docker",
+    "NIX_CONFIG": "experimental-features = nix-command flakes"
+  },
+  "postCreateCommand": "nix develop .#default --command just generate-dev-keys",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "jnoortheen.nix-ide",
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml"
+      ],
+      "settings": {
+        "rust-analyzer.server.path": "${containerWorkspaceFolder}/.devcontainer/rust-analyzer",
+        "terminal.integrated.defaultProfile.linux": "AXE Nix",
+        "terminal.integrated.profiles.linux": {
+          "AXE Nix": {
+            "path": "/bin/bash",
+            "args": [
+              "-lc",
+              "exec nix develop .#default"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

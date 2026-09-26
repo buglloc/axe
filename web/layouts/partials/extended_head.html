@@ -1,0 +1,14 @@
+<link rel="icon" href="{{ "favicon.svg" | relURL }}" type="image/svg+xml">
+<meta name="theme-color" content="#0b0f13">
+<meta name="color-scheme" content="dark">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "AXE",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Linux, macOS",
+  "description": {{ site.Params.subtitle | jsonify | safeJS }},
+  "license": "https://opensource.org/license/mit"
+}
+</script>

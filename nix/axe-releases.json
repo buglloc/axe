@@ -1,0 +1,20 @@
+{
+  "aarch64-darwin": {
+    "version": "0.1.0-d0f22add836f716cf2091ba01036c55d366a96d674a1ecf8ab7b1e5a46c0c789",
+    "url": "https://storage.yandexcloud.net/axe-store/axe/releases/0.1.0-d0f22add836f716cf2091ba01036c55d366a96d674a1ecf8ab7b1e5a46c0c789/aarch64-darwin/axe",
+    "stable_url": "https://storage.yandexcloud.net/axe-store/axe/stable/aarch64-darwin/axe",
+    "hash": "sha256-0PIq3YNvcWzyCRugEDbFXTZqltZ0oez4q3seWkbAx4k="
+  },
+  "aarch64-linux": {
+    "version": "0.1.0-29e00243d080b9d3adc2361773b9b0f3f2a4a68e6217397ab72c5b72f0aebfca",
+    "url": "https://storage.yandexcloud.net/axe-store/axe/releases/0.1.0-29e00243d080b9d3adc2361773b9b0f3f2a4a68e6217397ab72c5b72f0aebfca/aarch64-linux/axe",
+    "stable_url": "https://storage.yandexcloud.net/axe-store/axe/stable/aarch64-linux/axe",
+    "hash": "sha256-KeACQ9CAudOtwjYXc7mw8/Kkpo5iFzl6tyxbcvCuv8o="
+  },
+  "x86_64-linux": {
+    "version": "0.1.0-a2dc2e81330ffba61965596ffeeab923ad8fd230663307b74f0a6c6f19127c78",
+    "url": "https://storage.yandexcloud.net/axe-store/axe/releases/0.1.0-a2dc2e81330ffba61965596ffeeab923ad8fd230663307b74f0a6c6f19127c78/x86_64-linux/axe",
+    "stable_url": "https://storage.yandexcloud.net/axe-store/axe/stable/x86_64-linux/axe",
+    "hash": "sha256-otwugTMP+6YZZVlv/uq5I62P0jBmMwe3TwpsbxkSfHg="
+  }
+}

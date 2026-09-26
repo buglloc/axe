@@ -1,0 +1,291 @@
+{{ define "main" }}
+{{ $commands := hugo.Data.registry.commands }}
+{{ $bundledCommands := where $commands "source" "bundled" }}
+{{ $storeCommands := where $commands "source" "store" }}
+
+<main id="main" class="landing">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero__copy">
+      <p class="kicker"><span>01</span> {{ .Params.eyebrow }}</p>
+      <h1 id="hero-title">{{ .Params.headline }}</h1>
+      <p class="hero__intro">{{ .Params.intro }}</p>
+      <div class="hero__actions">
+        <a class="button button--primary" href="#download">[ Download AXE ]</a>
+        <a class="button button--ghost" href="#tools">Explore the toolbox <span aria-hidden="true">→</span></a>
+      </div>
+      <dl class="hero__facts" aria-label="AXE inventory">
+        <div><dt>targets</dt><dd>Linux {amd64, arm64}<br>macOS {arm64}</dd></div>
+        <div><dt>bundled</dt><dd><strong>{{ len $bundledCommands }}</strong> commands</dd></div>
+        <div><dt>on-demand</dt><dd><strong>{{ len $storeCommands }}</strong> tools</dd></div>
+      </dl>
+    </div>
+
+    <div class="hero__visual" aria-hidden="true">
+      <div class="hero-lockup">
+        <div class="hero-mark">
+          <span>A</span><span class="hero-mark__x">X</span><span>E</span>
+        </div>
+        <p><span>ASSUME NOTHING.</span><span>BRING EVERYTHING.</span></p>
+      </div>
+      <div class="hero-scanline"></div>
+    </div>
+  </section>
+
+  <section class="console-section" aria-label="AXE terminal examples">
+    <div class="terminal-window">
+      <div class="terminal-window__bar">
+        <span class="terminal-window__title">{{ .Params.terminalLabel }}</span>
+        <div class="terminal-tabs" role="tablist" aria-label="Examples">
+          <button type="button" role="tab" aria-selected="true" aria-controls="terminal-shell" id="tab-shell" data-terminal-tab="terminal-shell">rescue</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="terminal-remote" id="tab-remote" data-terminal-tab="terminal-remote">remote</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="terminal-inspect" id="tab-inspect" data-terminal-tab="terminal-inspect">inspect</button>
+        </div>
+      </div>
+      <div class="terminal-window__body" id="terminal-shell" role="tabpanel" aria-labelledby="tab-shell">
+        <p><span class="prompt">root@unknown:/#</span> <span class="command">env -i HOME=/tmp PATH=/nonexistent ./axe --norc --noprofile</span></p>
+        <p class="output">bundled registry ready</p>
+        <p><span class="prompt">axe%</span> <span class="command">doctor</span></p>
+        <p class="output accent">Self-exec: works<br>Degradations: none</p>
+        <p><span class="prompt">axe%</span> <span class="cursor" aria-label="cursor"></span></p>
+      </div>
+      <div class="terminal-window__body" id="terminal-remote" role="tabpanel" aria-labelledby="tab-remote" hidden>
+        <p><span class="prompt">relay@public:$</span> <span class="command">axe-relay</span></p>
+        <p class="output">Standalone relay service · TCP+yamux · QUIC+mTLS · public TCP port range</p>
+        <p><span class="prompt">root@target:#</span> <span class="command">./axe sshd --relay-transport quic --relay relay.example:11000 --relay-id host-01</span></p>
+        <p class="output accent">outbound registration → relay.example:3000</p>
+      </div>
+      <div class="terminal-window__body" id="terminal-inspect" role="tabpanel" aria-labelledby="tab-inspect" hidden>
+        <p><span class="prompt">axe%</span> <span class="command">vzik collect | jq -c 'select(.type == "data" and .capability == "host.info") | .data | {os, architecture}'</span></p>
+        <p class="output accent">{"os":"linux","architecture":"x86_64"}</p>
+        <p><span class="prompt">axe%</span> <span class="cursor" aria-label="cursor"></span></p>
+      </div>
+    </div>
+    <p class="console-note"><span>NO PATH</span><span>NO LOADER</span><span>NO PACKAGE MANAGER</span><span>STILL A SHELL</span></p>
+  </section>
+
+  <section class="section" id="survival" aria-labelledby="survival-title">
+    <div class="section-heading">
+      <p class="kicker"><span>02</span> Failure is the environment</p>
+      <h2 id="survival-title">{{ .Params.sections.survivalTitle }}</h2>
+      <p>{{ .Params.sections.survivalLead }}</p>
+    </div>
+    <div class="survival-grid">
+      {{ range .Params.survival }}
+      <article class="survival-card">
+        <div class="survival-card__code">{{ .code }}</div>
+        <p class="survival-card__condition">// {{ .condition }}</p>
+        <p>{{ $.RenderString .response }}</p>
+        <span class="survival-card__outcome"><i aria-hidden="true">+</i>{{ .outcome }}</span>
+      </article>
+      {{ end }}
+    </div>
+  </section>
+
+  <section class="section environment-section" id="environment" aria-labelledby="environment-title">
+    <div class="section-heading">
+      <p class="kicker"><span>03</span> Read the runtime</p>
+      <h2 id="environment-title">{{ .Params.sections.environmentTitle }}</h2>
+      <p>{{ .Params.sections.environmentLead }}</p>
+    </div>
+
+    <div class="environment-grid">
+      <div class="environment-capabilities">
+        <article>
+          <span>01</span>
+          <h3>Isolation</h3>
+          <p>Recognizes virtual machines, containers—including Porto—and sandboxed environments.</p>
+        </article>
+        <article>
+          <span>02</span>
+          <h3>Restrictions</h3>
+          <p>Surfaces capabilities, seccomp, namespaces and resource boundaries visible to the current process.</p>
+        </article>
+        <article>
+          <span>03</span>
+          <h3>Evidence, not guesses</h3>
+          <p>Heuristic conclusions carry confidence and the evidence behind them.</p>
+        </article>
+      </div>
+
+      <div class="environment-terminal" aria-label="AXE doctor isolation report">
+        <div class="environment-terminal__bar">
+          <span>axe doctor</span>
+          <span>passive inspection</span>
+        </div>
+        <div class="environment-terminal__body">
+          <p><span class="prompt">axe%</span> <span class="command">doctor</span></p>
+          <dl>
+            <div><dt>Container indicator:</dt><dd>heuristic match — <strong>porto</strong> (high confidence)</dd></div>
+            <div><dt>Sandboxing:</dt><dd>heuristic match — bubblewrap (high confidence)</dd></div>
+            <div><dt>No new privileges:</dt><dd>enabled</dd></div>
+            <div><dt>Seccomp:</dt><dd>filtering enabled (2 filters)</dd></div>
+          </dl>
+        </div>
+      </div>
+    </div>
+
+    <div class="environment-modes">
+      <article><code>doctor</code><p>Immediate, human-readable diagnosis of the current AXE process.</p></article>
+      <article><code>vzik collect</code><p>Bounded, structured evidence for deeper inspection and incident analysis.</p></article>
+    </div>
+  </section>
+
+
+  <section class="section static-section" id="static" aria-labelledby="static-title">
+    <div class="section-heading section-heading--compact">
+      <p class="kicker"><span>04</span> One file</p>
+      <h2 id="static-title">{{ .Params.sections.staticTitle }}</h2>
+      <p>{{ .Params.sections.staticLead }}</p>
+    </div>
+    <div class="proof-grid">
+      <div class="proof-terminal" aria-label="ELF verification output">
+        <div class="proof-terminal__line"><span>$</span> file axe</div>
+        <div class="proof-terminal__output">ELF 64-bit LSB executable,<br><strong>statically linked</strong>, stripped</div>
+        <div class="proof-terminal__line"><span>$</span> readelf -lW axe | grep INTERP</div>
+        <div class="proof-terminal__output muted"># no output</div>
+        <div class="proof-terminal__line"><span>$</span> readelf -dW axe | grep NEEDED</div>
+        <div class="proof-terminal__output muted"># no output</div>
+      </div>
+      <div class="binary-anatomy">
+        <div class="binary-anatomy__top">
+          <span>axe</span><span>ELF / EXEC</span>
+        </div>
+        <div class="binary-layer"><b>Remote access</b><span>sshd · sftp · relay client</span></div>
+        <div class="binary-layer"><b>AXE Store</b><span>signed · hashed · cached</span></div>
+        <div class="binary-anatomy__base">NO DYNAMIC LOADER REQUIRED</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section tool-section" id="tools" aria-labelledby="tools-title">
+    <div class="section-heading">
+      <p class="kicker"><span>05</span> Runtime Inventory</p>
+      <h2 id="tools-title">{{ .Params.sections.toolsTitle }}</h2>
+      <p>{{ .Params.sections.toolsLead }}</p>
+    </div>
+
+    <div class="tool-controls">
+      <div class="tool-source-tabs" role="group" aria-label="Filter by source">
+        <button class="is-active" type="button" data-source-filter="all">all</button>
+        <button type="button" data-source-filter="bundled">bundled</button>
+        <button type="button" data-source-filter="store">store</button>
+      </div>
+      <div class="tool-summary" aria-live="polite">
+        <span><b data-visible-tools>—</b> commands</span>
+      </div>
+    </div>
+
+    <div class="tool-category-filters" role="group" aria-label="Filter by capability">
+      <button class="is-active" type="button" data-category-clear>all capabilities</button>
+      {{ range hugo.Data.tool_filters.filters }}
+      <button type="button" data-category-filter="{{ .id }}">{{ .label }}</button>
+      {{ end }}
+    </div>
+
+    <label class="tool-search">
+      <span class="tool-search__prompt" aria-hidden="true">&gt;&gt;</span>
+      <input type="search" placeholder="Type to filter commands..." autocomplete="off" spellcheck="false" data-command-search>
+      <kbd aria-hidden="true">/</kbd>
+      <span class="sr-only">Filter commands by name, description, category, or source</span>
+    </label>
+
+    <div class="tool-table-shell">
+      <table class="tool-table">
+        <caption class="sr-only">Available AXE commands</caption>
+        <thead class="sr-only">
+          <tr><th>Command</th><th>Description</th><th>Source</th><th>Category</th></tr>
+        </thead>
+        <tbody>
+          {{ range $commands }}
+          {{ $command := . }}
+          {{ $filterIDs := slice }}
+          {{ range hugo.Data.tool_filters.filters }}
+            {{ if in .categories $command.category }}{{ $filterIDs = $filterIDs | append .id }}{{ end }}
+          {{ end }}
+          {{ if eq (len $filterIDs) 0 }}{{ errorf "command %q has unmapped web category %q" $command.name $command.category }}{{ end }}
+          <tr data-command data-source="{{ $command.source }}" data-categories="{{ delimit $filterIDs " " }}" data-search="{{ $command.name | lower }} {{ $command.synopsis | lower }} {{ $command.category | lower }} {{ $command.source }}">
+            <td class="tool-table__name"><span aria-hidden="true">→</span><code>{{ $command.name }}</code></td>
+            <td class="tool-table__synopsis">{{ $command.synopsis }}</td>
+            <td><span class="tool-source tool-source--{{ $command.source }}">{{ $command.source }}</span></td>
+            <td class="tool-table__category">{{ $command.category | humanize }}</td>
+          </tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+    <p class="tool-empty" data-tool-empty hidden>No commands match the current filters.</p>
+    <p class="tool-hint"><kbd>/</kbd> focus search <span>·</span> <kbd>esc</kbd> clear</p>
+    <noscript><p class="terminal-notice">JavaScript is disabled; the full inventory is shown.</p></noscript>
+  </section>
+
+  <section class="section remote-section" id="remote" aria-labelledby="remote-title">
+    <div class="section-heading">
+      <p class="kicker"><span>06</span> sshd + relay</p>
+      <h2 id="remote-title">{{ .Params.sections.remoteTitle }}</h2>
+      <p>{{ .Params.sections.remoteLead }}</p>
+    </div>
+
+    <div class="relay-diagram" aria-label="Operator connects through the standalone axe-relay service to AXE sshd on an isolated target">
+      <div class="diagram-node">
+        <span class="diagram-node__icon">&gt;_</span>
+        <strong>Operator</strong>
+        <small>OpenSSH client</small>
+      </div>
+      <div class="diagram-link"><span>SSH</span><i></i></div>
+      <div class="diagram-node diagram-node--accent">
+        <span class="diagram-node__icon">⇄</span>
+        <strong>axe-relay</strong>
+        <small>standalone service · TCP+yamux · QUIC+mTLS</small>
+      </div>
+      <div class="diagram-link diagram-link--reverse"><span>outbound control</span><i></i></div>
+      <div class="diagram-node">
+        <span class="diagram-node__icon">AX</span>
+        <strong>AXE sshd</strong>
+        <small>isolated target</small>
+      </div>
+    </div>
+
+    <div class="remote-details">
+      <article><span>01</span><h3>Certificate identity</h3><p>OpenSSH user certificates authorize logins. The certificate principal matches the login and its configured allowlist.</p></article>
+      <article><span>02</span><h3>Separate QUIC identities</h3><p><code>sshd</code> pins the relay certificate and presents its own embedded client identity.</p></article>
+      <article><span>03</span><h3>Outbound registration</h3><p><code>sshd</code> keeps one control connection with bounded reconnect backoff; relay assigns its public TCP port.</p></article>
+      <article><span>04</span><h3>Owned lifecycle</h3><p>Listeners bind before readiness. Connection tasks are bounded, supervised and shut down explicitly.</p></article>
+    </div>
+  </section>
+
+  <section class="section resolution-section" aria-labelledby="resolution-title">
+    <div class="section-heading section-heading--compact">
+      <p class="kicker"><span>07</span> No surprises</p>
+      <h2 id="resolution-title">{{ .Params.sections.resolutionTitle }}</h2>
+      <p>{{ .Params.sections.resolutionLead }}</p>
+    </div>
+    <ol class="resolution-flow">
+      <li><span>01</span><b>alias / function</b></li>
+      <li><span>02</span><b>shell builtin</b></li>
+      <li><span>03</span><b>bundled applet</b></li>
+      <li><span>04</span><b>AXE Store</b></li>
+      <li><span>05</span><b>PATH</b><small>transient failure only</small></li>
+    </ol>
+    <div class="integrity-rule"><span>!</span><p>signature · digest · schema · TLS failure</p><strong>STOP / 126</strong></div>
+    <p class="store-mode-summary"><code>AXE_STORE_MODE</code> <b>auto</b> cache + network · <b>cache-only</b> verified cache · <b>off</b> PATH only. Auto backs off transient network failures for 30 seconds; SSH sessions inherit the effective restriction.</p>
+  </section>
+
+  <section class="section download-section" id="download" aria-labelledby="download-title">
+    <div class="download-copy">
+      <p class="kicker"><span>08</span> Build an AXE</p>
+      <h2 id="download-title">Carry the rescue environment before you need it.</h2>
+      <p>The OSS edition does not reuse pre-split binaries without a verifiable edition identity. Build the audited source until the first OSS release is published.</p>
+      <div class="target-links" aria-label="AXE source">
+        <a href="https://github.com/buglloc/axe">Source and build instructions →</a>
+      </div>
+    </div>
+    <div class="install-block">
+      <div class="install-block__bar"><span>build.sh</span><button type="button" data-copy-target="install-command">copy</button></div>
+      <pre id="install-command"><code>nix develop .#default
+just build-linux-amd64
+./dist/axe-x86_64-unknown-linux-musl --version</code></pre>
+      <p><span class="status"><i></i> edition: oss</span> publication adds immutable URLs and SRI hashes only after release verification</p>
+    </div>
+  </section>
+</main>
+{{ end }}

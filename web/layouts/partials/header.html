@@ -1,0 +1,11 @@
+<header class="site-header">
+  <div class="site-header__inner">
+    {{ partial "logo.html" . }}
+    <nav class="site-nav" aria-label="Primary navigation">
+      {{ range site.Menus.main }}
+        <a href="{{ .URL }}"{{ if hasPrefix .URL "http" }} rel="noreferrer"{{ end }}>{{ .Name }}</a>
+      {{ end }}
+    </nav>
+    <a class="header-cta" href="{{ site.Home.RelPermalink }}#download">get axe <span aria-hidden="true">↓</span></a>
+  </div>
+</header>

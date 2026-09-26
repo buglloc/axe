@@ -1,0 +1,104 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/axe-paths",
+    "crates/axe",
+    "crates/axe-relay",
+    "crates/axe-artifact",
+    "crates/axe-store-client",
+    "crates/axe-store",
+    "crates/axe-tls-roots",
+    "crates/porto-api",
+    "crates/vzik",
+]
+
+[workspace.metadata.brush-fork]
+# Update all six vendored crates together from this immutable upstream revision.
+repository = "https://github.com/reubeno/brush"
+revision = "08db87a62345f11a4fc43bf385e318677f641089"
+brush-shell-version = "0.4.0"
+brush-core-version = "0.5.0"
+brush-builtins-version = "0.2.0"
+brush-parser-version = "0.4.0"
+brush-interactive-version = "0.4.0"
+brush-coreutils-builtins-version = "0.1.0"
+paths = [
+    "vendor/brush-shell",
+    "vendor/brush-core",
+    "vendor/brush-builtins",
+    "vendor/brush-parser",
+    "vendor/brush-interactive",
+    "vendor/brush-coreutils-builtins",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.0"
+license = "MIT"
+
+[workspace.dependencies]
+axe-artifact = { path = "crates/axe-artifact" }
+axe-paths = { path = "crates/axe-paths" }
+axe-store-client = { path = "crates/axe-store-client" }
+axe-tls-roots = { path = "crates/axe-tls-roots" }
+vzik = { path = "crates/vzik" }
+base64 = "0.22"
+bytes = "1.11"
+ciborium = "0.2"
+clap = { version = "4.6", features = ["derive", "env"] }
+clap_builder = { version = "4.6", default-features = false, features = ["std", "help", "usage", "error-context"] }
+chrono = "0.4"
+ed25519-dalek = { version = "2.2", features = ["digest", "rand_core"] }
+bzip2 = "0.6"
+futures-util = "0.3"
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+goblin = "=0.10.4"
+hex = { version = "0.4", features = ["serde"] }
+jaq-all = { version = "0.3.0", default-features = false, features = ["std-all"] }
+libc = "0.2"
+quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rcgen = "0.14.5"
+rand = "0.10"
+hickory-resolver = "0.26"
+linux-raw-sys = { version = "0.12", features = ["ioctl"] }
+inotify = { version = "0.11", default-features = false }
+lzma-rust2 = { version = "0.20", default-features = false, features = ["std", "encoder", "xz"] }
+netlink-packet-route = "0.33"
+object = { version = "0.37", default-features = false, features = ["read", "elf"] }
+regex = "1.11"
+rtnetlink = "0.23"
+prost = "0.14"
+rusty-s3 = { version = "0.10.2", default-features = false, features = ["rustcrypto", "xml"] }
+prost-build = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tar = { version = "0.4", default-features = false }
+similar = "2.7"
+signal-hook = "0.3"
+surge-ping = "0.9"
+toml = "0.9"
+tokio = { version = "1.52", features = ["rt-multi-thread"] }
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
+url = "2.5"
+which = { version = "8.0.6", default-features = false, features = ["real-sys"] }
+zip = { version = "8.0", default-features = false, features = ["deflate"] }
+zstd = "0.13"
+
+[patch.crates-io]
+brush-shell = { path = "vendor/brush-shell" }
+brush-core = { path = "vendor/brush-core" }
+brush-builtins = { path = "vendor/brush-builtins" }
+brush-parser = { path = "vendor/brush-parser" }
+brush-interactive = { path = "vendor/brush-interactive" }
+brush-coreutils-builtins = { path = "vendor/brush-coreutils-builtins" }
+
+[profile.release]
+opt-level = "s"
+strip = true
+lto = "fat"
+codegen-units = 1
+panic = "abort"

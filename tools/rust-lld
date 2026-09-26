@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+host_lib=$(rustc --print target-libdir)
+exec "${host_lib%/lib}/bin/rust-lld" "$@"

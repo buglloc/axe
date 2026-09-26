@@ -1,0 +1,104 @@
+diff --git a/cmd/nuclei/main.go b/cmd/nuclei/main.go
+index bb8e8dd..bad4ecb 100644
+--- a/cmd/nuclei/main.go
++++ b/cmd/nuclei/main.go
+@@ -768,10 +768,8 @@ func readFlagsConfig(flagset *goflags.FlagSet) {
+ 	}
+ }
+ 
+-// disableUpdatesCallback disables the update check.
+-func disableUpdatesCallback() {
+-	config.DefaultConfig.DisableUpdateCheck()
+-}
++// disableUpdatesCallback is retained for CLI compatibility.
++func disableUpdatesCallback() {}
+ 
+ // printVersion prints the nuclei version and exits.
+ func printVersion() {
+diff --git a/internal/runner/runner.go b/internal/runner/runner.go
+index 98a87e1..7db2e19 100644
+--- a/internal/runner/runner.go
++++ b/internal/runner/runner.go
+@@ -973,7 +973,7 @@ func (r *Runner) displayExecutionInfo(store *loader.Store) {
+ 	updateutils.Aurora = r.colorizer
+ 	versionInfo := func(version, latestVersion, versionType string) string {
+ 		if !cfg.CanCheckForUpdates() {
+-			return fmt.Sprintf("Current %s version: %v (%s) - remove '-duc' flag to enable update checks", versionType, version, r.colorizer.BrightYellow("unknown"))
++			return fmt.Sprintf("Current %s version: %v (%s) - update checks disabled by AXE", versionType, version, r.colorizer.BrightYellow("unknown"))
+ 		}
+ 		return fmt.Sprintf("Current %s version: %v %v", versionType, version, updateutils.GetVersionDescription(version, latestVersion))
+ 	}
+diff --git a/pkg/catalog/config/nucleiconfig.go b/pkg/catalog/config/nucleiconfig.go
+index a1ddf69..3cdb0fd 100644
+--- a/pkg/catalog/config/nucleiconfig.go
++++ b/pkg/catalog/config/nucleiconfig.go
+@@ -24,6 +24,8 @@ import (
+ // all config values and default are centralized here
+ var DefaultConfig *Config
+ 
++const bundledTemplatesVersion = "@nucleiTemplatesVersion@"
++
+ type Config struct {
+ 	TemplatesDirectory string `json:"nuclei-templates-directory,omitempty"`
+ 
+@@ -176,6 +178,10 @@ func (c *Config) GetReportingConfigFilePath() string {
+ 
+ // GetIgnoreFilePath returns the nuclei ignore file path
+ func (c *Config) GetIgnoreFilePath() string {
++	templatesPath := filepath.Join(c.TemplatesDirectory, NucleiIgnoreFileName)
++	if fileutil.FileExists(templatesPath) {
++		return templatesPath
++	}
+ 	return filepath.Join(c.configDir, NucleiIgnoreFileName)
+ }
+ 
+@@ -238,6 +244,11 @@ func (c *Config) SetConfigDir(dir string) {
+ 		}
+ 	}
+ 
++	if bundledDirectory := bundledTemplatesDirectory(); bundledDirectory != "" {
++		c.SetTemplatesDir(bundledDirectory)
++		c.TemplateVersion = bundledTemplatesVersion
++	}
++
+ 	// while other config files are optional, ignore file is mandatory
+ 	// since it is used to ignore templates with weak matchers
+ 	c.copyIgnoreFile()
+@@ -376,6 +387,18 @@ func (c *Config) parseDebugArgs(data string) {
+ 	}
+ }
+ 
++func bundledTemplatesDirectory() string {
++	executable, err := os.Executable()
++	if err != nil {
++		return ""
++	}
++	directory := filepath.Clean(filepath.Join(filepath.Dir(executable), "..", "share", NucleiTemplatesDirName))
++	if !fileutil.FolderExists(directory) {
++		return ""
++	}
++	return directory
++}
++
+ func init() {
+ 	ConfigDir := folderutil.AppConfigDirOrDefault(FallbackConfigFolderName, BinaryName)
+ 
+@@ -415,11 +438,13 @@ func init() {
+ 		}
+ 	}
+ 
+-	// Loads/updates paths of custom templates
+-	// Note: custom templates paths should not be updated in config file
+-	// and even if it is changed we don't follow it since it is not expected behavior
+-	// If custom templates are in default locations only then they are loaded while running nuclei
+-	DefaultConfig.SetTemplatesDir(DefaultConfig.TemplatesDirectory)
++	templatesDirectory := DefaultConfig.TemplatesDirectory
++	if bundledDirectory := bundledTemplatesDirectory(); bundledDirectory != "" {
++		templatesDirectory = bundledDirectory
++		DefaultConfig.TemplateVersion = bundledTemplatesVersion
++	}
++	DefaultConfig.SetTemplatesDir(templatesDirectory)
++	DefaultConfig.DisableUpdateCheck()
+ 	DefaultConfig.parseDebugArgs(env.GetEnvOrDefault("NUCLEI_ARGS", ""))
+ 
+ 	// expose the templates directory to the yaml preprocessor so include
