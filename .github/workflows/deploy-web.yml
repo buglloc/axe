@@ -3,6 +3,8 @@ name: Deploy website to S3
 on:
   push:
     branches: [main]
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -12,7 +14,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  registry:
+    name: Resolve released command registry
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.select.outputs.available }}
+      tag: ${{ steps.select.outputs.tag }}
+    steps:
+      - id: select
+        name: Select release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          args=(--repo "$GITHUB_REPOSITORY" --json "tagName,assets")
+          if [[ -n "$EVENT_RELEASE_TAG" ]]; then
+            args=("$EVENT_RELEASE_TAG" "${args[@]}")
+          fi
+          release=$(gh release view "${args[@]}")
+          tag=$(jq -r '.tagName' <<<"$release")
+          available=$(jq -r 'any(.assets[]; .name == "registry.json")' <<<"$release")
+          printf 'tag=%s\navailable=%s\n' "$tag" "$available" >>"$GITHUB_OUTPUT"
+          if [[ "$available" != true ]]; then
+            echo "::notice::Release $tag has no registry.json; website deployment is skipped."
+          fi
+
   deploy:
+    needs: registry
+    if: needs.registry.outputs.available == 'true'
     name: Deploy main → axe.buglloc.com
     runs-on: ubuntu-latest
     steps:
@@ -24,10 +54,10 @@ jobs:
           hugo-version: "0.166.0"
           extended: true
 
-      - name: Download command registry from the latest release
+      - name: Download command registry from the selected release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download --repo "$GITHUB_REPOSITORY" --pattern registry.json --dir web/data
+        run: gh release download "${{ needs.registry.outputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern registry.json --dir web/data
 
       - name: Build website
         run: hugo --source web --gc --minify --cleanDestinationDir
