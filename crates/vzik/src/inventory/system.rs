@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use super::{
-    emit, finish, item_limit, output_limit, parse_u64, path_value, read_bounded, sorted_entries,
-    source_failure, systemd_unit_type, text, trim_ascii, unavailable,
+    emit, finish, item_limit, output_limit, path_value, read_bounded, sorted_entries,
+    source_failure, systemd_unit_type, text, unavailable,
 };
 use crate::cli::{CapabilityId, Invocation};
+use crate::procfs::parse_u64;
 use crate::protocol::{
     CapabilityReport, Coverage, ExecutionContext, Outcome, ProtocolError, RecordSink,
     check_deadline,
@@ -102,7 +103,7 @@ fn cgroup<W: Write>(
                     "version":2,
                     "scope":"self",
                     "property":name,
-                    "value":text(trim_ascii(&value)),
+                    "value":text(value.trim_ascii()),
                     "source":path_value(&source),
                 });
                 if !emit(sink, capability, data, &mut coverage)? {
@@ -551,7 +552,7 @@ fn parse_systemd_unit(
     evidence: &mut Vec<Value>,
 ) {
     for raw in bytes.split(|byte| *byte == b'\n') {
-        let line = trim_ascii(raw);
+        let line = raw.trim_ascii();
         if line.is_empty() || line.starts_with(b"#") || line.starts_with(b";") {
             continue;
         }
@@ -832,7 +833,7 @@ fn schedules<W: Write>(
         };
 
         for (line_number, raw) in bytes.split(|byte| *byte == b'\n').enumerate() {
-            let line = trim_ascii(raw);
+            let line = raw.trim_ascii();
             if line.is_empty() || line.starts_with(b"#") || is_cron_environment(line) {
                 continue;
             }
@@ -949,7 +950,7 @@ fn schedules<W: Write>(
             let mut triggers = Vec::new();
             let mut timer_directives = Vec::new();
             for raw in bytes.split(|byte| *byte == b'\n') {
-                let line = trim_ascii(raw);
+                let line = raw.trim_ascii();
                 let Some(equal) = line.iter().position(|byte| *byte == b'=') else {
                     continue;
                 };
@@ -1043,7 +1044,7 @@ fn colon_fields(paragraph: &[u8]) -> BTreeMap<Vec<u8>, Vec<u8>> {
         if let Some(index) = line.iter().position(|byte| *byte == b':') {
             fields.insert(
                 line[..index].to_vec(),
-                trim_ascii(&line[index + 1..]).to_vec(),
+                line[index + 1..].trim_ascii().to_vec(),
             );
         }
     }

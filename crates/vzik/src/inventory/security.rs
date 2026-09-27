@@ -9,10 +9,11 @@ use base64::Engine as _;
 use serde_json::json;
 
 use super::{
-    emit, finish, item_limit, output_limit, parse_u64, path_value, read_bounded, sorted_entries,
-    source_failure, text, trim_ascii, unavailable,
+    emit, finish, item_limit, output_limit, path_value, read_bounded, sorted_entries,
+    source_failure, text, unavailable,
 };
 use crate::cli::{CapabilityId, Invocation, Request};
+use crate::procfs::parse_u64;
 use crate::protocol::{
     CapabilityReport, Coverage, ExecutionContext, ProtocolError, RecordSink, check_deadline,
 };
@@ -99,7 +100,7 @@ fn posture<W: Write>(
                     json!({
                         "category":category,
                         "name":name,
-                        "value":text(trim_ascii(&bytes)),
+                        "value":text(bytes.trim_ascii()),
                         "source":path_value(path),
                     }),
                     &mut coverage,
@@ -141,7 +142,7 @@ fn posture<W: Write>(
                 json!({
                     "category":"cpu_vulnerability",
                     "name":path.file_name().map(|name| text(name.as_bytes())),
-                    "value":text(trim_ascii(&bytes)),
+                    "value":text(bytes.trim_ascii()),
                     "source":path_value(&path),
                 }),
                 &mut coverage,
@@ -280,7 +281,7 @@ fn auth<W: Write>(
         let kind = auth_source_kind(&path);
 
         for (line_number, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
-            let line = trim_ascii(line);
+            let line = line.trim_ascii();
             if line.is_empty() || line.starts_with(b"#") {
                 continue;
             }

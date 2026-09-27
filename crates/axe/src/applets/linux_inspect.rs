@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -11,6 +12,7 @@ use std::time::Duration;
 use flate2::read::GzDecoder;
 use lzma_rust2::XzReader;
 use object::{Object, ObjectSection};
+use vzik::procfs;
 
 pub type AppletFn = fn(Vec<OsString>) -> i32;
 
@@ -54,17 +56,18 @@ fn run_lsmod(args: Vec<OsString>) -> Result<(), String> {
     if values.len() != 1 {
         return Err("unexpected operand".into());
     }
-    let modules = fs::read_to_string("/proc/modules").map_err(|error| error.to_string())?;
+    let modules = fs::read("/proc/modules").map_err(|error| error.to_string())?;
     println!("Module                  Size  Used by");
-    for line in modules.lines() {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        if fields.len() < 4 {
-            continue;
-        }
-        let dependencies = if fields[3] == "-" { "" } else { fields[3] };
+    for module in modules
+        .split(|byte| *byte == b'\n')
+        .filter_map(procfs::parse_module)
+    {
         println!(
             "{:<19} {:>8}  {} {}",
-            fields[0], fields[1], fields[2], dependencies
+            String::from_utf8_lossy(module.name),
+            String::from_utf8_lossy(module.size),
+            String::from_utf8_lossy(module.instances),
+            String::from_utf8_lossy(module.dependencies)
         );
     }
     Ok(())
@@ -827,7 +830,8 @@ struct OpenEmitter<'a> {
 impl OpenEmitter<'_> {
     fn emit(&mut self, fd: &str, target: &Path) {
         let target_name = target.to_string_lossy();
-        let socket = socket_inode(&target_name).and_then(|inode| self.sockets.get(&inode));
+        let socket_inode = procfs::socket_inode(target.as_os_str().as_bytes());
+        let socket = socket_inode.and_then(|inode| self.sockets.get(&inode));
         let path_match = self.paths.iter().any(|path| target_name == path.as_str())
             || self
                 .recursive_directories
@@ -873,7 +877,7 @@ impl OpenEmitter<'_> {
                     SocketFamily::Unix => "unix",
                 },
                 format_socket(socket, self.names, self.numeric_hosts, self.numeric_ports),
-                socket_inode(&target_name)
+                socket_inode
                     .map(|inode| inode.to_string())
                     .unwrap_or_default(),
             )
@@ -990,117 +994,54 @@ fn parse_network_filter(value: &str, names: &NameDatabase) -> Result<NetworkFilt
 
 fn read_socket_tables() -> HashMap<u64, SocketInfo> {
     let mut sockets = HashMap::new();
-    read_inet_sockets("/proc/net/tcp", SocketFamily::Inet4, "TCP", &mut sockets);
-    read_inet_sockets("/proc/net/tcp6", SocketFamily::Inet6, "TCP", &mut sockets);
-    read_inet_sockets("/proc/net/udp", SocketFamily::Inet4, "UDP", &mut sockets);
-    read_inet_sockets("/proc/net/udp6", SocketFamily::Inet6, "UDP", &mut sockets);
-    if let Ok(content) = fs::read_to_string("/proc/net/unix") {
-        for line in content.lines().skip(1) {
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            let Some(inode) = fields.get(6).and_then(|value| value.parse().ok()) else {
+    for (path, family, protocol) in [
+        ("/proc/net/tcp", SocketFamily::Inet4, "TCP"),
+        ("/proc/net/tcp6", SocketFamily::Inet6, "TCP"),
+        ("/proc/net/udp", SocketFamily::Inet4, "UDP"),
+        ("/proc/net/udp6", SocketFamily::Inet6, "UDP"),
+    ] {
+        let Ok(content) = fs::read(path) else {
+            continue;
+        };
+        for line in content.split(|byte| *byte == b'\n').skip(1) {
+            let Ok(socket) = procfs::parse_inet_socket(line, family == SocketFamily::Inet6) else {
                 continue;
             };
             sockets.insert(
-                inode,
+                socket.inode,
+                SocketInfo {
+                    family,
+                    protocol,
+                    local: Some(socket.local),
+                    remote: Some(socket.remote),
+                    state: procfs::tcp_state(socket.state),
+                    unix_path: None,
+                },
+            );
+        }
+    }
+    if let Ok(content) = fs::read("/proc/net/unix") {
+        for socket in content
+            .split(|byte| *byte == b'\n')
+            .skip(1)
+            .filter_map(procfs::parse_unix_socket)
+        {
+            sockets.insert(
+                socket.inode,
                 SocketInfo {
                     family: SocketFamily::Unix,
                     protocol: "UNIX",
                     local: None,
                     remote: None,
                     state: None,
-                    unix_path: fields.get(7).map(|path| (*path).to_owned()),
+                    unix_path: socket
+                        .path
+                        .map(|path| String::from_utf8_lossy(path).into_owned()),
                 },
             );
         }
     }
     sockets
-}
-
-fn read_inet_sockets(
-    path: &str,
-    family: SocketFamily,
-    protocol: &'static str,
-    sockets: &mut HashMap<u64, SocketInfo>,
-) {
-    let Ok(content) = fs::read_to_string(path) else {
-        return;
-    };
-    for line in content.lines().skip(1) {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        let (Some(local), Some(remote), Some(state), Some(inode)) =
-            (fields.get(1), fields.get(2), fields.get(3), fields.get(9))
-        else {
-            continue;
-        };
-        let (Some(local), Some(remote), Ok(inode)) = (
-            parse_proc_socket(local, family),
-            parse_proc_socket(remote, family),
-            inode.parse(),
-        ) else {
-            continue;
-        };
-        sockets.insert(
-            inode,
-            SocketInfo {
-                family,
-                protocol,
-                local: Some(local),
-                remote: Some(remote),
-                state: socket_state(state),
-                unix_path: None,
-            },
-        );
-    }
-}
-
-fn parse_proc_socket(value: &str, family: SocketFamily) -> Option<SocketAddr> {
-    let (address, port) = value.rsplit_once(':')?;
-    let port = u16::from_str_radix(port, 16).ok()?;
-    let address = match family {
-        SocketFamily::Inet4 => {
-            let value = u32::from_str_radix(address, 16).ok()?;
-            IpAddr::V4(Ipv4Addr::from(value.to_le_bytes()))
-        }
-        SocketFamily::Inet6 => {
-            if address.len() != 32 {
-                return None;
-            }
-            let mut bytes = [0; 16];
-            for (index, chunk) in address.as_bytes().as_chunks::<8>().0.iter().enumerate() {
-                let chunk = std::str::from_utf8(chunk).ok()?;
-                let value = u32::from_str_radix(chunk, 16).ok()?;
-                bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
-            }
-            IpAddr::V6(Ipv6Addr::from(bytes))
-        }
-        SocketFamily::Unix => return None,
-    };
-    Some(SocketAddr::new(address, port))
-}
-
-fn socket_state(value: &str) -> Option<&'static str> {
-    Some(match value {
-        "01" => "ESTABLISHED",
-        "02" => "SYN_SENT",
-        "03" => "SYN_RECV",
-        "04" => "FIN_WAIT1",
-        "05" => "FIN_WAIT2",
-        "06" => "TIME_WAIT",
-        "07" => "CLOSE",
-        "08" => "CLOSE_WAIT",
-        "09" => "LAST_ACK",
-        "0A" => "LISTEN",
-        "0B" => "CLOSING",
-        _ => return None,
-    })
-}
-
-fn socket_inode(target: &str) -> Option<u64> {
-    target
-        .strip_prefix("socket:[")?
-        .strip_suffix(']')?
-        .parse()
-        .ok()
 }
 
 fn socket_matches(socket: &SocketInfo, filter: &NetworkFilter) -> bool {
@@ -1176,7 +1117,7 @@ fn format_socket(
     }
     if let Some(state) = socket.state {
         output.push_str(" (");
-        output.push_str(state);
+        output.push_str(&state.to_ascii_uppercase());
         output.push(')');
     }
     output

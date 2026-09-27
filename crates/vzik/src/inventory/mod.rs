@@ -1,8 +1,10 @@
 mod accounts;
 mod container;
 mod dbus;
+mod host;
 mod kernel;
 mod network;
+mod porto;
 mod security;
 mod system;
 mod systemd;
@@ -15,10 +17,11 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::cli::{CapabilityId, Invocation, Request};
-use crate::collect::linux_bytes;
 use crate::protocol::{
-    CapabilityReport, Coverage, ExecutionContext, Outcome, ProtocolError, RecordSink,
+    CapabilityReport, Coverage, ExecutionContext, Outcome, ProtocolError, RecordSink, linux_bytes,
 };
+
+const NAMESPACES: [&str; 7] = ["cgroup", "ipc", "mnt", "net", "pid", "user", "uts"];
 
 pub fn run<W: Write>(
     invocation: &Invocation,
@@ -26,6 +29,13 @@ pub fn run<W: Write>(
     deadline: ExecutionContext<'_>,
 ) -> Result<CapabilityReport, ProtocolError> {
     match invocation.capability {
+        CapabilityId::HostInfo
+        | CapabilityId::KernelInfo
+        | CapabilityId::ProcessList
+        | CapabilityId::MountList
+        | CapabilityId::NetworkResolvers
+        | CapabilityId::FileStat
+        | CapabilityId::FileRead => host::run(invocation, sink, deadline),
         CapabilityId::KernelModules | CapabilityId::KernelSysctls => {
             kernel::run(invocation, sink, deadline)
         }
@@ -57,10 +67,6 @@ pub fn run<W: Write>(
         | CapabilityId::AuthPosture
         | CapabilityId::FilesystemPrivilegeSurfaces
         | CapabilityId::FilesystemUnixSockets => security::run(invocation, sink, deadline),
-        _ => Err(ProtocolError::Internal(format!(
-            "{} has no extended collector",
-            invocation.capability.id()
-        ))),
     }
 }
 
@@ -257,34 +263,4 @@ pub(super) fn text(bytes: &[u8]) -> Value {
 
 pub(super) fn path_value(path: &Path) -> Value {
     linux_bytes(path.as_os_str().as_bytes())
-}
-
-pub(super) fn malformed(message: &'static str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message)
-}
-
-pub(super) fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
-    while bytes.first().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[1..];
-    }
-
-    while bytes.last().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[..bytes.len() - 1];
-    }
-
-    bytes
-}
-
-pub(super) fn parse_u64(bytes: &[u8]) -> io::Result<u64> {
-    let bytes = trim_ascii(bytes);
-    if bytes.is_empty() || bytes.iter().any(|byte| !byte.is_ascii_digit()) {
-        return Err(malformed("expected unsigned decimal integer"));
-    }
-
-    bytes.iter().try_fold(0_u64, |current, byte| {
-        current
-            .checked_mul(10)
-            .and_then(|value| value.checked_add(u64::from(byte - b'0')))
-            .ok_or_else(|| malformed("integer overflow"))
-    })
 }

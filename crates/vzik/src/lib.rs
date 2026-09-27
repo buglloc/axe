@@ -2,11 +2,12 @@
 
 mod capture;
 mod cli;
-mod collect;
 mod discovery;
 pub mod environment;
 #[cfg(target_os = "linux")]
 mod inventory;
+#[cfg(target_os = "linux")]
+pub mod procfs;
 mod protocol;
 mod stream;
 

@@ -15,8 +15,7 @@ pub fn write_capabilities(
 }
 
 fn capability_index() -> Value {
-    let capabilities = CapabilityId::ALL
-        .into_iter()
+    let capabilities = CapabilityId::all()
         .map(|capability| {
             let baseline_position = capability.baseline_position();
             json!({

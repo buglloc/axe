@@ -1,7 +1,7 @@
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv6Addr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
@@ -10,10 +10,13 @@ use nix::sys::socket::SockaddrStorage;
 use serde_json::{Value, json};
 
 use super::{
-    emit, finish, item_limit, output_limit, parse_u64, path_value, read_bounded, sorted_entries,
-    source_failure, text, trim_ascii, unavailable,
+    emit, finish, item_limit, output_limit, path_value, read_bounded, sorted_entries,
+    source_failure, text, unavailable,
 };
 use crate::cli::{CapabilityId, Invocation, Request, SocketSelection};
+use crate::procfs::{
+    self, ascii_fields, hex_u64, ipv4_hex, ipv6_bytes, malformed, parse_u64, socket_inode,
+};
 use crate::protocol::{
     CapabilityReport, Coverage, ExecutionContext, ProtocolError, RecordSink, check_deadline,
 };
@@ -89,7 +92,7 @@ fn interfaces<W: Write>(
         ] {
             match read_bounded(&path.join(file), 4096) {
                 Ok((bytes, _)) => {
-                    data.insert(field.into(), text(trim_ascii(&bytes)));
+                    data.insert(field.into(), text(bytes.trim_ascii()));
                 }
                 Err(_) => {
                     partial = true;
@@ -137,7 +140,7 @@ fn interfaces_procfs<W: Write>(
             .collect::<Vec<_>>();
 
         let data = json!({
-            "name":text(trim_ascii(&line[..separator])),
+            "name":text(line[..separator].trim_ascii()),
             "receive_bytes":fields.first().and_then(|value| parse_u64(value).ok()),
             "receive_packets":fields.get(1).and_then(|value| parse_u64(value).ok()),
             "transmit_bytes":fields.get(8).and_then(|value| parse_u64(value).ok()),
@@ -233,7 +236,7 @@ fn routes<W: Write>(
 fn parse_ipv4_route(line: &[u8]) -> io::Result<Value> {
     let fields = ascii_fields(line);
     if fields.len() < 11 {
-        return Err(super::malformed("malformed IPv4 route"));
+        return Err(malformed("malformed IPv4 route"));
     }
 
     let destination = ipv4_hex(fields[1])?;
@@ -257,7 +260,7 @@ fn parse_ipv4_route(line: &[u8]) -> io::Result<Value> {
 fn parse_ipv6_route(line: &[u8]) -> io::Result<Value> {
     let fields = ascii_fields(line);
     if fields.len() < 10 {
-        return Err(super::malformed("malformed IPv6 route"));
+        return Err(malformed("malformed IPv6 route"));
     }
 
     let destination = ipv6_route_hex(fields[0])?;
@@ -401,44 +404,32 @@ fn parse_inet_socket(
     family: &str,
     source: &Path,
 ) -> io::Result<SocketRecord> {
-    let fields = ascii_fields(line);
-    if fields.len() < 10 {
-        return Err(super::malformed("malformed inet socket"));
-    }
-
-    let (local_address, local_port) = socket_address(fields[1], family)?;
-    let (remote_address, remote_port) = socket_address(fields[2], family)?;
-    let state_code = hex_u64(fields[3])? as u8;
-    let uid = parse_u64(fields[7])?;
-    let inode = parse_u64(fields[9])?;
-
+    let socket = procfs::parse_inet_socket(line, family == "ipv6")?;
     let listening = if protocol == "tcp" {
-        state_code == 0x0a
+        socket.state == 0x0a
     } else {
-        local_port != 0 && remote_port == 0
+        socket.local.port() != 0 && socket.remote.port() == 0
     };
-
-    let state = socket_state(protocol, state_code);
 
     Ok(SocketRecord {
         sort_key: [protocol.as_bytes(), b"\0", family.as_bytes(), b"\0", line].concat(),
         data: json!({
             "protocol":protocol,
             "family":family,
-            "local_address":local_address,
-            "local_port":local_port,
-            "remote_address":remote_address,
-            "remote_port":remote_port,
-            "state":state,
-            "inode":inode,
-            "uid":uid,
+            "local_address":socket.local.ip().to_string(),
+            "local_port":socket.local.port(),
+            "remote_address":socket.remote.ip().to_string(),
+            "remote_port":socket.remote.port(),
+            "state":socket_state(protocol, socket.state),
+            "inode":socket.inode,
+            "uid":socket.uid,
             "listening":listening,
             "source":path_value(source),
         })
         .as_object()
         .expect("object literal")
         .clone(),
-        inode,
+        inode: socket.inode,
         listening,
     })
 }
@@ -486,18 +477,12 @@ fn parse_unix_sockets<W: Write>(
             break;
         }
 
-        let fields = ascii_fields(line);
-        if fields.len() < 7 {
+        let Some(socket) = procfs::parse_unix_socket(line) else {
             *partial = true;
             coverage.skipped += 1;
             continue;
-        }
-
-        let flags = hex_u64(fields[3]).unwrap_or(0);
-        let kind = hex_u64(fields[4]).unwrap_or(0);
-        let state = hex_u64(fields[5]).unwrap_or(0);
-        let inode = parse_u64(fields[6]).unwrap_or(0);
-        let listening = flags & 0x0001_0000 != 0 || state == 1;
+        };
+        let listening = socket.listening();
 
         if !socket_selected(selection, "unix", listening) {
             continue;
@@ -508,18 +493,18 @@ fn parse_unix_sockets<W: Write>(
             data: json!({
                 "protocol":"unix",
                 "family":"unix",
-                "state":format!("{state:02x}"),
-                "socket_type":kind,
-                "flags":flags,
-                "inode":inode,
-                "path":fields.get(7).map(|value| text(value)),
+                "state":format!("{:02x}", socket.state),
+                "socket_type":socket.socket_type,
+                "flags":socket.flags,
+                "inode":socket.inode,
+                "path":socket.path.map(text),
                 "listening":listening,
                 "source":path_value(path),
             })
             .as_object()
             .expect("object literal")
             .clone(),
-            inode,
+            inode: socket.inode,
             listening,
         });
     }
@@ -585,7 +570,7 @@ fn socket_owners(
 
         let name = read_bounded(&process_path.join("comm"), 4096)
             .ok()
-            .map(|(bytes, _)| text(trim_ascii(&bytes)));
+            .map(|(bytes, _)| text(bytes.trim_ascii()));
         let exe = fs::read_link(process_path.join("exe"))
             .ok()
             .map(|path| text(path.as_os_str().as_bytes()));
@@ -620,74 +605,8 @@ fn socket_owners(
     Ok(owners)
 }
 
-fn socket_inode(bytes: &[u8]) -> Option<u64> {
-    let value = bytes.strip_prefix(b"socket:[")?.strip_suffix(b"]")?;
-    parse_u64(value).ok()
-}
-
-fn socket_address(value: &[u8], family: &str) -> io::Result<(String, u16)> {
-    let separator = value
-        .iter()
-        .position(|byte| *byte == b':')
-        .ok_or_else(|| super::malformed("missing socket port"))?;
-
-    let address = &value[..separator];
-    let port = u16::try_from(hex_u64(&value[separator + 1..])?)
-        .map_err(|_| super::malformed("socket port overflow"))?;
-
-    let address = if family == "ipv4" {
-        ipv4_hex(address)?.to_string()
-    } else {
-        ipv6_socket_hex(address)?.to_string()
-    };
-
-    Ok((address, port))
-}
-
-fn ipv4_hex(value: &[u8]) -> io::Result<Ipv4Addr> {
-    let raw =
-        u32::try_from(hex_u64(value)?).map_err(|_| super::malformed("IPv4 address overflow"))?;
-    Ok(Ipv4Addr::from(raw.to_le_bytes()))
-}
-
 fn ipv6_route_hex(value: &[u8]) -> io::Result<Ipv6Addr> {
     Ok(Ipv6Addr::from(ipv6_bytes(value)?))
-}
-
-fn ipv6_socket_hex(value: &[u8]) -> io::Result<Ipv6Addr> {
-    let mut bytes = ipv6_bytes(value)?;
-    for word in bytes.as_chunks_mut::<4>().0 {
-        word.reverse();
-    }
-    Ok(Ipv6Addr::from(bytes))
-}
-
-fn ipv6_bytes(value: &[u8]) -> io::Result<[u8; 16]> {
-    if value.len() != 32 {
-        return Err(super::malformed("invalid IPv6 address length"));
-    }
-
-    let mut bytes = [0_u8; 16];
-    let (pairs, remainder) = value.as_chunks::<2>();
-    debug_assert!(remainder.is_empty());
-
-    for (index, pair) in pairs.iter().enumerate() {
-        bytes[index] =
-            u8::try_from(hex_u64(pair)?).map_err(|_| super::malformed("IPv6 byte overflow"))?;
-    }
-    Ok(bytes)
-}
-
-fn hex_u64(value: &[u8]) -> io::Result<u64> {
-    let text = std::str::from_utf8(value)
-        .map_err(|_| super::malformed("hexadecimal field is not ASCII"))?;
-    u64::from_str_radix(text, 16).map_err(|_| super::malformed("invalid hexadecimal field"))
-}
-
-fn ascii_fields(line: &[u8]) -> Vec<&[u8]> {
-    line.split(|byte| byte.is_ascii_whitespace())
-        .filter(|field| !field.is_empty())
-        .collect()
 }
 
 fn socket_state(protocol: &str, state: u8) -> &'static str {
@@ -698,20 +617,7 @@ fn socket_state(protocol: &str, state: u8) -> &'static str {
             _ => "unknown",
         };
     }
-    match state {
-        0x01 => "established",
-        0x02 => "syn_sent",
-        0x03 => "syn_recv",
-        0x04 => "fin_wait1",
-        0x05 => "fin_wait2",
-        0x06 => "time_wait",
-        0x07 => "close",
-        0x08 => "close_wait",
-        0x09 => "last_ack",
-        0x0a => "listen",
-        0x0b => "closing",
-        _ => "unknown",
-    }
+    procfs::tcp_state(state).unwrap_or("unknown")
 }
 
 fn addresses<W: Write>(
@@ -894,7 +800,7 @@ fn firewall<W: Write>(
         coverage.scanned += bytes.len() as u64;
         partial |= truncated;
         for line in bytes.split(|byte| *byte == b'\n') {
-            let line = trim_ascii(line);
+            let line = line.trim_ascii();
             if line.is_empty() {
                 continue;
             }
@@ -942,7 +848,7 @@ fn firewall<W: Write>(
         coverage.scanned += bytes.len() as u64;
         partial |= truncated;
         for (line_number, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
-            let line = trim_ascii(line);
+            let line = line.trim_ascii();
             if line.is_empty() || line.starts_with(b"#") {
                 continue;
             }
@@ -970,6 +876,8 @@ fn firewall<W: Write>(
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
 
     #[test]
@@ -1024,13 +932,5 @@ mod tests {
 
         assert_eq!(route["destination"], "2a00:1370:81a0:5dab::/64");
         assert_eq!(route["gateway"], "::");
-    }
-
-    #[test]
-    fn decodes_ipv6_socket_in_word_little_endian_order() {
-        assert_eq!(
-            ipv6_socket_hex(b"00000000000000000000000001000000").expect("decode"),
-            Ipv6Addr::LOCALHOST
-        );
     }
 }

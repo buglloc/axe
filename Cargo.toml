@@ -8,7 +8,6 @@ members = [
     "crates/axe-store-client",
     "crates/axe-store",
     "crates/axe-tls-roots",
-    "crates/porto-api",
     "crates/vzik",
 ]
 
@@ -70,7 +69,6 @@ regex = "1.11"
 rtnetlink = "0.23"
 prost = "0.14"
 rusty-s3 = { version = "0.10.2", default-features = false, features = ["rustcrypto", "xml"] }
-prost-build = "0.14"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2.2"
 serde = { version = "1.0", features = ["derive"] }

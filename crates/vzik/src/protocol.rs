@@ -3,16 +3,39 @@ use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::cli::{Execution, GlobalLimits, Invocation};
-use crate::collect;
 
 const TERMINAL_BYTE_RESERVE: u64 = 64 << 10;
 const TERMINAL_RECORD_RESERVE: u64 = 16;
 const PROTOCOL_VERSION: u64 = 3;
 pub(crate) const DEGRADED_EXIT_CODE: i32 = 3;
+
+/// Encodes Linux bytes as display text plus base64 when they are not UTF-8.
+pub(crate) fn linux_bytes(bytes: &[u8]) -> Value {
+    if let Ok(value) = std::str::from_utf8(bytes) {
+        json!({"display":value})
+    } else {
+        let mut display = String::with_capacity(bytes.len());
+
+        for &byte in bytes {
+            if byte.is_ascii_graphic() || byte == b' ' {
+                display.push(char::from(byte));
+            } else {
+                use std::fmt::Write as _;
+                write!(display, "\\x{byte:02x}").expect("write to string");
+            }
+        }
+
+        json!({
+            "display":display,
+            "raw_base64":base64::engine::general_purpose::STANDARD.encode(bytes),
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -293,7 +316,10 @@ fn run_capability<W: Write>(
         Err(error) => return Err(error),
     }
 
-    let report = collect::run(invocation, sink, context)?;
+    #[cfg(target_os = "linux")]
+    let report = crate::inventory::run(invocation, sink, context)?;
+    #[cfg(not(target_os = "linux"))]
+    let report = CapabilityReport::unsupported();
     check_deadline(context)?;
     if report.outcome != Outcome::Complete {
         *degraded = true;
@@ -562,6 +588,13 @@ mod tests {
 
     use super::*;
     use crate::cli::{self, Action};
+
+    #[test]
+    fn non_utf8_bytes_round_trip_through_base64() {
+        let value = linux_bytes(b"a\xffb");
+        assert_eq!(value["raw_base64"], "Yf9i");
+        assert_eq!(value["display"], "a\\xffb");
+    }
 
     #[test]
     fn profile_record_limit_still_closes_the_stream() {

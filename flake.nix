@@ -112,7 +112,6 @@
               openssh
               pkg-config
               python3
-              protobuf
               rust-analyzer
               rustup
               yandex-cloud

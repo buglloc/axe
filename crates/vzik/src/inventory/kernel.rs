@@ -5,9 +5,10 @@ use serde_json::json;
 
 use super::{
     emit, finish, item_limit, output_limit, path_value, read_bounded, source_failure, text,
-    trim_ascii, unavailable,
+    unavailable,
 };
 use crate::cli::{CapabilityId, Invocation};
+use crate::procfs::{self, parse_u64};
 use crate::protocol::{
     CapabilityReport, Coverage, ExecutionContext, ProtocolError, RecordSink, check_deadline,
 };
@@ -114,12 +115,7 @@ fn modules<W: Write>(
             return Ok(finish(coverage, true, Some("max_items")));
         }
 
-        let fields = line
-            .split(|byte| byte.is_ascii_whitespace())
-            .filter(|field| !field.is_empty())
-            .collect::<Vec<_>>();
-
-        if fields.len() < 6 {
+        let Some(module) = procfs::parse_module(line) else {
             partial = true;
             coverage.skipped += 1;
             source_failure(
@@ -133,27 +129,21 @@ fn modules<W: Write>(
                 &mut coverage,
             )?;
             continue;
-        }
-
-        let size = super::parse_u64(fields[1]).unwrap_or(0);
-        let use_count = super::parse_u64(fields[2]).unwrap_or(0);
-        let dependencies = if fields[3] == b"-" {
-            Vec::new()
-        } else {
-            fields[3]
-                .split(|byte| *byte == b',')
-                .filter(|dependency| !dependency.is_empty())
-                .map(text)
-                .collect()
         };
 
+        let dependencies = module
+            .dependencies
+            .split(|byte| *byte == b',')
+            .filter(|dependency| !dependency.is_empty())
+            .map(text)
+            .collect::<Vec<_>>();
         let data = json!({
-            "name":text(fields[0]),
-            "size":size,
-            "use_count":use_count,
+            "name":text(module.name),
+            "size":parse_u64(module.size).unwrap_or(0),
+            "use_count":parse_u64(module.instances).unwrap_or(0),
             "dependencies":dependencies,
-            "state":text(fields[4]),
-            "address":text(fields[5]),
+            "state":text(module.state),
+            "address":text(module.address),
             "source":path_value(path),
         });
 
@@ -187,7 +177,7 @@ fn sysctls<W: Write>(
                 partial |= truncated;
                 let data = json!({
                     "name":name,
-                    "value":text(trim_ascii(&bytes)),
+                    "value":text(bytes.trim_ascii()),
                     "source":path_value(&path),
                 });
                 if !emit(sink, capability, data, &mut coverage)? {

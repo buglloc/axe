@@ -137,11 +137,15 @@ pub(crate) enum RequestSpec {
     FileRead,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct CapabilitySpec {
-    pub command: &'static [&'static str],
-    pub description: &'static str,
-    pub request: RequestSpec,
+/// One capability contract row; CLI parsing, help, profiles, and discovery derive from it.
+struct CapabilitySpec {
+    capability: CapabilityId,
+    id: &'static str,
+    command: [&'static str; 2],
+    description: &'static str,
+    request: RequestSpec,
+    data_kinds: &'static [&'static str],
+    baseline: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -238,6 +242,7 @@ const TARGET_PATH: PositionalSpec = PositionalSpec {
     max_bytes: 4096,
 };
 const SOCKET_PATH_BYTES: usize = 4096;
+pub(crate) const PORTO_SOCKET_PATH: &str = "/run/portod.socket";
 const BUS_USER_BYTES: usize = 256;
 
 const fn item_limit(default: u64, default_display: &'static str, maximum: u64) -> NumberSpec {
@@ -252,18 +257,6 @@ const fn item_limit(default: u64, default_display: &'static str, maximum: u64) -
     }
 }
 
-const fn capability(
-    command: &'static [&'static str],
-    description: &'static str,
-    request: RequestSpec,
-) -> CapabilitySpec {
-    CapabilitySpec {
-        command,
-        description,
-        request,
-    }
-}
-
 const fn items(default: u64, default_display: &'static str, maximum: u64) -> RequestSpec {
     RequestSpec::Items(item_limit(default, default_display, maximum))
 }
@@ -272,398 +265,419 @@ const fn filesystem_scan(default: u64, default_display: &'static str, maximum: u
     RequestSpec::FilesystemScan(item_limit(default, default_display, maximum))
 }
 
+/// Capabilities in discovery order; the baseline profile runs its members in this order.
+static CAPABILITIES: [CapabilitySpec; 37] = [
+    CapabilitySpec {
+        capability: CapabilityId::HostInfo,
+        id: "host.info",
+        command: ["host", "info"],
+        description: "Operating-system and host identity facts",
+        request: RequestSpec::Empty,
+        data_kinds: &["host"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::KernelInfo,
+        id: "kernel.info",
+        command: ["kernel", "info"],
+        description: "Kernel identity and boot command-line facts",
+        request: RequestSpec::Empty,
+        data_kinds: &["kernel"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::KernelModules,
+        id: "kernel.modules",
+        command: ["kernel", "modules"],
+        description: "Loaded kernel module inventory",
+        request: items(8192, "8192", 32_768),
+        data_kinds: &["kernel_module"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::KernelSysctls,
+        id: "kernel.sysctls",
+        command: ["kernel", "sysctls"],
+        description: "Pentest-relevant kernel and network sysctls",
+        request: RequestSpec::Empty,
+        data_kinds: &["kernel_sysctl"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::SecurityPosture,
+        id: "security.posture",
+        command: ["security", "posture"],
+        description: "LSM, boot, platform, and CPU security posture",
+        request: items(1024, "1024", 4096),
+        data_kinds: &["security_control"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::ProcessList,
+        id: "process.list",
+        command: ["process", "list"],
+        description: "Process summaries with identity and executable paths",
+        request: items(4096, "4096", 32_768),
+        data_kinds: &["process"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::NetworkInterfaces,
+        id: "network.interfaces",
+        command: ["network", "interfaces"],
+        description: "Network interface metadata",
+        request: items(1024, "1024", 4096),
+        data_kinds: &["network_interface"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::NetworkAddresses,
+        id: "network.addresses",
+        command: ["network", "addresses"],
+        description: "IPv4 and IPv6 interface addresses",
+        request: items(1024, "1024", 4096),
+        data_kinds: &["network_address"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::NetworkResolvers,
+        id: "network.resolvers",
+        command: ["network", "resolvers"],
+        description: "Static resolver directives",
+        request: RequestSpec::Empty,
+        data_kinds: &["resolver_directive"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::NetworkRoutes,
+        id: "network.routes",
+        command: ["network", "routes"],
+        description: "IPv4 and IPv6 route inventory",
+        request: items(16_384, "16384", 65_536),
+        data_kinds: &["network_route"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::NetworkNeighbors,
+        id: "network.neighbors",
+        command: ["network", "neighbors"],
+        description: "IPv4 neighbor cache inventory",
+        request: items(8192, "8192", 32_768),
+        data_kinds: &["network_neighbor"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::NetworkSockets,
+        id: "network.sockets",
+        command: ["network", "sockets"],
+        description: "Internet and Unix socket inventory with bounded ownership",
+        request: items(32_768, "32768", 100_000),
+        data_kinds: &["network_socket"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::NetworkListeners,
+        id: "network.listeners",
+        command: ["network", "listeners"],
+        description: "Listening Internet and Unix sockets with bounded ownership",
+        request: items(16_384, "16384", 65_536),
+        data_kinds: &["network_socket"],
+        baseline: false,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::NetworkFirewall,
+        id: "network.firewall",
+        command: ["network", "firewall"],
+        description: "Runtime table names and static firewall rule evidence",
+        request: items(10_000, "10000", 50_000),
+        data_kinds: &["firewall_evidence"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::MountList,
+        id: "mount.list",
+        command: ["mount", "list"],
+        description: "Current mount namespace inventory",
+        request: items(4096, "4096", 16_384),
+        data_kinds: &["mount"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::CgroupInspect,
+        id: "cgroup.inspect",
+        command: ["cgroup", "inspect"],
+        description: "Current process cgroup memberships and limits",
+        request: RequestSpec::Empty,
+        data_kinds: &["cgroup_membership"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::UserList,
+        id: "user.list",
+        command: ["user", "list"],
+        description: "Local passwd user inventory",
+        request: items(10_000, "10000", 50_000),
+        data_kinds: &["user"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::GroupList,
+        id: "group.list",
+        command: ["group", "list"],
+        description: "Local group inventory",
+        request: items(10_000, "10000", 50_000),
+        data_kinds: &["group"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::AuthPosture,
+        id: "auth.posture",
+        command: ["auth", "posture"],
+        description: "Local password state and authentication policy directives",
+        request: items(10_000, "10000", 50_000),
+        data_kinds: &["auth_control"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::SudoRules,
+        id: "sudo.rules",
+        command: ["sudo", "rules"],
+        description: "Static sudo policy directives",
+        request: items(10_000, "10000", 50_000),
+        data_kinds: &["sudo_directive"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::PackageList,
+        id: "package.list",
+        command: ["package", "list"],
+        description: "Installed packages from native package databases",
+        request: items(50_000, "50000", 200_000),
+        data_kinds: &["package"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::ServiceList,
+        id: "service.list",
+        command: ["service", "list"],
+        description: "Static systemd unit and SysV service inventory",
+        request: items(20_000, "20000", 100_000),
+        data_kinds: &["service"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::ScheduleList,
+        id: "schedule.list",
+        command: ["schedule", "list"],
+        description: "Static cron and systemd timer inventory",
+        request: items(10_000, "10000", 100_000),
+        data_kinds: &["schedule"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::SystemctlList,
+        id: "systemctl.list",
+        command: ["systemctl", "list"],
+        description: "Runtime systemd unit state from system and user managers",
+        request: RequestSpec::SystemctlList(item_limit(20_000, "20000", 100_000)),
+        data_kinds: &["systemd_unit_runtime"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::SystemctlInspect,
+        id: "systemctl.inspect",
+        command: ["systemctl", "inspect"],
+        description: "Detailed runtime state for one systemd unit",
+        request: RequestSpec::SystemctlInspect,
+        data_kinds: &["systemd_unit_runtime"],
+        baseline: false,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::DbusList,
+        id: "dbus.list",
+        command: ["dbus", "list"],
+        description: "D-Bus names, activation state, owners, and peer credentials",
+        request: RequestSpec::DbusList(item_limit(20_000, "20000", 100_000)),
+        data_kinds: &["dbus_record"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::DbusInspect,
+        id: "dbus.inspect",
+        command: ["dbus", "inspect"],
+        description: "Detailed ownership and credentials for one D-Bus name",
+        request: RequestSpec::DbusInspect,
+        data_kinds: &["dbus_record"],
+        baseline: false,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::ContainerList,
+        id: "container.list",
+        command: ["container", "list"],
+        description: "Runtime-agnostic running-container discovery from process cgroups",
+        request: items(10_000, "10000", 50_000),
+        data_kinds: &["container"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::ContainerInspect,
+        id: "container.inspect",
+        command: ["container", "inspect"],
+        description: "Named runtime-agnostic container context from procfs",
+        request: RequestSpec::ContainerInspect,
+        data_kinds: &["container_context"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::PortoList,
+        id: "porto.list",
+        command: ["portoctl", "list"],
+        description: "Porto container inventory with complete property evidence",
+        request: RequestSpec::PortoList(item_limit(10_000, "10000", 50_000)),
+        data_kinds: &[
+            "porto_container",
+            "porto_property_catalog",
+            "porto_property",
+        ],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::PortoInspect,
+        id: "porto.inspect",
+        command: ["portoctl", "inspect"],
+        description: "Named Porto snapshot with complete property evidence",
+        request: RequestSpec::PortoInspect,
+        data_kinds: &[
+            "porto_container_context",
+            "porto_property_catalog",
+            "porto_property",
+        ],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::SshServerConfig,
+        id: "ssh.server_config",
+        command: ["ssh", "server-config"],
+        description: "Static OpenSSH server directives",
+        request: items(10_000, "10000", 50_000),
+        data_kinds: &["ssh_server_directive"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::SshAuthorizedKeys,
+        id: "ssh.authorized_keys",
+        command: ["ssh", "authorized-keys"],
+        description: "Authorized-key fingerprints and options",
+        request: items(10_000, "10000", 50_000),
+        data_kinds: &["ssh_authorized_key"],
+        baseline: true,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::FilesystemPrivilegeSurfaces,
+        id: "filesystem.privilege_surfaces",
+        command: ["filesystem", "privilege-surfaces"],
+        description: "Explicit bounded scan for privilege-relevant filesystem metadata",
+        request: filesystem_scan(100_000, "100000", 1_000_000),
+        data_kinds: &["filesystem_privilege_surface"],
+        baseline: false,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::FilesystemUnixSockets,
+        id: "filesystem.unix_sockets",
+        command: ["filesystem", "unix-sockets"],
+        description: "Explicit bounded scan for filesystem Unix sockets",
+        request: filesystem_scan(100_000, "100000", 1_000_000),
+        data_kinds: &["filesystem_unix_socket"],
+        baseline: false,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::FileStat,
+        id: "file.stat",
+        command: ["file", "stat"],
+        description: "Metadata for one explicitly selected path",
+        request: RequestSpec::FileStat,
+        data_kinds: &["file_metadata"],
+        baseline: false,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::FileRead,
+        id: "file.read",
+        command: ["file", "read"],
+        description: "Chunked content from one explicitly selected regular file",
+        request: RequestSpec::FileRead,
+        data_kinds: &["file_chunk"],
+        baseline: false,
+    },
+];
+
+const _: () = {
+    let mut index = 0;
+    while index < CAPABILITIES.len() {
+        assert!(CAPABILITIES[index].capability as usize == index);
+        index += 1;
+    }
+};
+
 impl CapabilityId {
-    pub const ALL: [Self; 37] = [
-        Self::HostInfo,
-        Self::KernelInfo,
-        Self::KernelModules,
-        Self::KernelSysctls,
-        Self::SecurityPosture,
-        Self::ProcessList,
-        Self::NetworkInterfaces,
-        Self::NetworkAddresses,
-        Self::NetworkResolvers,
-        Self::NetworkRoutes,
-        Self::NetworkNeighbors,
-        Self::NetworkSockets,
-        Self::NetworkListeners,
-        Self::NetworkFirewall,
-        Self::MountList,
-        Self::CgroupInspect,
-        Self::UserList,
-        Self::GroupList,
-        Self::AuthPosture,
-        Self::SudoRules,
-        Self::PackageList,
-        Self::ServiceList,
-        Self::ScheduleList,
-        Self::SystemctlList,
-        Self::SystemctlInspect,
-        Self::DbusList,
-        Self::DbusInspect,
-        Self::ContainerList,
-        Self::ContainerInspect,
-        Self::PortoList,
-        Self::PortoInspect,
-        Self::SshServerConfig,
-        Self::SshAuthorizedKeys,
-        Self::FilesystemPrivilegeSurfaces,
-        Self::FilesystemUnixSockets,
-        Self::FileStat,
-        Self::FileRead,
-    ];
+    pub fn all() -> impl Iterator<Item = Self> {
+        CAPABILITIES.iter().map(|spec| spec.capability)
+    }
 
-    pub const BASELINE: [Self; 30] = [
-        Self::HostInfo,
-        Self::KernelInfo,
-        Self::KernelModules,
-        Self::KernelSysctls,
-        Self::SecurityPosture,
-        Self::ProcessList,
-        Self::NetworkInterfaces,
-        Self::NetworkAddresses,
-        Self::NetworkResolvers,
-        Self::NetworkRoutes,
-        Self::NetworkNeighbors,
-        Self::NetworkSockets,
-        Self::NetworkFirewall,
-        Self::MountList,
-        Self::CgroupInspect,
-        Self::UserList,
-        Self::GroupList,
-        Self::AuthPosture,
-        Self::SudoRules,
-        Self::PackageList,
-        Self::ServiceList,
-        Self::ScheduleList,
-        Self::SystemctlList,
-        Self::DbusList,
-        Self::ContainerList,
-        Self::ContainerInspect,
-        Self::PortoList,
-        Self::PortoInspect,
-        Self::SshServerConfig,
-        Self::SshAuthorizedKeys,
-    ];
+    pub fn baseline() -> impl Iterator<Item = Self> {
+        CAPABILITIES
+            .iter()
+            .filter(|spec| spec.baseline)
+            .map(|spec| spec.capability)
+    }
 
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::HostInfo => "host.info",
-            Self::KernelInfo => "kernel.info",
-            Self::KernelModules => "kernel.modules",
-            Self::KernelSysctls => "kernel.sysctls",
-            Self::SecurityPosture => "security.posture",
-            Self::ProcessList => "process.list",
-            Self::NetworkInterfaces => "network.interfaces",
-            Self::NetworkAddresses => "network.addresses",
-            Self::NetworkResolvers => "network.resolvers",
-            Self::NetworkRoutes => "network.routes",
-            Self::NetworkNeighbors => "network.neighbors",
-            Self::NetworkSockets => "network.sockets",
-            Self::NetworkListeners => "network.listeners",
-            Self::NetworkFirewall => "network.firewall",
-            Self::MountList => "mount.list",
-            Self::CgroupInspect => "cgroup.inspect",
-            Self::UserList => "user.list",
-            Self::GroupList => "group.list",
-            Self::AuthPosture => "auth.posture",
-            Self::SudoRules => "sudo.rules",
-            Self::PackageList => "package.list",
-            Self::ServiceList => "service.list",
-            Self::ScheduleList => "schedule.list",
-            Self::SystemctlList => "systemctl.list",
-            Self::SystemctlInspect => "systemctl.inspect",
-            Self::DbusList => "dbus.list",
-            Self::DbusInspect => "dbus.inspect",
-            Self::ContainerList => "container.list",
-            Self::ContainerInspect => "container.inspect",
-            Self::PortoList => "porto.list",
-            Self::PortoInspect => "porto.inspect",
-            Self::SshServerConfig => "ssh.server_config",
-            Self::SshAuthorizedKeys => "ssh.authorized_keys",
-            Self::FilesystemPrivilegeSurfaces => "filesystem.privilege_surfaces",
-            Self::FilesystemUnixSockets => "filesystem.unix_sockets",
-            Self::FileStat => "file.stat",
-            Self::FileRead => "file.read",
-        }
+    fn spec(self) -> &'static CapabilitySpec {
+        &CAPABILITIES[self as usize]
+    }
+
+    pub fn id(self) -> &'static str {
+        self.spec().id
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|capability| capability.id() == id)
+        Self::all().find(|capability| capability.id() == id)
     }
 
-    pub(crate) const fn spec(self) -> CapabilitySpec {
-        match self {
-            Self::HostInfo => capability(
-                &["host", "info"],
-                "Operating-system and host identity facts",
-                RequestSpec::Empty,
-            ),
-            Self::KernelInfo => capability(
-                &["kernel", "info"],
-                "Kernel identity and boot command-line facts",
-                RequestSpec::Empty,
-            ),
-            Self::KernelModules => capability(
-                &["kernel", "modules"],
-                "Loaded kernel module inventory",
-                items(8192, "8192", 32_768),
-            ),
-            Self::KernelSysctls => capability(
-                &["kernel", "sysctls"],
-                "Pentest-relevant kernel and network sysctls",
-                RequestSpec::Empty,
-            ),
-            Self::SecurityPosture => capability(
-                &["security", "posture"],
-                "LSM, boot, platform, and CPU security posture",
-                items(1024, "1024", 4096),
-            ),
-            Self::ProcessList => capability(
-                &["process", "list"],
-                "Process summaries with identity and executable paths",
-                items(4096, "4096", 32_768),
-            ),
-            Self::NetworkInterfaces => capability(
-                &["network", "interfaces"],
-                "Network interface metadata",
-                items(1024, "1024", 4096),
-            ),
-            Self::NetworkAddresses => capability(
-                &["network", "addresses"],
-                "IPv4 and IPv6 interface addresses",
-                items(1024, "1024", 4096),
-            ),
-            Self::NetworkResolvers => capability(
-                &["network", "resolvers"],
-                "Static resolver directives",
-                RequestSpec::Empty,
-            ),
-            Self::NetworkRoutes => capability(
-                &["network", "routes"],
-                "IPv4 and IPv6 route inventory",
-                items(16_384, "16384", 65_536),
-            ),
-            Self::NetworkNeighbors => capability(
-                &["network", "neighbors"],
-                "IPv4 neighbor cache inventory",
-                items(8192, "8192", 32_768),
-            ),
-            Self::NetworkSockets => capability(
-                &["network", "sockets"],
-                "Internet and Unix socket inventory with bounded ownership",
-                items(32_768, "32768", 100_000),
-            ),
-            Self::NetworkListeners => capability(
-                &["network", "listeners"],
-                "Listening Internet and Unix sockets with bounded ownership",
-                items(16_384, "16384", 65_536),
-            ),
-            Self::NetworkFirewall => capability(
-                &["network", "firewall"],
-                "Runtime table names and static firewall rule evidence",
-                items(10_000, "10000", 50_000),
-            ),
-            Self::MountList => capability(
-                &["mount", "list"],
-                "Current mount namespace inventory",
-                items(4096, "4096", 16_384),
-            ),
-            Self::CgroupInspect => capability(
-                &["cgroup", "inspect"],
-                "Current process cgroup memberships and limits",
-                RequestSpec::Empty,
-            ),
-            Self::UserList => capability(
-                &["user", "list"],
-                "Local passwd user inventory",
-                items(10_000, "10000", 50_000),
-            ),
-            Self::GroupList => capability(
-                &["group", "list"],
-                "Local group inventory",
-                items(10_000, "10000", 50_000),
-            ),
-            Self::AuthPosture => capability(
-                &["auth", "posture"],
-                "Local password state and authentication policy directives",
-                items(10_000, "10000", 50_000),
-            ),
-            Self::SudoRules => capability(
-                &["sudo", "rules"],
-                "Static sudo policy directives",
-                items(10_000, "10000", 50_000),
-            ),
-            Self::PackageList => capability(
-                &["package", "list"],
-                "Installed packages from native package databases",
-                items(50_000, "50000", 200_000),
-            ),
-            Self::ServiceList => capability(
-                &["service", "list"],
-                "Static systemd unit and SysV service inventory",
-                items(20_000, "20000", 100_000),
-            ),
-            Self::ScheduleList => capability(
-                &["schedule", "list"],
-                "Static cron and systemd timer inventory",
-                items(10_000, "10000", 100_000),
-            ),
-            Self::SystemctlList => capability(
-                &["systemctl", "list"],
-                "Runtime systemd unit state from system and user managers",
-                RequestSpec::SystemctlList(item_limit(20_000, "20000", 100_000)),
-            ),
-            Self::SystemctlInspect => capability(
-                &["systemctl", "inspect"],
-                "Detailed runtime state for one systemd unit",
-                RequestSpec::SystemctlInspect,
-            ),
-            Self::DbusList => capability(
-                &["dbus", "list"],
-                "D-Bus names, activation state, owners, and peer credentials",
-                RequestSpec::DbusList(item_limit(20_000, "20000", 100_000)),
-            ),
-            Self::DbusInspect => capability(
-                &["dbus", "inspect"],
-                "Detailed ownership and credentials for one D-Bus name",
-                RequestSpec::DbusInspect,
-            ),
-            Self::ContainerList => capability(
-                &["container", "list"],
-                "Runtime-agnostic running-container discovery from process cgroups",
-                items(10_000, "10000", 50_000),
-            ),
-            Self::ContainerInspect => capability(
-                &["container", "inspect"],
-                "Named runtime-agnostic container context from procfs",
-                RequestSpec::ContainerInspect,
-            ),
-            Self::PortoList => capability(
-                &["portoctl", "list"],
-                "Porto container inventory with complete property evidence",
-                RequestSpec::PortoList(item_limit(10_000, "10000", 50_000)),
-            ),
-            Self::PortoInspect => capability(
-                &["portoctl", "inspect"],
-                "Named Porto snapshot with complete property evidence",
-                RequestSpec::PortoInspect,
-            ),
-            Self::SshServerConfig => capability(
-                &["ssh", "server-config"],
-                "Static OpenSSH server directives",
-                items(10_000, "10000", 50_000),
-            ),
-            Self::SshAuthorizedKeys => capability(
-                &["ssh", "authorized-keys"],
-                "Authorized-key fingerprints and options",
-                items(10_000, "10000", 50_000),
-            ),
-            Self::FilesystemPrivilegeSurfaces => capability(
-                &["filesystem", "privilege-surfaces"],
-                "Explicit bounded scan for privilege-relevant filesystem metadata",
-                filesystem_scan(100_000, "100000", 1_000_000),
-            ),
-            Self::FilesystemUnixSockets => capability(
-                &["filesystem", "unix-sockets"],
-                "Explicit bounded scan for filesystem Unix sockets",
-                filesystem_scan(100_000, "100000", 1_000_000),
-            ),
-            Self::FileStat => capability(
-                &["file", "stat"],
-                "Metadata for one explicitly selected path",
-                RequestSpec::FileStat,
-            ),
-            Self::FileRead => capability(
-                &["file", "read"],
-                "Chunked content from one explicitly selected regular file",
-                RequestSpec::FileRead,
-            ),
-        }
+    pub fn command(self) -> &'static [&'static str] {
+        &self.spec().command
     }
 
-    pub const fn command(self) -> &'static [&'static str] {
-        self.spec().command
-    }
-    pub const fn description(self) -> &'static str {
+    pub fn description(self) -> &'static str {
         self.spec().description
     }
 
-    pub(crate) const fn request_spec(self) -> RequestSpec {
+    pub(crate) fn request_spec(self) -> RequestSpec {
         self.spec().request
     }
 
-    pub const fn data_kind(self) -> &'static str {
-        match self {
-            Self::HostInfo => "host",
-            Self::KernelInfo => "kernel",
-            Self::KernelModules => "kernel_module",
-            Self::KernelSysctls => "kernel_sysctl",
-            Self::SecurityPosture => "security_control",
-            Self::ProcessList => "process",
-            Self::NetworkInterfaces => "network_interface",
-            Self::NetworkAddresses => "network_address",
-            Self::NetworkResolvers => "resolver_directive",
-            Self::NetworkRoutes => "network_route",
-            Self::NetworkNeighbors => "network_neighbor",
-            Self::NetworkSockets | Self::NetworkListeners => "network_socket",
-            Self::NetworkFirewall => "firewall_evidence",
-            Self::MountList => "mount",
-            Self::CgroupInspect => "cgroup_membership",
-            Self::UserList => "user",
-            Self::GroupList => "group",
-            Self::AuthPosture => "auth_control",
-            Self::SudoRules => "sudo_directive",
-            Self::PackageList => "package",
-            Self::ServiceList => "service",
-            Self::ScheduleList => "schedule",
-            Self::SystemctlList | Self::SystemctlInspect => "systemd_unit_runtime",
-            Self::DbusList | Self::DbusInspect => "dbus_record",
-            Self::ContainerList => "container",
-            Self::ContainerInspect => "container_context",
-            Self::PortoList => "porto_container",
-            Self::PortoInspect => "porto_container_context",
-            Self::SshServerConfig => "ssh_server_directive",
-            Self::SshAuthorizedKeys => "ssh_authorized_key",
-            Self::FilesystemPrivilegeSurfaces => "filesystem_privilege_surface",
-            Self::FilesystemUnixSockets => "filesystem_unix_socket",
-            Self::FileStat => "file_metadata",
-            Self::FileRead => "file_chunk",
-        }
+    pub fn data_kind(self) -> &'static str {
+        self.spec().data_kinds[0]
     }
 
-    pub const fn safety_class(self) -> &'static str {
-        match self {
-            Self::FilesystemPrivilegeSurfaces
-            | Self::FilesystemUnixSockets
-            | Self::FileStat
-            | Self::FileRead => "passive_targeted",
+    pub fn data_kinds(self) -> &'static [&'static str] {
+        self.spec().data_kinds
+    }
+
+    pub fn safety_class(self) -> &'static str {
+        match self.request_spec() {
+            RequestSpec::FilesystemScan(_) | RequestSpec::FileStat | RequestSpec::FileRead => {
+                "passive_targeted"
+            }
             _ => "passive_native",
         }
     }
 
-    pub fn data_kinds(self) -> Vec<&'static str> {
-        match self {
-            Self::PortoList => vec![
-                "porto_container",
-                "porto_property_catalog",
-                "porto_property",
-            ],
-            Self::PortoInspect => vec![
-                "porto_container_context",
-                "porto_property_catalog",
-                "porto_property",
-            ],
-            _ => vec![self.data_kind()],
-        }
-    }
-
     pub fn baseline_position(self) -> Option<usize> {
-        Self::BASELINE
-            .iter()
-            .position(|capability| *capability == self)
+        self.spec().baseline.then(|| {
+            CAPABILITIES[..self as usize]
+                .iter()
+                .filter(|spec| spec.baseline)
+                .count()
+        })
     }
 
     pub(crate) fn request_contract(self) -> Value {
@@ -693,18 +707,10 @@ impl CapabilityId {
     }
 
     pub(crate) fn access_contract(self) -> Value {
-        let unix_socket_connections = matches!(
-            self,
-            Self::SystemctlList
-                | Self::SystemctlInspect
-                | Self::DbusList
-                | Self::DbusInspect
-                | Self::PortoList
-                | Self::PortoInspect
-        );
-        let scope = match self {
-            Self::FilesystemPrivilegeSurfaces | Self::FilesystemUnixSockets => "explicit_tree",
-            Self::FileStat | Self::FileRead => "explicit_path",
+        let request = self.request_spec();
+        let scope = match request {
+            RequestSpec::FilesystemScan(_) => "explicit_tree",
+            RequestSpec::FileStat | RequestSpec::FileRead => "explicit_path",
             _ => "visible_namespace",
         };
         json!({
@@ -712,11 +718,19 @@ impl CapabilityId {
             "scope":scope,
             "executes_host_programs":false,
             "opens_inet_connections":false,
-            "may_open_unix_socket":unix_socket_connections,
+            "may_open_unix_socket":matches!(
+                request,
+                RequestSpec::SystemctlList(_)
+                    | RequestSpec::SystemctlInspect
+                    | RequestSpec::DbusList(_)
+                    | RequestSpec::DbusInspect
+                    | RequestSpec::PortoList(_)
+                    | RequestSpec::PortoInspect
+            ),
         })
     }
 
-    pub(crate) const fn positional(self) -> Option<PositionalSpec> {
+    pub(crate) fn positional(self) -> Option<PositionalSpec> {
         match self.request_spec() {
             RequestSpec::ContainerInspect => Some(CONTAINER_NAME),
             RequestSpec::PortoInspect => Some(PORTO_NAME),
@@ -755,7 +769,7 @@ impl CapabilityId {
                     value_name: "PATH",
                     description: "Porto daemon Unix socket",
                     kind: OptionKind::LinuxPath {
-                        default: porto_api::DEFAULT_SOCKET_PATH,
+                        default: PORTO_SOCKET_PATH,
                     },
                 },
                 OptionSpec {
@@ -1319,8 +1333,7 @@ fn parse_collect(matches: &ArgMatches) -> Result<Action, String> {
     Ok(Action::Execute(Execution {
         invocation_kind: "profile",
         command_id: "baseline-v3",
-        invocations: CapabilityId::BASELINE
-            .into_iter()
+        invocations: CapabilityId::baseline()
             .map(|capability| {
                 Ok(Invocation {
                     capability,
@@ -1336,8 +1349,7 @@ fn parse_capability(group: &str, matches: &ArgMatches) -> Result<Action, String>
     let (leaf, matches) = matches
         .subcommand()
         .ok_or_else(|| format!("a {group} command is required"))?;
-    let capability = CapabilityId::ALL
-        .into_iter()
+    let capability = CapabilityId::all()
         .find(|capability| capability.command() == [group, leaf])
         .ok_or_else(|| format!("unknown capability command: {group} {leaf}"))?;
 
@@ -1470,14 +1482,14 @@ fn baseline_request(capability: CapabilityId) -> Result<Request, String> {
         RequestSpec::PortoList(limit) => Request::PortoList {
             max_items: usize::try_from(limit.default)
                 .map_err(|_| format!("{} does not fit this platform", limit.name))?,
-            socket: PathBuf::from(porto_api::DEFAULT_SOCKET_PATH),
+            socket: PathBuf::from(PORTO_SOCKET_PATH),
             show_sensitive: false,
             include_streams: false,
             max_stream_bytes: 0,
         },
         RequestSpec::PortoInspect => Request::PortoInspect {
             name: "self".into(),
-            socket: PathBuf::from(porto_api::DEFAULT_SOCKET_PATH),
+            socket: PathBuf::from(PORTO_SOCKET_PATH),
             show_sensitive: false,
             include_streams: false,
             max_stream_bytes: 0,
@@ -1580,7 +1592,7 @@ fn root_command() -> Command {
                 ),
         );
 
-    for capability in CapabilityId::ALL {
+    for capability in CapabilityId::all() {
         let group = capability.command()[0];
         if command.find_subcommand(group).is_none() {
             command = command.subcommand(
@@ -1609,8 +1621,7 @@ fn stream_command(name: &'static str, description: &'static str) -> Command {
 }
 
 fn capability_command(capability: CapabilityId) -> Command {
-    let spec = capability.spec();
-    let mut command = Command::new(spec.command[1]).about(spec.description);
+    let mut command = Command::new(capability.command()[1]).about(capability.description());
     if let Some(positional) = capability.positional() {
         let parser = match positional.kind {
             PositionalKind::Utf8 => ValueParser::new(NonEmptyStringValueParser::new()),
@@ -1928,7 +1939,7 @@ pub(crate) fn linux_path(path: &std::path::Path) -> Value {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
-        crate::collect::linux_bytes(path.as_os_str().as_bytes())
+        crate::protocol::linux_bytes(path.as_os_str().as_bytes())
     }
     #[cfg(not(unix))]
     {
@@ -2051,7 +2062,7 @@ mod tests {
 
     #[test]
     fn every_capability_has_hierarchical_help() {
-        for capability in CapabilityId::ALL {
+        for capability in CapabilityId::all() {
             let mut argv = vec![OsString::from("vzik")];
             argv.extend(capability.command().iter().map(OsString::from));
             argv.push(OsString::from("--help"));
@@ -2059,7 +2070,7 @@ mod tests {
                 panic!("expected help for {}", capability.id());
             };
             assert!(
-                help.contains(capability.spec().description),
+                help.contains(capability.description()),
                 "missing description for {}",
                 capability.id()
             );
@@ -2090,7 +2101,11 @@ mod tests {
 
     #[test]
     fn privilege_surface_scan_is_explicit_only() {
-        assert!(!CapabilityId::BASELINE.contains(&CapabilityId::FilesystemPrivilegeSurfaces));
+        assert!(
+            CapabilityId::FilesystemPrivilegeSurfaces
+                .baseline_position()
+                .is_none()
+        );
         let action = parse(args(&[
             "vzik",
             "filesystem",

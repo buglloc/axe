@@ -5,9 +5,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use porto_api::{Client, Error as PortoError, ResponseError, rpc};
 use serde_json::{Map, Value, json};
 
+use super::porto::{self, Client, ContainerSnapshot, Error as PortoError, ResponseError};
 use super::{finish, output_limit, path_value, read_bounded, sorted_entries, text};
 use crate::cli::{CapabilityId, Invocation, Request};
 use crate::protocol::{
@@ -16,7 +16,6 @@ use crate::protocol::{
 };
 
 const PORTO_CALL_TIMEOUT: Duration = Duration::from_secs(5);
-const PORTO_MESSAGE_BYTES: usize = 16 << 20;
 const PORTO_BATCH_SIZE: usize = 64;
 const PROPERTY_CHUNK_BYTES: usize = 16 << 10;
 const SUMMARY_VALUE_BYTES: usize = 16 << 10;
@@ -300,16 +299,13 @@ fn collect_porto(
     options: Options<'_>,
     deadline: ExecutionContext<'_>,
 ) -> Result<PortoObservation, PortoCollectError> {
-    let mut client = Client::with_socket_path(options.socket);
-    client
-        .set_max_message_bytes(PORTO_MESSAGE_BYTES)
+    let timeout = porto_timeout(deadline)?;
+    let mut client = Client::connect(options.socket).map_err(PortoCollectError::Api)?;
+    let properties = client
+        .list_properties(timeout)
         .map_err(PortoCollectError::Api)?;
-
-    set_porto_timeout(&mut client, deadline)?;
-    let properties = client.list_properties().map_err(PortoCollectError::Api)?;
-    let property_count = properties.list.len();
+    let property_count = properties.len();
     let mut catalog = properties
-        .list
         .into_iter()
         .filter(|property| {
             !property.name.is_empty() && property.name.len() <= MAX_PROPERTY_NAME_BYTES
@@ -344,11 +340,9 @@ fn collect_porto(
     let mut names = if let Some(name) = options.name {
         vec![name.to_owned()]
     } else {
-        set_porto_timeout(&mut client, deadline)?;
         client
-            .list(rpc::TContainerListRequest::default())
+            .list(porto_timeout(deadline)?)
             .map_err(PortoCollectError::Api)?
-            .name
     };
     let listed_names = names.len();
     let reserved_names = if options.name.is_none() {
@@ -388,31 +382,23 @@ fn collect_porto(
 
     let mut snapshots = Vec::with_capacity(names.len().saturating_add(1));
     for batch in names.chunks(PORTO_BATCH_SIZE) {
-        set_porto_timeout(&mut client, deadline)?;
         let response = client
-            .get(rpc::TContainerGetRequest {
-                name: batch.to_vec(),
-                variable: variables.clone(),
-                nonblock: Some(true),
-                ..Default::default()
-            })
+            .get(batch.to_vec(), variables.clone(), porto_timeout(deadline)?)
             .map_err(PortoCollectError::Api)?;
-        skipped = skipped.saturating_add(batch.len().saturating_sub(response.list.len()));
-        snapshots.extend(response.list);
+        skipped = skipped.saturating_add(batch.len().saturating_sub(response.len()));
+        snapshots.extend(response);
     }
 
     if options.name.is_none() {
-        set_porto_timeout(&mut client, deadline)?;
         let response = client
-            .get(rpc::TContainerGetRequest {
-                name: vec!["self".into()],
-                variable: variables.clone(),
-                nonblock: Some(true),
-                ..Default::default()
-            })
+            .get(
+                vec!["self".into()],
+                variables.clone(),
+                porto_timeout(deadline)?,
+            )
             .map_err(PortoCollectError::Api)?;
-        skipped = skipped.saturating_add(1_usize.saturating_sub(response.list.len()));
-        snapshots.extend(response.list);
+        skipped = skipped.saturating_add(1_usize.saturating_sub(response.len()));
+        snapshots.extend(response);
     }
 
     let mut containers = Vec::with_capacity(snapshots.len());
@@ -452,22 +438,15 @@ fn collect_porto(
     })
 }
 
-fn set_porto_timeout(
-    client: &mut Client,
-    deadline: ExecutionContext<'_>,
-) -> Result<(), PortoCollectError> {
+fn porto_timeout(deadline: ExecutionContext<'_>) -> Result<Duration, PortoCollectError> {
     let remaining = deadline.remaining().map_err(PortoCollectError::Control)?;
-    client
-        .set_timeout(Some(remaining.min(PORTO_CALL_TIMEOUT)))
-        .map_err(PortoCollectError::Api)
+    Ok(remaining.min(PORTO_CALL_TIMEOUT))
 }
 
-fn porto_snapshot_error(
-    snapshot: &rpc::t_container_get_response::TContainerGetListResponse,
-) -> Option<ResponseError> {
+fn porto_snapshot_error(snapshot: &ContainerSnapshot) -> Option<ResponseError> {
     let first = snapshot.keyval.first()?;
-    let code = first.error.unwrap_or(rpc::EError::Success as i32);
-    if code == rpc::EError::Success as i32
+    let code = first.error.unwrap_or(porto::SUCCESS);
+    if code == porto::SUCCESS
         || !snapshot
             .keyval
             .iter()
@@ -478,7 +457,6 @@ fn porto_snapshot_error(
 
     Some(ResponseError {
         code,
-        kind: rpc::EError::try_from(code).ok(),
         message: first.error_msg.clone().unwrap_or_default(),
     })
 }
@@ -512,7 +490,7 @@ fn errored_porto_observation(
 }
 
 fn porto_observation(
-    snapshot: rpc::t_container_get_response::TContainerGetListResponse,
+    snapshot: ContainerSnapshot,
     catalog: &[PropertyMetadata],
     options: Options<'_>,
     is_self: bool,
@@ -564,7 +542,7 @@ fn porto_observation(
                 name: metadata.name.clone(),
                 value: None,
                 error: Some(PropertyError {
-                    code: rpc::EError::Unknown as i32,
+                    code: porto::UNKNOWN,
                     message: "Porto response omitted requested property".into(),
                 }),
                 redacted: false,
@@ -573,8 +551,8 @@ fn porto_observation(
             continue;
         };
 
-        let error_code = value.error.unwrap_or(rpc::EError::Success as i32);
-        if error_code != rpc::EError::Success as i32 {
+        let error_code = value.error.unwrap_or(porto::SUCCESS);
+        if error_code != porto::SUCCESS {
             property_errors += 1;
             properties.push(ObservedProperty {
                 name: metadata.name.clone(),
@@ -779,7 +757,7 @@ fn emit_property<W: Write>(
                 "property":property.name,
                 "error":{
                     "code":error.code,
-                    "name":rpc::EError::try_from(error.code).ok().map(|kind| kind.as_str_name()),
+                    "name":porto::error_name(error.code),
                     "message":bounded_string(&error.message, 4096),
                 },
             }),
@@ -1003,7 +981,7 @@ fn inspect_self(
     );
 
     let mut namespaces = Map::new();
-    for name in ["cgroup", "ipc", "mnt", "net", "pid", "user", "uts"] {
+    for name in super::NAMESPACES {
         check_deadline(deadline)?;
         let path = PathBuf::from(format!("/proc/self/ns/{name}"));
         match fs::read_link(&path) {
@@ -1028,7 +1006,7 @@ fn inspect_self(
 fn enrich_native(container: &mut NativeContainer) {
     let base = PathBuf::from("/proc").join(container.init_pid.to_string());
     container.root = fs::read_link(base.join("root")).ok();
-    for name in ["cgroup", "ipc", "mnt", "net", "pid", "user", "uts"] {
+    for name in super::NAMESPACES {
         if let Ok(target) = fs::read_link(base.join("ns").join(name)) {
             container.namespaces.insert(name.into(), target);
         }
@@ -1153,9 +1131,7 @@ fn porto_failure<W: Write>(
             coverage.denied += 1;
             ("permission_denied", "source_permission_denied", true)
         }
-        PortoError::Response(response)
-            if response.kind == Some(rpc::EError::ContainerDoesNotExist) =>
-        {
+        PortoError::Response(response) if response.code == porto::CONTAINER_DOES_NOT_EXIST => {
             coverage.skipped += 1;
             ("not_found", "container_not_found", true)
         }
@@ -1291,22 +1267,22 @@ mod tests {
                 dynamic: false,
             },
         ];
-        let snapshot = rpc::t_container_get_response::TContainerGetListResponse {
+        let snapshot = ContainerSnapshot {
             name: "self".into(),
             keyval: vec![
-                rpc::t_container_get_response::TContainerGetValueResponse {
+                porto::PropertyValue {
                     variable: "state".into(),
                     value: Some("running".into()),
                     ..Default::default()
                 },
-                rpc::t_container_get_response::TContainerGetValueResponse {
+                porto::PropertyValue {
                     variable: "capabilities_allowed".into(),
                     value: Some("CHOWN;SETUID, NET_ADMIN".into()),
                     ..Default::default()
                 },
-                rpc::t_container_get_response::TContainerGetValueResponse {
+                porto::PropertyValue {
                     variable: "denied".into(),
-                    error: Some(rpc::EError::Permission as i32),
+                    error: Some(11),
                     error_msg: Some("permission denied".into()),
                     ..Default::default()
                 },
@@ -1315,7 +1291,7 @@ mod tests {
         };
         let options = Options {
             name: Some("self"),
-            socket: Path::new(porto_api::DEFAULT_SOCKET_PATH),
+            socket: Path::new(crate::cli::PORTO_SOCKET_PATH),
             max_items: 1,
             show_sensitive: false,
             include_streams: false,
@@ -1348,26 +1324,23 @@ mod tests {
 
     #[test]
     fn uniform_container_errors_are_promoted_to_provider_errors() {
-        let missing = rpc::EError::ContainerDoesNotExist as i32;
-        let snapshot = rpc::t_container_get_response::TContainerGetListResponse {
+        let missing = porto::CONTAINER_DOES_NOT_EXIST;
+        let snapshot = ContainerSnapshot {
             name: "missing".into(),
             keyval: ["state", "root"]
                 .into_iter()
-                .map(
-                    |variable| rpc::t_container_get_response::TContainerGetValueResponse {
-                        variable: variable.into(),
-                        error: Some(missing),
-                        error_msg: Some("container missing not found".into()),
-                        ..Default::default()
-                    },
-                )
+                .map(|variable| porto::PropertyValue {
+                    variable: variable.into(),
+                    error: Some(missing),
+                    error_msg: Some("container missing not found".into()),
+                    ..Default::default()
+                })
                 .collect(),
             ..Default::default()
         };
 
         let error = porto_snapshot_error(&snapshot).expect("uniform response error");
         assert_eq!(error.code, missing);
-        assert_eq!(error.kind, Some(rpc::EError::ContainerDoesNotExist));
     }
 
     #[test]
@@ -1378,9 +1351,9 @@ mod tests {
             read_only: true,
             dynamic: false,
         }];
-        let snapshot = rpc::t_container_get_response::TContainerGetListResponse {
+        let snapshot = ContainerSnapshot {
             name: "self".into(),
-            keyval: vec![rpc::t_container_get_response::TContainerGetValueResponse {
+            keyval: vec![porto::PropertyValue {
                 variable: "stdout[0:5]".into(),
                 value: Some("abcde".into()),
                 ..Default::default()
@@ -1389,7 +1362,7 @@ mod tests {
         };
         let options = Options {
             name: Some("self"),
-            socket: Path::new(porto_api::DEFAULT_SOCKET_PATH),
+            socket: Path::new(crate::cli::PORTO_SOCKET_PATH),
             max_items: 1,
             show_sensitive: false,
             include_streams: true,

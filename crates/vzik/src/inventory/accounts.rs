@@ -9,10 +9,11 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::{
-    coverage_diagnostic, emit, finish, item_limit, output_limit, parse_u64, path_value,
-    read_bounded, sorted_entries, source_failure, text, trim_ascii, unavailable,
+    coverage_diagnostic, emit, finish, item_limit, output_limit, path_value, read_bounded,
+    sorted_entries, source_failure, text, unavailable,
 };
 use crate::cli::{CapabilityId, Invocation};
+use crate::procfs::parse_u64;
 use crate::protocol::{
     CapabilityReport, Coverage, ExecutionContext, ProtocolError, RecordSink, check_deadline,
 };
@@ -241,7 +242,7 @@ fn discover_config_files(initial: Vec<PathBuf>, mode: DirectiveMode) -> Vec<Path
                     .map(|(directory, value)| vec![(directory, value.to_vec())])
                     .unwrap_or_default(),
                 DirectiveMode::Ssh => {
-                    let line = trim_ascii(strip_comment(raw));
+                    let line = strip_comment(raw).trim_ascii();
                     let (key, value) = split_directive(line);
                     if key.eq_ignore_ascii_case(b"include") {
                         value
@@ -256,9 +257,11 @@ fn discover_config_files(initial: Vec<PathBuf>, mode: DirectiveMode) -> Vec<Path
             };
 
             for (directory, value) in includes {
-                let value = trim_ascii(value.as_slice())
+                let value = value
+                    .as_slice()
+                    .trim_ascii()
                     .strip_prefix(b"=")
-                    .map_or(trim_ascii(value.as_slice()), trim_ascii);
+                    .map_or(value.as_slice().trim_ascii(), <[u8]>::trim_ascii);
                 let value = value.strip_prefix(b"\"").unwrap_or(value);
                 let value = value.strip_suffix(b"\"").unwrap_or(value);
 
@@ -301,7 +304,7 @@ fn discover_config_files(initial: Vec<PathBuf>, mode: DirectiveMode) -> Vec<Path
 }
 
 fn sudo_include(line: &[u8]) -> Option<(bool, &[u8])> {
-    let line = trim_ascii(line);
+    let line = line.trim_ascii();
     for (directive, directory) in [
         (b"#includedir".as_slice(), true),
         (b"@includedir".as_slice(), true),
@@ -313,7 +316,7 @@ fn sudo_include(line: &[u8]) -> Option<(bool, &[u8])> {
                 .get(directive.len())
                 .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'=')
         {
-            return Some((directory, trim_ascii(&line[directive.len()..])));
+            return Some((directory, line[directive.len()..].trim_ascii()));
         }
     }
     None
@@ -375,9 +378,9 @@ fn collect_directives<W: Write>(
         for (line_number, raw) in bytes.split(|byte| *byte == b'\n').enumerate() {
             check_deadline(deadline)?;
             let line = if mode == DirectiveMode::Sudo && sudo_include(raw).is_some() {
-                trim_ascii(raw)
+                raw.trim_ascii()
             } else {
-                trim_ascii(strip_comment(raw))
+                strip_comment(raw).trim_ascii()
             };
 
             if line.is_empty() {
@@ -504,7 +507,7 @@ fn authorized_keys<W: Write>(
             }
 
             for (line_number, raw) in bytes.split(|byte| *byte == b'\n').enumerate() {
-                let line = trim_ascii(raw);
+                let line = raw.trim_ascii();
                 if line.is_empty() || line.starts_with(b"#") {
                     continue;
                 }
@@ -592,7 +595,7 @@ fn authorized_key_patterns() -> (Vec<Vec<u8>>, bool) {
         let mut in_match = false;
 
         for raw in bytes.split(|byte| *byte == b'\n') {
-            let line = trim_ascii(strip_comment(raw));
+            let line = strip_comment(raw).trim_ascii();
             let (key, value) = split_directive(line);
             if key.is_empty() {
                 continue;
@@ -712,7 +715,7 @@ fn split_directive(line: &[u8]) -> (&[u8], &[u8]) {
         .position(|byte| byte.is_ascii_whitespace() || *byte == b'=')
         .unwrap_or(line.len());
     let key = &line[..split];
-    let value = trim_ascii(line.get(split + 1..).unwrap_or_default());
+    let value = line.get(split + 1..).unwrap_or_default().trim_ascii();
     (key, value)
 }
 
