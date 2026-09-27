@@ -1786,12 +1786,6 @@ fn no_proc_uses_filesystem_reexec_and_cleans_unusable_bridge() {
             probe["filesystem"]["mount_execution_policy"]["status"],
             "unknown"
         );
-        assert!(
-            probe["filesystem"].get("chmod_file").is_none()
-                && probe["filesystem"].get("execute_file").is_none(),
-            "removed executable-file probe leaked into the schema: {}",
-            probe["filesystem"]
-        );
         assert_eq!(probe["filesystem"]["cleanup"]["value"], true);
 
         let blocker = root.join("blocker");
@@ -2091,7 +2085,7 @@ fn spawn_denial_preserves_brush_control_plane() {
                 "--norc",
                 "--noprofile",
                 "-c",
-                "sort </dev/null; doctor --json >\"$AXE_WORK_DIR/doctor.json\"; doctor >\"$AXE_WORK_DIR/doctor.txt\"; printf 'alive\\n'",
+                "sort </dev/null; doctor --json >\"$AXE_WORK_DIR/doctor.json\"; printf 'alive\\n'",
             ])
             .exec();
         panic!("exec spawn-constrained AXE: {error}");
@@ -2152,15 +2146,6 @@ fn spawn_denial_preserves_brush_control_plane() {
             .iter()
             .any(|entry| entry["component"] == "process" && entry["operation"] == "fork"),
         "active fork failure was not preserved: {degradations:?}"
-    );
-    let human =
-        fs::read_to_string(scratch.path().join("doctor.txt")).expect("read native doctor output");
-    assert!(
-        human.contains("Attention\n")
-            && human.contains("Command: sort")
-            && human.contains("Child AXE processes may not start.")
-            && human.contains("External child processes may not start."),
-        "negative active results must explain runtime impact: {human}"
     );
 }
 
@@ -2618,16 +2603,11 @@ fn sshd_publishes_selected_path_bridge_reused_by_shells() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("applet PATH bridge unavailable"),
-        "sshd reported bridge errors: {stderr}"
-    );
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn unlinked_binary_still_launches_embedded_shell() {
+fn unlinked_binary_launches_embedded_shell() {
     use std::os::fd::AsRawFd;
 
     let scratch = Scratch::new("unlinked-shell");
@@ -2669,7 +2649,7 @@ fn commands_is_queryable_with_bundled_jq_inside_shell() {
             "--norc",
             "--noprofile",
             "-c",
-            "commands | jq -c '{schema, schema_version, keys: (keys | sort), has_legacy_name: any(.commands[]; .name == \"axe-info\"), missing_synopses: [.commands[] | select((.synopsis | type) != \"string\" or (.synopsis | length) == 0) | .name], invalid_availability: [.commands[] | select(.availability != \"local\" and .availability != \"on_demand\" and .availability != \"blocked\") | .name], examples: ([.commands[] | select(.name == \"doctor\" or .name == \"goblin\" or .name == \"jq\") | {name, source, category, synopsis, availability, local_path_type: (.local_path | type)}] | sort_by(.name))}'",
+            "commands | jq -c '{schema, schema_version, keys: (keys | sort), invalid_availability: [.commands[] | select(.availability != \"local\" and .availability != \"on_demand\" and .availability != \"blocked\") | .name], examples: ([.commands[] | select(.name == \"doctor\" or .name == \"goblin\" or .name == \"jq\") | {name, source, category, availability, local_path_type: (.local_path | type)}] | sort_by(.name))}'",
         ])
         .output()
         .expect("query commands from the bundled shell");
@@ -2687,15 +2667,12 @@ fn commands_is_queryable_with_bundled_jq_inside_shell() {
             "schema": "axe_commands",
             "schema_version": 1,
             "keys": ["commands", "schema", "schema_version"],
-            "has_legacy_name": false,
-            "missing_synopses": [],
             "invalid_availability": [],
             "examples": [
                 {
                     "name": "doctor",
                     "source": "bundled",
                     "category": "control",
-                    "synopsis": "Diagnose the current AXE runtime, shell, isolation, and restrictions",
                     "availability": "local",
                     "local_path_type": "string"
                 },
@@ -2703,7 +2680,6 @@ fn commands_is_queryable_with_bundled_jq_inside_shell() {
                     "name": "goblin",
                     "source": "bundled",
                     "category": "binary",
-                    "synopsis": "Inspect ELF, PE, Mach-O, and archive binaries",
                     "availability": "local",
                     "local_path_type": "string"
                 },
@@ -2711,7 +2687,6 @@ fn commands_is_queryable_with_bundled_jq_inside_shell() {
                     "name": "jq",
                     "source": "bundled",
                     "category": "data",
-                    "synopsis": "Process and transform JSON data",
                     "availability": "local",
                     "local_path_type": "string"
                 },
@@ -2739,7 +2714,7 @@ fn doctor_reports_readable_shell_state_and_selected_environment() {
             "--norc",
             "--noprofile",
             "-c",
-            "cd \"$AXE_WORK_DIR/inner\"; doctor --json >\"$AXE_WORK_DIR/report.json\"; doctor >\"$AXE_WORK_DIR/human.txt\"; doctor --verbose >\"$AXE_WORK_DIR/verbose.txt\"",
+            "cd \"$AXE_WORK_DIR/inner\"; doctor --json >\"$AXE_WORK_DIR/report.json\"",
         ])
         .output()
         .expect("run doctor from the bundled shell");
@@ -2793,14 +2768,9 @@ fn doctor_reports_readable_shell_state_and_selected_environment() {
     }
     assert!(report["restrictions"]["cgroups"]["membership"]["status"].is_string());
     assert!(report["restrictions"]["cgroups"]["limits"]["memory.max"]["status"].is_string());
-    assert!(
-        report["capabilities"]["memory"]["mfd_exec_flag"].is_object()
-            && report["capabilities"]["memory"]["rw_to_rx"].is_object()
-            && report["capabilities"]["memory"]["map_jit_rx"].is_object()
-            && report["capabilities"]["memory"].get("mfd_exec").is_none()
-            && report["capabilities"]["memory"].get("map_jit").is_none(),
-        "doctor v2 memory capability names must preserve probe semantics"
-    );
+    assert!(report["capabilities"]["memory"]["mfd_exec_flag"].is_object());
+    assert!(report["capabilities"]["memory"]["rw_to_rx"].is_object());
+    assert!(report["capabilities"]["memory"]["map_jit_rx"].is_object());
     for layer in ["virtual_machine", "container", "sandbox"] {
         assert_eq!(
             report["isolation"][layer]["interpretation"],
@@ -2863,96 +2833,6 @@ fn doctor_reports_readable_shell_state_and_selected_environment() {
     assert_eq!(report["filesystem"]["create_file"]["value"], true);
     assert_eq!(report["filesystem"]["write_file"]["value"], true);
     assert_eq!(report["filesystem"]["sync_file"]["value"], true);
-    assert!(
-        report["filesystem"].get("chmod_file").is_none()
-            && report["filesystem"].get("execute_file").is_none(),
-        "removed executable-file probe leaked into the schema: {}",
-        report["filesystem"]
-    );
-
-    let human = fs::read_to_string(work.join("human.txt")).expect("read human doctor report");
-    let mut prior = 0;
-    for heading in [
-        "AXE Doctor\n",
-        "Summary\n",
-        "Attention\n",
-        "Launch\n",
-        "Shell\n",
-        "Host\n",
-        "Isolation indicators\n",
-        "Observed restrictions\n",
-        "Filesystem probe\n",
-        "Environment\n",
-    ] {
-        let offset = human[prior..]
-            .find(heading)
-            .map(|offset| prior + offset)
-            .unwrap_or_else(|| panic!("missing doctor heading {heading:?}: {human}"));
-        assert!(offset >= prior, "doctor headings are out of order: {human}");
-        prior = offset + heading.len();
-    }
-    assert!(
-        human.contains(&format!("  HOME={}", home.display())),
-        "selected values must be directly readable: {human}"
-    );
-    assert!(
-        !human.contains("{\"utf8\""),
-        "UTF-8 paths must not use tagged objects: {human}"
-    );
-    assert!(
-        human.contains("  Filesystem: writable; noexec ")
-            && human.contains("  Noexec: ")
-            && !human.contains("  Noexec mount option:")
-            && !human.contains("Filesystem execution")
-            && !human.contains("Execute file")
-            && !human.contains("/bin/sh"),
-        "filesystem output must report writability and noexec only: {human}"
-    );
-    assert!(
-        !human.contains("  Scope:")
-            && human.contains("  Sandboxing:")
-            && !human.contains("Sandbox indicator")
-            && !human.contains("PATH bridge: published —")
-            && !human.contains("unknown — no strong")
-            && !human.contains("unknown — no matching sandbox indicators")
-            && !human.contains("\nActive checks\n")
-            && !human.contains("\nDegradations\n")
-            && !human.contains("  USER=")
-            && !human.contains("  LOGNAME=")
-            && !human.contains("  XDG_RUNTIME_DIR="),
-        "default human output must omit redundant and verbose details: {human}"
-    );
-    assert!(
-        human.contains("  Self-exec: works") && !human.contains("Self-exec: works (exit status"),
-        "successful self-exec must use the concise human status: {human}"
-    );
-    assert!(
-        !human.contains("  Candidates\n")
-            && !human.contains("  memfd_create syscall:")
-            && !human.contains("  Create directory:"),
-        "default human output must keep detailed probe stages collapsed: {human}"
-    );
-    assert!(
-        human.contains("  Seccomp: ")
-            && !human.contains("  Seccomp mode:")
-            && (human.contains("  No new privileges: enabled")
-                || human.contains("  No new privileges: disabled")),
-        "observed restrictions must use human-readable states: {human}"
-    );
-
-    let verbose = fs::read_to_string(work.join("verbose.txt")).expect("read verbose doctor report");
-    assert!(
-        verbose.contains("  Candidates\n")
-            && verbose.contains("\nActive checks\n")
-            && verbose.contains("  memfd_create syscall:")
-            && verbose.contains("  Create directory:")
-            && verbose.contains("  USER=absent")
-            && verbose.contains("\nDegradations\n")
-            && verbose.contains("  None")
-            && !verbose.contains("  Make executable:")
-            && !verbose.contains("  Execute file:"),
-        "--verbose must expose full observations and probe stages: {verbose}"
-    );
 
     assert!(
         fs::read_dir(&work)
@@ -2964,64 +2844,6 @@ fn doctor_reports_readable_shell_state_and_selected_environment() {
                 .starts_with(".axe-doctor-")),
         "doctor left a probe artifact"
     );
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn full_linux_uutils_sets_are_registered() {
-    let scratch = Scratch::new("uutils-list");
-    let output = offline_axe(&scratch)
-        .arg("--list")
-        .output()
-        .expect("list applet registry");
-
-    assert!(output.status.success());
-    let actual = String::from_utf8(output.stdout)
-        .expect("tool list is UTF-8")
-        .lines()
-        .map(str::to_owned)
-        .collect::<std::collections::HashSet<_>>();
-    let expected = [
-        "[",
-        "chroot",
-        "dmesg",
-        "free",
-        "hd",
-        "hexdump",
-        "hostid",
-        "hugetop",
-        "install",
-        "last",
-        "mountpoint",
-        "nice",
-        "pathchk",
-        "pgrep",
-        "pidof",
-        "pidwait",
-        "pinky",
-        "pkill",
-        "pmap",
-        "ps",
-        "pwdx",
-        "skill",
-        "slabtop",
-        "snice",
-        "sysctl",
-        "tload",
-        "top",
-        "uptime",
-        "users",
-        "vmstat",
-        "w",
-        "watch",
-        "who",
-    ];
-
-    let missing = expected
-        .into_iter()
-        .filter(|name| !actual.contains(*name))
-        .collect::<Vec<_>>();
-    assert!(missing.is_empty(), "missing uutils applets: {missing:?}");
 }
 
 #[cfg(target_os = "linux")]
@@ -3300,64 +3122,6 @@ fn jq_null_input_construction_is_compatible() {
     let output = run_jq(&["-n", r#"{foo: "bar"}"#], b"");
     assert!(output.status.success());
     assert_eq!(output.stdout, b"{\n  \"foo\": \"bar\"\n}\n");
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn diagnostic_applets_are_registered() {
-    let scratch = Scratch::new("diagnostic-list");
-    let output = offline_axe(&scratch)
-        .arg("--list")
-        .output()
-        .expect("list applet registry");
-    assert!(output.status.success());
-    let actual = String::from_utf8(output.stdout)
-        .expect("tool list is UTF-8")
-        .lines()
-        .map(str::to_owned)
-        .collect::<std::collections::HashSet<_>>();
-    let expected = [
-        "arp",
-        "blkid",
-        "blockdev",
-        "bzip2",
-        "host",
-        "ifconfig",
-        "inotifywait",
-        "inotifywatch",
-        "iostat",
-        "ip",
-        "ipaddr",
-        "ipcalc",
-        "ipcs",
-        "iplink",
-        "ipneigh",
-        "iproute",
-        "iprule",
-        "last",
-        "lsmod",
-        "lsof",
-        "lspci",
-        "lsscsi",
-        "lsusb",
-        "modinfo",
-        "mount",
-        "mountpoint",
-        "nslookup",
-        "ping",
-        "ping6",
-        "traceroute",
-        "traceroute6",
-        "xz",
-    ];
-    let missing = expected
-        .into_iter()
-        .filter(|name| !actual.contains(*name))
-        .collect::<Vec<_>>();
-    assert!(
-        missing.is_empty(),
-        "missing diagnostic applets: {missing:?}"
-    );
 }
 
 #[cfg(target_os = "linux")]

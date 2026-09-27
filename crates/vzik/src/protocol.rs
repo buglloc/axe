@@ -597,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_record_limit_still_closes_the_stream() {
+    fn profile_record_limit_closes_the_stream() {
         let args = ["vzik", "collect", "--max-records", "32"]
             .into_iter()
             .map(OsString::from)

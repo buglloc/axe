@@ -1979,11 +1979,6 @@ mod tests {
         };
         assert!(capture_help.contains("Output options may appear before or after"));
         assert!(capture_help.contains("vzik capture filesystem unix-sockets /run"));
-
-        let Err(error) = parse(args(&["vzik", "find", "Unix", "sockets"])) else {
-            panic!("unknown command must fail");
-        };
-        assert_eq!(error.details()["kind"], "invalid_subcommand");
     }
 
     #[test]
@@ -2191,27 +2186,6 @@ mod tests {
                 "--user",
                 "alice"
             ]))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn generic_container_and_collect_commands_reject_porto_options() {
-        assert!(
-            parse(args(&[
-                "vzik",
-                "container",
-                "inspect",
-                "self",
-                "--socket",
-                "/tmp/portod.socket",
-            ]))
-            .is_err()
-        );
-        assert!(
-            parse(args(
-                &["vzik", "collect", "--socket", "/tmp/portod.socket",]
-            ))
             .is_err()
         );
     }

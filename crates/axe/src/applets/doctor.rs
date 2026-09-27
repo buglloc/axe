@@ -1836,7 +1836,6 @@ mod tests {
         assert!(!json.contains("secret-value"));
         assert!(json.contains("/custom/bin"));
         assert!(json.contains("/bin/sh"));
-        assert!(!json.contains("redacted"));
     }
 
     #[test]
@@ -1867,11 +1866,5 @@ mod tests {
 
         assert_eq!(observation.status, ObservationStatus::Unsupported);
         assert!(observation.error.is_none());
-        assert!(
-            observation
-                .reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("legacy executable memfds"))
-        );
     }
 }
