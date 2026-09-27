@@ -48,12 +48,12 @@ AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl --no-config --norc --nop
 | Group | Commands | Purpose |
 | --- | --- | --- |
 | Shell | Brush builtins | Shell state, jobs, history, completion, and POSIX/Bash-style control flow |
-| Coreutils | `uutils/coreutils` | Basic file, text, process, and environment operations |
+| Coreutils | `uutils/coreutils`, including `hostname` and its `dnsdomainname` alias | Basic file, text, process, and environment operations |
 | Process | `free`, `hugetop`, `pgrep`, `pidof`, `pidwait`, `pkill`, `pmap`, `ps`, `pwdx`, `skill`, `slabtop`, `snice`, `sysctl`, `tload`, `top`, `vmstat`, `w`, `watch` | Linux processes and system state |
 | System | `dmesg`, `hexdump`, `last`, `mountpoint` | Kernel log, hex dumps, login history, and mount points |
-| Text | `awk`, `grep`, `sed`, `find`, `xargs`, `diff`, `cmp`, `diff3` | Search, transform, and compare data |
+| Text | `awk`, `grep`, `egrep`, `fgrep`, `rgrep`, `sed`, `find`, `xargs`, `diff`, `cmp`, `diff3` | Search, transform, and compare data |
 | Data | `jq` | JSON queries and transformations |
-| Archives | `tar`, `gzip`, `gunzip`, `zcat`, `bzip2`, `bunzip2`, `bzcat`, `xz`, `unxz`, `xzcat` | Archives and compressed streams |
+| Archives | `tar`, `gzip`, `gunzip`, `zcat`, `gzcat`, `bzip2`, `bunzip2`, `bzcat`, `xz`, `unxz`, `xzcat` | Archives and compressed streams |
 | Binary inspection | `file`, `goblin`, `strings` | Identify and inspect binary formats |
 | Network | `http`, `arp`, `ifconfig`, `ip`, `ipaddr`, `iplink`, `ipneigh`, `iproute`, `iprule`, `ipcalc`, `host`, `nslookup`, `ping`, `ping6`, `traceroute`, `traceroute6` | Bounded HTTP requests, Linux networking, DNS, and connectivity |
 | Storage | `blkid`, `blockdev`, `mount` | Block devices and mounts; bundled `mount` is read-only |

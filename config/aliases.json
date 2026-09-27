@@ -1,4 +1,8 @@
 {
+  "dnsdomainname": {
+    "argv": ["hostname", "--domain"],
+    "synopsis": "Display the system DNS domain name"
+  },
   "egrep": {
     "argv": ["grep", "-E"]
   },
@@ -10,6 +14,14 @@
   },
   "gunzip": {
     "argv": ["gzip", "-d"]
+  },
+  "gzcat": {
+    "argv": ["gzip", "-cd"],
+    "synopsis": "Decompress gzip data to standard output"
+  },
+  "rgrep": {
+    "argv": ["grep", "-r"],
+    "synopsis": "Search directories recursively for matching lines"
   },
   "zcat": {
     "argv": ["gzip", "-cd"]
