@@ -7,7 +7,11 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
+        Self::new_in(&std::env::temp_dir(), label)
+    }
+
+    fn new_in(parent: &Path, label: &str) -> Self {
+        let path = parent.join(format!(
             "axe-{label}-{}-{}",
             std::process::id(),
             std::thread::current().name().unwrap_or("test")
@@ -1652,7 +1656,7 @@ fn no_proc_uses_filesystem_reexec_and_cleans_unusable_bridge() {
         let direct_blocker = root.join("direct-blocker");
         fs::write(&direct_blocker, b"not a directory").expect("create direct relay blocker");
         let direct_axe = root.join("direct-axe");
-        fs::copy(&axe, &direct_axe).expect("copy AXE for direct descriptor execution");
+        fs::hard_link(&axe, &direct_axe).expect("link AXE for direct descriptor execution");
         let direct = Command::new(&direct_axe)
             .env_clear()
             .env("HOME", &root)
@@ -1681,7 +1685,7 @@ fn no_proc_uses_filesystem_reexec_and_cleans_unusable_bridge() {
         let policy_work = root.join("policy");
         fs::create_dir(&policy_work).expect("create policy work directory");
         let policy_axe = root.join("policy-axe");
-        fs::copy(&axe, &policy_axe).expect("copy AXE for policy fallback");
+        fs::hard_link(&axe, &policy_axe).expect("link AXE for policy fallback");
         let policy = Command::new(&test_binary)
             .args(["--exact", TEST_NAME, "--nocapture"])
             .env(POLICY_CHILD, "1")
@@ -1712,7 +1716,7 @@ fn no_proc_uses_filesystem_reexec_and_cleans_unusable_bridge() {
         let degraded_blocker = root.join("degraded-blocker");
         fs::write(&degraded_blocker, b"not a directory").expect("create degraded relay blocker");
         let degraded_axe = root.join("degraded-axe");
-        fs::copy(&axe, &degraded_axe).expect("copy AXE for controlled degradation");
+        fs::hard_link(&axe, &degraded_axe).expect("link AXE for controlled degradation");
         let degraded = Command::new(&test_binary)
             .args(["--exact", TEST_NAME, "--nocapture"])
             .env(POLICY_CHILD, "1")
@@ -1875,16 +1879,19 @@ fn no_proc_uses_filesystem_reexec_and_cleans_unusable_bridge() {
         return;
     }
 
-    let scratch = Scratch::new("no-proc");
-    let test_binary = std::env::current_exe()
-        .expect("locate smoke test binary")
-        .canonicalize()
-        .expect("canonicalize smoke test binary");
     let axe = std::env::var_os(AXE_EXECUTABLE)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_axe")))
         .canonicalize()
         .expect("canonicalize AXE executable");
+    let scratch = Scratch::new_in(
+        axe.parent().expect("AXE executable has a parent directory"),
+        "no-proc",
+    );
+    let test_binary = std::env::current_exe()
+        .expect("locate smoke test binary")
+        .canonicalize()
+        .expect("canonicalize smoke test binary");
     let output = Command::new("unshare")
         .args([
             "--user",
