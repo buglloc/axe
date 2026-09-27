@@ -14,6 +14,12 @@
 //! dispatched function has the same signature as `uutils`' `uumain`:
 //! `fn(Vec<OsString>) -> i32`, with the bundled name as `argv[0]`.
 //!
+//! Embedding binaries that parse their own entry routes (multicall `argv[0]`
+//! names, explicit applet flags, the hidden flag itself) install the registry
+//! once and call [`invoke_installed`] instead: it runs the same lookup and
+//! entry point as [`maybe_dispatch`] for an already-parsed `NAME [ARGS...]`
+//! and reports unknown names as [`UnknownBundledCommand`].
+//!
 //! ## Shell integration
 //!
 //! For every entry in the registry, [`register_commands`] installs a Brush
@@ -27,7 +33,8 @@
 //! multicall function and shell execution policy.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
@@ -297,24 +304,50 @@ pub fn maybe_dispatch() -> Option<i32> {
         return Some(exit_code(ExecutionExitCode::InvalidUsage));
     };
 
-    // The registry is keyed by UTF-8 `String`, so a non-UTF-8 name can never
-    // match. Reject up front rather than allocating a lossy-substituted
-    // lookup key that could accidentally collide with a real registration.
-    let Some(name_str) = name.to_str() else {
-        eprintln!("brush: unknown bundled command: {}", name.to_string_lossy());
-        return Some(exit_code(ExecutionExitCode::NotFound));
-    };
+    Some(invoke_installed(name, args.iter().cloned()).unwrap_or_else(|error| {
+        eprintln!("brush: {error}");
+        exit_code(ExecutionExitCode::NotFound)
+    }))
+}
 
-    let Some(command) = REGISTRY.get().and_then(|registry| registry.get(name_str)) else {
-        eprintln!("brush: unknown bundled command: {name_str}");
-        return Some(exit_code(ExecutionExitCode::NotFound));
-    };
+/// Error returned by [`invoke_installed`] when no installed bundled command
+/// has the requested name. Callers report it and exit with status 127.
+#[derive(Debug)]
+pub struct UnknownBundledCommand(OsString);
 
-    let mut argv: Vec<OsString> = Vec::with_capacity(1 + args.len());
-    argv.push(name.clone());
-    argv.extend(args.iter().cloned());
+impl fmt::Display for UnknownBundledCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "unknown bundled command: {}",
+            self.0.to_string_lossy()
+        )
+    }
+}
 
-    Some((command.entry)(argv))
+/// Runs the installed bundled command `name` in the current process.
+///
+/// The command receives `name` as `argv[0]` followed by `args`, and its exit
+/// code is returned. The registry is keyed by UTF-8 `String`, so a non-UTF-8
+/// name never matches: it is rejected up front rather than looked up through
+/// a lossy key that could collide with a real registration.
+///
+/// # Errors
+///
+/// Returns [`UnknownBundledCommand`] when the registry is not installed or
+/// has no command named `name`.
+pub fn invoke_installed(
+    name: &OsStr,
+    args: impl IntoIterator<Item = OsString>,
+) -> Result<i32, UnknownBundledCommand> {
+    let command = name
+        .to_str()
+        .and_then(|name| REGISTRY.get()?.get(name))
+        .ok_or_else(|| UnknownBundledCommand(name.to_owned()))?;
+
+    let mut argv = vec![name.to_owned()];
+    argv.extend(args);
+    Ok((command.entry)(argv))
 }
 
 fn exit_code(code: ExecutionExitCode) -> i32 {

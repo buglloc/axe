@@ -736,19 +736,9 @@ pub fn build(
     })
 }
 
-pub fn invoke(
-    commands: &HashMap<String, BundledCommand>,
-    name: &str,
-    args: impl IntoIterator<Item = OsString>,
-) -> i32 {
-    let Some(command) = commands.get(name) else {
-        eprintln!("axe: unknown applet: {name}");
-        return 127;
-    };
-    let mut argv = Vec::new();
-    argv.push(OsString::from(name));
-    argv.extend(args);
-    (command.entry)(argv)
+/// Reports whether `name` is in the registry installed into Brush.
+pub(crate) fn is_installed(name: &str) -> bool {
+    brush_shell::bundled::registry().is_some_and(|commands| commands.contains_key(name))
 }
 
 fn alias_entry(args: Vec<OsString>) -> i32 {

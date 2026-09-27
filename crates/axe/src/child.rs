@@ -9,9 +9,9 @@ pub(crate) struct ResolvedCommand {
 }
 
 pub(crate) fn resolve(program: &OsStr) -> io::Result<ResolvedCommand> {
-    let bundled_name = simple_name(program).and_then(OsStr::to_str).filter(|name| {
-        brush_shell::bundled::registry().is_some_and(|registry| registry.contains_key(*name))
-    });
+    let bundled_name = simple_name(program)
+        .and_then(OsStr::to_str)
+        .filter(|name| crate::registry::is_installed(name));
 
     if let Some(name) = bundled_name {
         let executable = brush_shell::bundled::executable_path().ok_or_else(|| {

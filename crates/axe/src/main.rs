@@ -50,30 +50,31 @@ fn main() {
     publish_shell_paths(&executable);
 
     let managed_applet = managed_applet_name(&argv0, &executable);
-    let preferred_local = preferred_local_command(&argv0, &args, managed_applet.as_deref());
-    let store_mode = match requested_store_mode(preferred_local.as_deref(), &args) {
-        Ok(mode) => mode,
-        Err(error) => {
-            eprintln!("axe: {error}");
-            std::process::exit(2);
-        }
-    };
+    let routes = DirectInvocation::parse(&argv0, &args, managed_applet.as_deref());
+    let preferred = DirectInvocation::preferred(&routes);
+    let preferred_local = preferred.and_then(|route| route.name?.to_str());
+    let store_mode =
+        match requested_store_mode(preferred_local, preferred.map_or(&[], |route| route.args)) {
+            Ok(mode) => mode,
+            Err(error) => {
+                eprintln!("axe: {error}");
+                std::process::exit(2);
+            }
+        };
     // SAFETY: mode selection runs before registry construction or any background threads.
     unsafe {
         std::env::set_var("AXE_STORE_MODE", store_mode.as_str());
     }
 
-    let mode = if managed_applet.is_some()
-        || args
-            .first()
-            .is_some_and(|arg| arg == brush_shell::bundled::DISPATCH_FLAG)
+    let mode = if preferred
+        .is_some_and(|route| matches!(route.route, Route::Hidden | Route::Managed))
         || std::env::var_os(registry::INDEX_CACHE_ONLY_ENV).as_deref() == Some(OsStr::new("1"))
     {
         registry::BuildMode::CacheOnly
     } else {
         registry::BuildMode::RevalidateIfStale
     };
-    let registry = match registry::build(mode, preferred_local.as_deref(), store_mode) {
+    let registry = match registry::build(mode, preferred_local, store_mode) {
         Ok(registry) => registry,
         Err(error) => {
             eprintln!("axe: {error}");
@@ -94,65 +95,18 @@ fn main() {
 
     let bundled_executable = Arc::clone(&executable);
     brush_shell::bundled::install_with_executable(
-        registry.commands.clone(),
+        registry.commands,
         Arc::new(move || bundled_executable.bundled_executable()),
     );
 
-    if args
-        .first()
-        .is_some_and(|arg| arg == brush_shell::bundled::DISPATCH_FLAG)
-    {
-        let Some(name) = args.get(1) else {
-            eprintln!("axe: bundled dispatch requires a command name");
-            std::process::exit(2);
-        };
-        let Some(name) = name.to_str() else {
-            eprintln!("axe: bundled command name is not valid UTF-8");
-            std::process::exit(127);
-        };
-        std::process::exit(registry::invoke(
-            &registry.commands,
-            name,
-            args.iter().skip(2).cloned(),
-        ));
-    }
-
-    if let Some(name) = managed_applet {
-        std::process::exit(registry::invoke(&registry.commands, &name, args));
-    }
-
-    if let Some(name) = busybox_name(&argv0, &registry.commands) {
-        std::process::exit(registry::invoke(&registry.commands, name, args));
-    }
-    if args.first() == Some(&OsString::from("--applet")) {
-        let Some(name) = args.get(1) else {
-            eprintln!("axe: --applet requires a command name");
-            std::process::exit(2);
-        };
-        let Some(name) = name.to_str() else {
-            eprintln!("axe: applet name is not valid UTF-8");
-            std::process::exit(127);
-        };
-        std::process::exit(registry::invoke(
-            &registry.commands,
-            name,
-            applet_args(args.iter().skip(2).cloned()),
-        ));
-    }
-    if let Some(name) = args.first().and_then(|arg| arg.to_str())
-        && registry.commands.contains_key(name)
-    {
-        std::process::exit(registry::invoke(
-            &registry.commands,
-            name,
-            applet_args(args.iter().skip(1).cloned()),
-        ));
+    for route in routes.iter().flatten() {
+        if let Some(code) = route.dispatch() {
+            std::process::exit(code);
+        }
     }
 
     if let Some(error) = &registry.blocking_index_error
-        && preferred_local
-            .as_deref()
-            .is_some_and(|name| !registry.commands.contains_key(name))
+        && preferred_local.is_some_and(|name| !registry::is_installed(name))
     {
         eprintln!("axe: {error}");
         std::process::exit(126);
@@ -174,32 +128,129 @@ fn main() {
     brush_shell::entry::run();
 }
 
-fn preferred_local_command(
-    argv0: &OsStr,
-    args: &[OsString],
-    managed_applet: Option<&str>,
-) -> Option<String> {
-    if args
-        .first()
-        .is_some_and(|arg| arg == brush_shell::bundled::DISPATCH_FLAG)
-    {
-        return args.get(1)?.to_str().map(str::to_owned);
+/// How argv selected an applet, in dispatch precedence order.
+#[derive(Clone, Copy)]
+enum Route {
+    /// `axe --invoke-bundled NAME [ARG ...]`, used by Brush shims and AXE self-exec.
+    Hidden,
+    /// `argv[0]` names an `AXE_APPLET_DIR` bridge link to this executable.
+    Managed,
+    /// `argv[0]` is a registered applet name (BusyBox-style link or copy).
+    BusyBox,
+    /// `axe --applet NAME [--] [ARG ...]`.
+    Explicit,
+    /// `axe NAME [--] [ARG ...]`.
+    Positional,
+}
+
+impl Route {
+    /// Explicit routes always dispatch; the others fall through to the next
+    /// route or the shell when their name is not registered.
+    fn explicit(self) -> bool {
+        matches!(self, Self::Hidden | Self::Managed | Self::Explicit)
     }
-    if let Some(name) = managed_applet {
-        return Some(name.to_owned());
-    }
-    if args.first() == Some(&OsString::from("--applet")) {
-        return args.get(1)?.to_str().map(str::to_owned);
+}
+
+/// Applet entry route parsed once from argv, before the registry exists.
+struct DirectInvocation<'a> {
+    route: Route,
+    /// `None` when hidden dispatch or `--applet` lacks a command name.
+    name: Option<&'a OsStr>,
+    args: &'a [OsString],
+}
+
+impl<'a> DirectInvocation<'a> {
+    /// Returns the candidate routes in dispatch precedence order: hidden
+    /// dispatch or the managed bridge alone, otherwise the `argv[0]` name
+    /// followed by `--applet` or the positional name.
+    fn parse(
+        argv0: &'a OsStr,
+        args: &'a [OsString],
+        managed_applet: Option<&'a str>,
+    ) -> [Option<Self>; 2] {
+        if args
+            .first()
+            .is_some_and(|arg| arg == brush_shell::bundled::DISPATCH_FLAG)
+        {
+            let hidden = Self {
+                route: Route::Hidden,
+                name: args.get(1).map(OsString::as_os_str),
+                args: args.get(2..).unwrap_or_default(),
+            };
+            return [Some(hidden), None];
+        }
+        if let Some(name) = managed_applet {
+            let managed = Self {
+                route: Route::Managed,
+                name: Some(OsStr::new(name)),
+                args,
+            };
+            return [Some(managed), None];
+        }
+
+        let busybox = Path::new(argv0)
+            .file_name()
+            .filter(|name| name.to_str().is_some_and(|name| name != "axe"))
+            .map(|name| Self {
+                route: Route::BusyBox,
+                name: Some(name),
+                args,
+            });
+        let leading = match args.first() {
+            Some(flag) if flag == "--applet" => Some(Self {
+                route: Route::Explicit,
+                name: args.get(1).map(OsString::as_os_str),
+                args: without_separator(args.get(2..).unwrap_or_default()),
+            }),
+            Some(name) if name.to_str().is_some_and(|name| !name.starts_with('-')) => Some(Self {
+                route: Route::Positional,
+                name: Some(name),
+                args: without_separator(&args[1..]),
+            }),
+            _ => None,
+        };
+        [busybox, leading]
     }
 
-    let argv0_name = Path::new(argv0).file_name()?.to_str()?;
-    if argv0_name != "axe" {
-        return Some(argv0_name.to_owned());
+    /// Returns the route whose applet selects Store mode before the registry
+    /// exists: the first explicit route, otherwise the first candidate.
+    fn preferred(routes: &[Option<Self>; 2]) -> Option<&Self> {
+        let mut candidates = routes.iter().flatten();
+        candidates
+            .clone()
+            .find(|route| route.route.explicit())
+            .or_else(|| candidates.next())
     }
-    args.first()
-        .and_then(|argument| argument.to_str())
-        .filter(|name| !name.starts_with('-'))
-        .map(str::to_owned)
+
+    /// Runs the applet from the installed registry, or returns `None` when a
+    /// fallible route names no registered applet.
+    fn dispatch(&self) -> Option<i32> {
+        let Some(name) = self.name else {
+            let flag = match self.route {
+                Route::Hidden => brush_shell::bundled::DISPATCH_FLAG,
+                _ => "--applet",
+            };
+            eprintln!("axe: {flag} requires a command name");
+            return Some(2);
+        };
+        if !self.route.explicit() && !name.to_str().is_some_and(registry::is_installed) {
+            return None;
+        }
+
+        let code = brush_shell::bundled::invoke_installed(name, self.args.iter().cloned())
+            .unwrap_or_else(|error| {
+                eprintln!("axe: {error}");
+                127
+            });
+        Some(code)
+    }
+}
+
+fn without_separator(args: &[OsString]) -> &[OsString] {
+    match args.split_first() {
+        Some((first, rest)) if first == "--" => rest,
+        _ => args,
+    }
 }
 
 fn requested_store_mode(
@@ -237,15 +288,6 @@ fn requested_store_mode(
     Ok(inherited.restrict(requested))
 }
 
-fn applet_args(args: impl IntoIterator<Item = OsString>) -> impl Iterator<Item = OsString> {
-    let mut args = args.into_iter();
-    let first = args.next();
-    first
-        .into_iter()
-        .filter(|arg| arg != OsStr::new("--"))
-        .chain(args)
-}
-
 fn publish_shell_paths(executable: &executable::Executable) {
     let publishable_path = executable.bridge_path();
     // SAFETY: this runs before registry construction or any other threads.
@@ -280,14 +322,6 @@ fn disable_persistent_shell_history() {
     unsafe {
         std::env::set_var("HISTFILE", "/dev/null");
     }
-}
-
-fn busybox_name<'a>(
-    argv0: &OsStr,
-    commands: &'a std::collections::HashMap<String, brush_shell::bundled::BundledCommand>,
-) -> Option<&'a str> {
-    let name = Path::new(argv0).file_name()?.to_str()?;
-    commands.get_key_value(name).map(|(name, _)| name.as_str())
 }
 
 fn brush_version() -> &'static str {
