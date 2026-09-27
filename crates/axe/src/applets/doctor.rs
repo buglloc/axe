@@ -352,7 +352,7 @@ fn collect_report(options: &Options, scope: ScopeInput) -> DoctorReport {
         scope: scope_name,
         axe: AxeSection {
             version: crate::VERSION.to_owned(),
-            edition: crate::embedded::EDITION_ID,
+            edition: crate::embedded::INPUTS.edition_id,
             target: env!("AXE_BUILD_TARGET"),
             commit: env!("AXE_BUILD_COMMIT"),
             target_os: std::env::consts::OS,

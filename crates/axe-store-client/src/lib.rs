@@ -9,7 +9,7 @@ use std::io::{self, Write};
 use std::net::TcpStream;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 use std::time::Instant;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -162,6 +162,8 @@ pub struct ClientConfig {
     pub tmpfs_roots: Vec<PathBuf>,
     pub trusted_keys: TrustedKeys,
     pub embedded_index: Vec<u8>,
+    pub tls_roots_der: Arc<[Vec<u8>]>,
+    pub ca_bundle_pem: Arc<[u8]>,
 }
 
 impl ClientConfig {
@@ -169,6 +171,8 @@ impl ClientConfig {
         json: &str,
         trusted: &[(&str, &str)],
         embedded_index: &[u8],
+        tls_roots_der: Arc<[Vec<u8>]>,
+        ca_bundle_pem: Arc<[u8]>,
     ) -> Result<Self, StoreError> {
         let file = StoreConfig::from_json(json.as_bytes()).map_err(|error| {
             StoreError::configuration(
@@ -238,6 +242,8 @@ impl ClientConfig {
             tmpfs_roots: consumer.tmpfs_roots,
             trusted_keys,
             embedded_index: embedded_index.to_vec(),
+            tls_roots_der,
+            ca_bundle_pem,
         })
     }
 }
@@ -1198,9 +1204,10 @@ fn build_agent(config: &ClientConfig, timeout: Duration) -> Result<ureq::Agent, 
         })?
         .to_owned();
 
-    let certificates = axe_tls_roots::certificates()
+    let certificates = config
+        .tls_roots_der
         .iter()
-        .map(|certificate| ureq::tls::Certificate::from_der(certificate.as_ref()).to_owned())
+        .map(|certificate| ureq::tls::Certificate::from_der(certificate).to_owned())
         .collect::<Vec<_>>();
     let tls = ureq::tls::TlsConfig::builder()
         .provider(ureq::tls::TlsProvider::Rustls)
@@ -1828,6 +1835,8 @@ mod tests {
                 tmpfs_roots: Vec::new(),
                 trusted_keys,
                 embedded_index,
+                tls_roots_der: Arc::default(),
+                ca_bundle_pem: Arc::default(),
             },
             network_policy,
         )

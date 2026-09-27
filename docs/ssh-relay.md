@@ -10,7 +10,7 @@ The first successful interactive PTY session on each SSH transport receives a sh
 
 ## Relay
 
-If a target cannot be reached from outside, `sshd` can register outbound with a relay. The OSS edition disables relay by default (`config/relay.json` sets `enabled_by_default` to `false` and configures no endpoints); without `--relay`, no relay task starts. `--relay ENDPOINT` enables the selected transport; `--no-relay` disables it even for editions with a configured default. The flags conflict.
+If a target cannot be reached from outside, `sshd` can register outbound with a relay. The OSS `edition.json` disables relay by default and configures no endpoints; without `--relay`, no relay task starts. `--relay ENDPOINT` enables the selected transport; `--no-relay` disables it even for editions with a configured default. The flags conflict.
 
 TCP is the default relay transport and requires `AXE_RELAY_TOKEN` (at least 32 bytes). Use `--relay-transport quic` for QUIC; its mTLS credentials can be embedded by an edition or provided through `AXE_RELAY_QUIC_SERVER_CERT_FILE`, `AXE_RELAY_QUIC_CLIENT_CERT_FILE`, and `AXE_RELAY_QUIC_CLIENT_KEY_FILE`. See [`BOOTSTRAP.md`](../BOOTSTRAP.md#relay-endpoints-and-identities) for endpoint and server setup.
 

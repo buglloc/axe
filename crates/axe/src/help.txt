@@ -17,8 +17,7 @@ Resolution order:
 Repository configuration:
   config/aliases.json              compiled applet aliases
   config/store.json                AXE Store endpoints, limits and storage roots
-  config/relay.json                compiled TCP and QUIC relay endpoints
-  config/sshd.json                 compiled default SSH principals
+  edition.json                     edition ID, default SSH principals, and relay endpoints
   keys/                            ignored local SSH/relay identities and Store publisher credentials
   store/trusted/*.pub, store/bootstrap-index.cbor.zst
                                    public Store trust and signed bootstrap snapshot

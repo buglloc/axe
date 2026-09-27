@@ -2,7 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::process::{Command, ExitStatus};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use axe_store_client::{
     CachePolicy, Client, ClientConfig, DownloadEvent, FailureClass, NetworkPolicy,
@@ -13,9 +13,11 @@ use crate::registry::{BuildMode, RegistryBuilder, StoreErrorInfo, StoreInfo};
 
 static CLIENT: LazyLock<Result<Client, String>> = LazyLock::new(|| {
     let config = ClientConfig::from_embedded(
-        crate::embedded::STORE_CONFIG_JSON,
-        crate::embedded::STORE_TRUSTED_KEYS,
-        crate::embedded::BOOTSTRAP_INDEX_ZSTD,
+        crate::embedded::INPUTS.store_config_json,
+        crate::embedded::INPUTS.store_trusted_keys,
+        crate::embedded::INPUTS.bootstrap_index_zstd,
+        crate::tls_roots::certificates_der().into(),
+        Arc::from(crate::tls_roots::pem_bundle()),
     )
     .map_err(|error| error.to_string())?;
     let network_policy = match crate::registry::StoreMode::from_environment()? {

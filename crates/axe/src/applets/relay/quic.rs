@@ -253,9 +253,15 @@ pub(super) async fn load_client_config(
 }
 
 fn client_config() -> io::Result<ClientConfig> {
-    if crate::embedded::RELAY_QUIC_SERVER_CERT_DER.is_empty()
-        || crate::embedded::RELAY_QUIC_CLIENT_CERT_DER.is_empty()
-        || crate::embedded::RELAY_QUIC_CLIENT_KEY_DER.is_empty()
+    if crate::embedded::INPUTS
+        .relay
+        .quic_server_cert_der
+        .is_empty()
+        || crate::embedded::INPUTS
+            .relay
+            .quic_client_cert_der
+            .is_empty()
+        || crate::embedded::INPUTS.relay.quic_client_key_der.is_empty()
     {
         return Err(invalid(
             "relay QUIC credentials are not embedded; set AXE_RELAY_QUIC_SERVER_CERT_FILE, AXE_RELAY_QUIC_CLIENT_CERT_FILE, and AXE_RELAY_QUIC_CLIENT_KEY_FILE",
@@ -345,15 +351,15 @@ fn transport_config() -> Arc<quinn::TransportConfig> {
 }
 
 fn server_certificate() -> CertificateDer<'static> {
-    CertificateDer::from(crate::embedded::RELAY_QUIC_SERVER_CERT_DER.to_vec())
+    CertificateDer::from(crate::embedded::INPUTS.relay.quic_server_cert_der.to_vec())
 }
 
 fn client_certificate() -> CertificateDer<'static> {
-    CertificateDer::from(crate::embedded::RELAY_QUIC_CLIENT_CERT_DER.to_vec())
+    CertificateDer::from(crate::embedded::INPUTS.relay.quic_client_cert_der.to_vec())
 }
 
 fn client_private_key() -> PrivateKeyDer<'static> {
-    PrivatePkcs8KeyDer::from(crate::embedded::RELAY_QUIC_CLIENT_KEY_DER.to_vec()).into()
+    PrivatePkcs8KeyDer::from(crate::embedded::INPUTS.relay.quic_client_key_der.to_vec()).into()
 }
 
 #[cfg(test)]

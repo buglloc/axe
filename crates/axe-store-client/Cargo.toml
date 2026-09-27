@@ -9,7 +9,6 @@ publish = false
 [dependencies]
 axe-paths.workspace = true
 axe-artifact.workspace = true
-axe-tls-roots.workspace = true
 ciborium.workspace = true
 ed25519-dalek.workspace = true
 libc.workspace = true

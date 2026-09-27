@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
@@ -11,15 +11,17 @@ use axe_artifact::{
 };
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
-use ssh_key::PrivateKey;
+use ssh_key::{HashAlg, PrivateKey, PublicKey};
 
-const EDITION_SCHEMA_VERSION: u32 = 1;
+const EDITION_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Edition {
     schema_version: u32,
     id: String,
+    sshd: SshdConfig,
+    relay: RelayConfig,
 }
 
 #[derive(Deserialize)]
@@ -38,6 +40,13 @@ struct RelayConfig {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AliasConfig {
+    argv: Vec<String>,
+    synopsis: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BootstrapPackage {
     id: String,
     name: String,
@@ -50,8 +59,16 @@ struct BootstrapPackage {
 
 fn main() {
     if let Err(error) = run() {
-        panic!("{error}\nrun 'just generate-dev-keys' or provide deployment keys/");
+        if missing_identity(&error) {
+            panic!("{error}\nrun 'just generate-dev-keys' or provide deployment keys/");
+        }
+        panic!("{error}");
     }
+}
+
+fn missing_identity(error: &str) -> bool {
+    (error.starts_with("read ") && (error.contains("/keys/") || error.contains("/store/trusted")))
+        || error == "store/trusted contains no public keys"
 }
 
 fn run() -> Result<(), String> {
@@ -91,14 +108,13 @@ fn run() -> Result<(), String> {
     for path in [
         "edition.json",
         "config/store.json",
-        "config/sshd.json",
-        "config/relay.json",
         "keys/ssh/host_ed25519",
         "keys/ssh/user_ca_keys",
         "keys/relay/token",
         "keys/relay/quic_server_cert.pem",
         "keys/relay/quic_client_cert.pem",
         "keys/relay/quic_client_key.pem",
+        "store/nix/assets/trusted_ca.pem",
         "store/trusted",
         "store/bootstrap.json",
         "store/bootstrap-index.cbor.zst",
@@ -112,18 +128,11 @@ fn run() -> Result<(), String> {
     let store_json = read_text(&edition_root, "config/store.json")?;
     let store = StoreConfig::from_json(store_json.as_bytes())
         .map_err(|error| format!("invalid config/store.json: {error}"))?;
-
-    let sshd_json = read_text(&edition_root, "config/sshd.json")?;
-    let sshd: SshdConfig = serde_json::from_str(&sshd_json)
-        .map_err(|error| format!("invalid config/sshd.json: {error}"))?;
-    if sshd.principals.is_empty() || sshd.principals.iter().any(String::is_empty) {
-        return Err("config/sshd.json principals must be non-empty".into());
-    }
-
-    let relay_json = read_text(&edition_root, "config/relay.json")?;
-    let relay: RelayConfig = serde_json::from_str(&relay_json)
-        .map_err(|error| format!("invalid config/relay.json: {error}"))?;
-    validate_relay(&relay)?;
+    let aliases_json = fs::read_to_string(workspace.join("config/aliases.json"))
+        .map_err(|error| format!("read config/aliases.json: {error}"))?;
+    let aliases: BTreeMap<String, AliasConfig> = serde_json::from_str(&aliases_json)
+        .map_err(|error| format!("invalid config/aliases.json: {error}"))?;
+    validate_aliases(&aliases)?;
 
     let host_key = fs::read(edition_root.join("keys/ssh/host_ed25519")).map_err(|error| {
         format!(
@@ -134,19 +143,9 @@ fn run() -> Result<(), String> {
     PrivateKey::from_openssh(&host_key)
         .map_err(|error| format!("invalid keys/ssh/host_ed25519: {error}"))?;
     let user_ca_keys = read_text(&edition_root, "keys/ssh/user_ca_keys")?;
-    let ca_lines = user_ca_keys
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect::<Vec<_>>();
-    if ca_lines.is_empty()
-        || ca_lines
-            .iter()
-            .any(|line| line.split_whitespace().count() < 2)
-    {
-        return Err("keys/ssh/user_ca_keys must contain OpenSSH public keys".into());
-    }
+    let ca_fingerprints = parse_ca_fingerprints(&user_ca_keys)?;
 
-    let relay_token = if relay.tcp_endpoint.is_some() {
+    let relay_token = if edition.relay.tcp_endpoint.is_some() {
         read_optional_text(&edition_root, "keys/relay/token")?.unwrap_or_default()
     } else {
         String::new()
@@ -154,7 +153,7 @@ fn run() -> Result<(), String> {
     if !relay_token.trim().is_empty() && relay_token.trim().len() < 32 {
         return Err("keys/relay/token must contain at least 32 bytes".into());
     }
-    if relay.enabled_by_default && relay_token.trim().len() < 32 {
+    if edition.relay.enabled_by_default && relay_token.trim().len() < 32 {
         return Err(
             "enabled relay default requires keys/relay/token with at least 32 bytes".into(),
         );
@@ -164,7 +163,7 @@ fn run() -> Result<(), String> {
         relay_quic_server_certificate,
         relay_quic_client_certificate,
         relay_quic_client_private_key,
-    ) = if relay.quic_endpoint.is_some() {
+    ) = if edition.relay.quic_endpoint.is_some() {
         let server = read_optional_certificate(&edition_root, "keys/relay/quic_server_cert.pem")?;
         let client = read_optional_certificate(&edition_root, "keys/relay/quic_client_cert.pem")?;
         let key = read_optional_pkcs8_private_key(&edition_root, "keys/relay/quic_client_key.pem")?;
@@ -178,63 +177,90 @@ fn run() -> Result<(), String> {
         (Vec::new(), Vec::new(), Vec::new())
     };
 
+    let additional_ca_pem =
+        read_optional_bytes(&edition_root, "store/nix/assets/trusted_ca.pem")?.unwrap_or_default();
+    validate_additional_ca(&additional_ca_pem)?;
     let trusted = load_trusted(&edition_root)?;
     let index_zstd = read_bootstrap_snapshot(&edition_root, &store, &trusted)?;
 
-    let mut generated = String::new();
-    writeln!(generated, "pub const EDITION_ID: &str = {:?};", edition.id).unwrap();
+    let mut generated = String::from(
+        "pub struct RelayInputs {\n\
+         pub enabled_by_default: bool,\n\
+         pub tcp_endpoint: Option<&'static str>,\n\
+         pub quic_endpoint: Option<&'static str>,\n\
+         pub token: &'static str,\n\
+         pub quic_server_cert_der: &'static [u8],\n\
+         pub quic_client_cert_der: &'static [u8],\n\
+         pub quic_client_key_der: &'static [u8],\n\
+         }\n\
+         pub struct AliasInput {\n\
+         pub name: &'static str,\n\
+         pub argv: &'static [&'static str],\n\
+         pub synopsis: Option<&'static str>,\n\
+         }\n\
+         pub struct EmbeddedInputs {\n\
+         pub edition_id: &'static str,\n\
+         pub store_config_json: &'static str,\n\
+         pub ssh_host_key: &'static [u8],\n\
+         pub ssh_principals: &'static [&'static str],\n\
+         pub ssh_ca_fingerprints: &'static [&'static str],\n\
+         pub relay: RelayInputs,\n\
+         pub aliases: &'static [AliasInput],\n\
+         pub store_trusted_keys: &'static [(&'static str, &'static str)],\n\
+         pub bootstrap_index_zstd: &'static [u8],\n\
+         pub additional_ca_pem: &'static [u8],\n\
+         }\n",
+    );
     writeln!(
         generated,
-        "pub const STORE_CONFIG_JSON: &str = {store_json:?};"
+        "pub static INPUTS: EmbeddedInputs = EmbeddedInputs {{"
     )
     .unwrap();
-    writeln!(
-        generated,
-        "pub const SSHD_CONFIG_JSON: &str = {sshd_json:?};"
-    )
-    .unwrap();
-    writeln!(
-        generated,
-        "pub const RELAY_CONFIG_JSON: &str = {relay_json:?};"
-    )
-    .unwrap();
-    writeln!(generated, "pub const SSH_HOST_KEY: &[u8] = &{host_key:?};").unwrap();
-    writeln!(
-        generated,
-        "pub const SSH_USER_CA_KEYS: &str = {user_ca_keys:?};"
-    )
-    .unwrap();
-    writeln!(
-        generated,
-        "pub const RELAY_TOKEN: &str = {:?};",
-        relay_token.trim()
-    )
-    .unwrap();
-    writeln!(
-        generated,
-        "pub const RELAY_QUIC_SERVER_CERT_DER: &[u8] = &{relay_quic_server_certificate:?};"
-    )
-    .unwrap();
-    writeln!(
-        generated,
-        "pub const RELAY_QUIC_CLIENT_CERT_DER: &[u8] = &{relay_quic_client_certificate:?};"
-    )
-    .unwrap();
-    writeln!(
-        generated,
-        "pub const RELAY_QUIC_CLIENT_KEY_DER: &[u8] = &{relay_quic_client_private_key:?};"
-    )
-    .unwrap();
-    generated.push_str("pub const STORE_TRUSTED_KEYS: &[(&str, &str)] = &[\n");
-    for (id, key) in trusted {
-        writeln!(generated, "    ({:?}, {:?}),", id.to_string(), hex(&key)).unwrap();
+    writeln!(generated, "edition_id: {:?},", edition.id).unwrap();
+    writeln!(generated, "store_config_json: {store_json:?},").unwrap();
+    writeln!(generated, "ssh_host_key: &{host_key:?},").unwrap();
+    generated.push_str("ssh_principals: &[\n");
+    for principal in &edition.sshd.principals {
+        writeln!(generated, "{principal:?},").unwrap();
     }
-    generated.push_str("];\n");
+    generated.push_str("],\nssh_ca_fingerprints: &[\n");
+    for fingerprint in &ca_fingerprints {
+        writeln!(generated, "{fingerprint:?},").unwrap();
+    }
+    generated.push_str("],\nrelay: RelayInputs {\n");
     writeln!(
         generated,
-        "pub const BOOTSTRAP_INDEX_ZSTD: &[u8] = &{index_zstd:?};"
+        "enabled_by_default: {}, tcp_endpoint: {:?}, quic_endpoint: {:?}, token: {:?},",
+        edition.relay.enabled_by_default,
+        edition.relay.tcp_endpoint.as_deref(),
+        edition.relay.quic_endpoint.as_deref(),
+        relay_token.trim(),
     )
     .unwrap();
+    writeln!(
+        generated,
+        "quic_server_cert_der: &{relay_quic_server_certificate:?}, \
+         quic_client_cert_der: &{relay_quic_client_certificate:?}, \
+         quic_client_key_der: &{relay_quic_client_private_key:?},"
+    )
+    .unwrap();
+    generated.push_str("},\naliases: &[\n");
+    for (name, alias) in &aliases {
+        writeln!(
+            generated,
+            "AliasInput {{ name: {name:?}, argv: &{:?}, synopsis: {:?} }},",
+            alias.argv, alias.synopsis
+        )
+        .unwrap();
+    }
+    generated.push_str("],\nstore_trusted_keys: &[\n");
+    for (id, key) in &trusted {
+        writeln!(generated, "({:?}, {:?}),", id.to_string(), hex(key)).unwrap();
+    }
+    generated.push_str("],\n");
+    writeln!(generated, "bootstrap_index_zstd: &{index_zstd:?},").unwrap();
+    writeln!(generated, "additional_ca_pem: &{additional_ca_pem:?},").unwrap();
+    generated.push_str("};\n");
 
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR")).join("embedded.rs");
     fs::write(&output, generated).map_err(|error| format!("write {}: {error}", output.display()))
@@ -324,6 +350,24 @@ fn validate_edition(edition: &Edition) -> Result<(), String> {
     {
         return Err("edition.json id must match [a-z0-9-]+".into());
     }
+    validate_principals(&edition.sshd.principals, "edition.json sshd.principals")?;
+    validate_relay(&edition.relay)
+}
+
+fn validate_principals(principals: &[String], name: &str) -> Result<(), String> {
+    if principals.is_empty() {
+        return Err(format!("{name} must not be empty"));
+    }
+
+    let mut unique = HashSet::with_capacity(principals.len());
+    for principal in principals {
+        if principal.is_empty() {
+            return Err(format!("{name} must not contain empty names"));
+        }
+        if !unique.insert(principal) {
+            return Err(format!("{name} contains duplicate principal {principal:?}"));
+        }
+    }
     Ok(())
 }
 
@@ -334,15 +378,64 @@ fn validate_relay(config: &RelayConfig) -> Result<(), String> {
     ] {
         if endpoint.is_some_and(str::is_empty) {
             return Err(format!(
-                "config/relay.json {name} must be null or a non-empty string"
+                "edition.json relay.{name} must be null or a non-empty string"
             ));
         }
     }
     if config.enabled_by_default && config.tcp_endpoint.is_none() {
         return Err(
-            "config/relay.json enabled_by_default requires tcp_endpoint for the default transport"
+            "edition.json relay.enabled_by_default requires relay.tcp_endpoint for the default transport"
                 .into(),
         );
+    }
+    Ok(())
+}
+
+fn validate_aliases(aliases: &BTreeMap<String, AliasConfig>) -> Result<(), String> {
+    for (name, alias) in aliases {
+        if name.is_empty() {
+            return Err("config/aliases.json contains an empty alias name".into());
+        }
+        if alias.argv.first().is_none_or(String::is_empty) {
+            return Err(format!(
+                "config/aliases.json alias {name:?} must have a non-empty argv"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn parse_ca_fingerprints(keys: &str) -> Result<Vec<String>, String> {
+    let lines = keys
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return Err("keys/ssh/user_ca_keys must contain OpenSSH public keys".into());
+    }
+
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            PublicKey::from_openssh(line)
+                .map(|key| key.fingerprint(HashAlg::Sha256).to_string())
+                .map_err(|error| {
+                    format!("invalid keys/ssh/user_ca_keys line {}: {error}", index + 1)
+                })
+        })
+        .collect()
+}
+
+fn validate_additional_ca(pem: &[u8]) -> Result<(), String> {
+    if pem.is_empty() {
+        return Ok(());
+    }
+    let certificates = rustls_pemfile::certs(&mut &*pem)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("invalid store/nix/assets/trusted_ca.pem: {error}"))?;
+    if certificates.is_empty() {
+        return Err("store/nix/assets/trusted_ca.pem must contain at least one certificate".into());
     }
     Ok(())
 }
@@ -534,6 +627,15 @@ fn read_text(root: &Path, relative: &str) -> Result<String, String> {
 fn read_optional_text(root: &Path, relative: &str) -> Result<Option<String>, String> {
     let path = root.join(relative);
     match fs::read_to_string(&path) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("read {}: {error}", path.display())),
+    }
+}
+
+fn read_optional_bytes(root: &Path, relative: &str) -> Result<Option<Vec<u8>>, String> {
+    let path = root.join(relative);
+    match fs::read(&path) {
         Ok(value) => Ok(Some(value)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("read {}: {error}", path.display())),

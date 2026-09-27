@@ -7,7 +7,6 @@ members = [
     "crates/axe-artifact",
     "crates/axe-store-client",
     "crates/axe-store",
-    "crates/axe-tls-roots",
     "crates/vzik",
 ]
 
@@ -35,7 +34,6 @@ license = "MIT"
 axe-artifact = { path = "crates/axe-artifact" }
 axe-paths = { path = "crates/axe-paths" }
 axe-store-client = { path = "crates/axe-store-client" }
-axe-tls-roots = { path = "crates/axe-tls-roots" }
 vzik = { path = "crates/vzik" }
 base64 = "0.22"
 bytes = "1.11"
@@ -78,6 +76,7 @@ tokio = { version = "1.52", features = ["rt-multi-thread"] }
 ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 url = "2.5"
 which = { version = "8.0.6", default-features = false, features = ["real-sys"] }
+webpki-root-certs = "1.0.9"
 zip = { version = "8.0", default-features = false, features = ["deflate"] }
 zstd = "0.13"
 

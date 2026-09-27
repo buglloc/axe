@@ -19,7 +19,6 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex, oneshot};
 use tokio::sync::{Notify, watch};
 
-const HOST_KEY: &[u8] = crate::embedded::SSH_HOST_KEY;
 const NO_SHELL_EXECUTABLE: &str = "sshd: cannot locate AXE executable for shell sessions";
 const SHELL_WELCOME: &[u8] = b"AXE shell | agent context: skill://axe | runtime: doctor --json | host evidence: vzik capabilities\r\n---\r\n\r\n";
 
@@ -63,7 +62,7 @@ struct Options {
     #[arg(
         long,
         env = "AXE_RELAY_TOKEN",
-        default_value = crate::relay_config::token(),
+        default_value = crate::embedded::INPUTS.relay.token,
         hide_default_value = true
     )]
     relay_token: String,
@@ -314,17 +313,17 @@ fn prepare(options: &mut Options) -> io::Result<()> {
     // Connection and authentication state remain memory-only.
     if options.no_relay {
         options.relay = None;
-    } else if options.relay.is_none() && crate::relay_config::enabled_by_default() {
+    } else if options.relay.is_none() && crate::embedded::INPUTS.relay.enabled_by_default {
         options.relay = Some(
             match options.relay_transport {
-                super::relay::RelayTransport::Tcp => crate::relay_config::tcp_endpoint(),
-                super::relay::RelayTransport::Quic => crate::relay_config::quic_endpoint(),
+                super::relay::RelayTransport::Tcp => crate::embedded::INPUTS.relay.tcp_endpoint,
+                super::relay::RelayTransport::Quic => crate::embedded::INPUTS.relay.quic_endpoint,
             }
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!(
-                        "relay is enabled by default but config/relay.json has no {} endpoint",
+                        "relay is enabled by default but edition.json has no {} endpoint",
                         options.relay_transport
                     ),
                 )
@@ -450,9 +449,23 @@ async fn run(
     let host_key = load_host_key()?;
     let principals: Arc<[String]> = options
         .principals
-        .unwrap_or_else(|| crate::sshd_config::principals().to_vec())
+        .unwrap_or_else(|| {
+            crate::embedded::INPUTS
+                .ssh_principals
+                .iter()
+                .map(|principal| (*principal).to_owned())
+                .collect()
+        })
         .into();
-    let ca_fingerprints = crate::sshd_config::ca_fingerprints().to_vec();
+    let ca_fingerprints = crate::embedded::INPUTS
+        .ssh_ca_fingerprints
+        .iter()
+        .map(|fingerprint| {
+            fingerprint
+                .parse()
+                .expect("CA fingerprint was generated at build time")
+        })
+        .collect();
 
     let config = Arc::new(server::Config {
         inactivity_timeout: Some(Duration::from_secs(3600)),
@@ -1722,7 +1735,7 @@ async fn pump(
 }
 
 fn load_host_key() -> io::Result<PrivateKey> {
-    PrivateKey::from_openssh(HOST_KEY).map_err(io::Error::other)
+    PrivateKey::from_openssh(crate::embedded::INPUTS.ssh_host_key).map_err(io::Error::other)
 }
 
 fn loopback_address(address: std::net::SocketAddr) -> String {
@@ -1744,7 +1757,7 @@ mod tests {
     #[test]
     fn help_hides_embedded_relay_token() {
         let help = Options::command().render_long_help().to_string();
-        let token = crate::relay_config::token();
+        let token = crate::embedded::INPUTS.relay.token;
         assert!(token.is_empty() || !help.contains(token));
     }
 
@@ -2048,8 +2061,10 @@ mod tests {
     ) {
         use std::time::{SystemTime, UNIX_EPOCH};
 
-        let ca_key = PrivateKey::from_openssh(HOST_KEY).expect("parse test CA key");
-        let user_key = PrivateKey::from_openssh(HOST_KEY).expect("parse test user key");
+        let ca_key = PrivateKey::from_openssh(crate::embedded::INPUTS.ssh_host_key)
+            .expect("parse test CA key");
+        let user_key = PrivateKey::from_openssh(crate::embedded::INPUTS.ssh_host_key)
+            .expect("parse test user key");
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock is after epoch")
@@ -2078,7 +2093,10 @@ mod tests {
         let config = Arc::new(server::Config {
             auth_rejection_time: Duration::ZERO,
             auth_rejection_time_initial: Some(Duration::ZERO),
-            keys: vec![PrivateKey::from_openssh(HOST_KEY).expect("parse test host key")],
+            keys: vec![
+                PrivateKey::from_openssh(crate::embedded::INPUTS.ssh_host_key)
+                    .expect("parse test host key"),
+            ],
             ..Default::default()
         });
 
@@ -2138,11 +2156,7 @@ mod tests {
     async fn cli_principals_replace_embedded_defaults() {
         const PRINCIPAL: &str = "axe-runtime-principal-test";
 
-        assert!(
-            !crate::sshd_config::principals()
-                .iter()
-                .any(|principal| principal == PRINCIPAL)
-        );
+        assert!(!crate::embedded::INPUTS.ssh_principals.contains(&PRINCIPAL));
         let options =
             Options::try_parse_from(["sshd", "--principals", PRINCIPAL]).expect("parse CLI");
         let principals = Arc::from(options.principals.expect("CLI principals"));
@@ -2275,8 +2289,10 @@ mod tests {
             .canonicalize()
             .expect("canonicalize SSH AXE Store");
 
-        let ca_key = PrivateKey::from_openssh(HOST_KEY).expect("parse test CA key");
-        let user_key = PrivateKey::from_openssh(HOST_KEY).expect("parse test user key");
+        let ca_key = PrivateKey::from_openssh(crate::embedded::INPUTS.ssh_host_key)
+            .expect("parse test CA key");
+        let user_key = PrivateKey::from_openssh(crate::embedded::INPUTS.ssh_host_key)
+            .expect("parse test user key");
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock is after epoch")
@@ -2330,7 +2346,10 @@ mod tests {
         let config = Arc::new(server::Config {
             auth_rejection_time: Duration::ZERO,
             auth_rejection_time_initial: Some(Duration::ZERO),
-            keys: vec![PrivateKey::from_openssh(HOST_KEY).expect("parse test host key")],
+            keys: vec![
+                PrivateKey::from_openssh(crate::embedded::INPUTS.ssh_host_key)
+                    .expect("parse test host key"),
+            ],
             ..Default::default()
         });
         let handler = SshServer {

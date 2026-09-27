@@ -377,7 +377,7 @@ fn execute(options: &Options, method: &Method) -> Result<Option<HttpDocument>, F
 }
 
 fn build_agent(options: &Options) -> Result<Agent, Failure> {
-    let certificates = axe_tls_roots::certificates()
+    let certificates = crate::tls_roots::certificates()
         .iter()
         .map(|certificate| ureq::tls::Certificate::from_der(certificate.as_ref()).to_owned())
         .collect::<Vec<_>>();

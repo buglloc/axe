@@ -5,6 +5,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -25,6 +26,7 @@ const VERIFIED_STATE_FILE: &str = "verified.json";
 
 pub struct PreparedTool {
     executable: Executable,
+    ca_bundle_pem: Arc<[u8]>,
 }
 
 enum Executable {
@@ -38,7 +40,7 @@ enum Executable {
 impl PreparedTool {
     pub fn run(&self, name: &str, args: &[OsString]) -> Result<ExitStatus, StoreError> {
         let ca_bundle = (name == "curl")
-            .then(CaBundle::create)
+            .then(|| CaBundle::create(&self.ca_bundle_pem))
             .transpose()
             .map_err(|error| StoreError::transient(StoreStage::Execute, error.to_string()))?;
 
@@ -82,7 +84,7 @@ pub(crate) fn prepare(
 
     let mut object = object.expect("cache or download produced object");
 
-    match &resolved.artifact.kind {
+    let mut prepared = match &resolved.artifact.kind {
         ArtifactKind::SingleBinary => {
             prepare_single(client, resolved, &mut object.file, object.payload_size)
         }
@@ -93,7 +95,9 @@ pub(crate) fn prepare(
             &mut object.file,
             object.payload_size,
         ),
-    }
+    }?;
+    prepared.ca_bundle_pem = Arc::clone(&client.config.ca_bundle_pem);
+    Ok(prepared)
 }
 
 struct ObjectFile {
@@ -486,6 +490,7 @@ fn prepare_single(
                     {
                         return Ok(PreparedTool {
                             executable: Executable::Path(destination),
+                            ca_bundle_pem: Arc::default(),
                         });
                     }
                     match verify_unpacked_file(
@@ -502,6 +507,7 @@ fn prepare_single(
                             )?;
                             return Ok(PreparedTool {
                                 executable: Executable::Path(destination),
+                                ca_bundle_pem: Arc::default(),
                             });
                         }
                         Ok(false) => {}
@@ -572,6 +578,7 @@ fn prepare_single(
             cleanup.disarm();
             Ok(PreparedTool {
                 executable: Executable::Path(destination),
+                ca_bundle_pem: Arc::default(),
             })
         })();
 
@@ -594,6 +601,7 @@ fn prepare_single(
             .map_err(|error| StoreError::transient(StoreStage::Storage, error.to_string()))?;
         Ok(PreparedTool {
             executable: Executable::Memory(output),
+            ca_bundle_pem: Arc::default(),
         })
     }
 
@@ -606,6 +614,7 @@ fn prepare_single(
         make_executable(&path).map_err(|error| storage_error(&path, error))?;
         Ok(PreparedTool {
             executable: Executable::Temporary(path),
+            ca_bundle_pem: Arc::default(),
         })
     }
 }
@@ -720,6 +729,7 @@ fn prepare_package(
                     {
                         return Ok(PreparedTool {
                             executable: Executable::Path(executable),
+                            ca_bundle_pem: Arc::default(),
                         });
                     }
                     match canonical_tree_digest(&destination) {
@@ -735,6 +745,7 @@ fn prepare_package(
                             )?;
                             return Ok(PreparedTool {
                                 executable: Executable::Path(executable),
+                                ca_bundle_pem: Arc::default(),
                             });
                         }
                         Ok(_) | Err(_) => {
@@ -791,6 +802,7 @@ fn prepare_package(
             cleanup.disarm();
             Ok(PreparedTool {
                 executable: Executable::Path(executable),
+                ca_bundle_pem: Arc::default(),
             })
         })();
 
@@ -1395,18 +1407,18 @@ enum CaBundle {
 }
 
 impl CaBundle {
-    fn create() -> io::Result<Self> {
+    fn create(pem: &[u8]) -> io::Result<Self> {
         #[cfg(target_os = "linux")]
         {
             let mut file = create_memfd("axe-curl-ca", false)?;
-            file.write_all(axe_tls_roots::pem_bundle())?;
+            file.write_all(pem)?;
             file.flush()?;
             Ok(Self::Memory(file))
         }
         #[cfg(not(target_os = "linux"))]
         {
             let path = std::env::temp_dir().join(format!("axe-curl-ca-{}", std::process::id()));
-            fs::write(&path, axe_tls_roots::pem_bundle())?;
+            fs::write(&path, pem)?;
             Ok(Self::Temporary(path))
         }
     }
@@ -1456,6 +1468,8 @@ mod tests {
                 tmpfs_roots: Vec::new(),
                 trusted_keys,
                 embedded_index: Vec::new(),
+                tls_roots_der: Arc::default(),
+                ca_bundle_pem: Arc::default(),
             },
             crate::NetworkPolicy::Offline,
         )

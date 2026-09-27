@@ -5,9 +5,8 @@ mod ondemand;
 #[cfg(unix)]
 mod path_bridge;
 mod registry;
-mod relay_config;
-mod sshd_config;
 mod supervisor;
+mod tls_roots;
 
 mod embedded {
     include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
@@ -43,7 +42,7 @@ fn main() {
     if args.len() == 1 && args[0] == OsStr::new("--version") {
         println!(
             "axe {VERSION} (edition {}; Brush {})",
-            embedded::EDITION_ID,
+            embedded::INPUTS.edition_id,
             brush_version()
         );
         return;

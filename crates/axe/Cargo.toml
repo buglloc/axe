@@ -14,7 +14,6 @@ path = "src/main.rs"
 axe-paths.workspace = true
 axe-artifact.workspace = true
 axe-store-client.workspace = true
-axe-tls-roots.workspace = true
 awk-rs = { version = "=0.2.0" }
 base64.workspace = true
 bytes.workspace = true
@@ -68,6 +67,7 @@ tokio = { version = "1.52", features = ["fs", "io-util", "macros", "net", "proce
 which.workspace = true
 ureq.workspace = true
 url.workspace = true
+webpki-root-certs.workspace = true
 vzik.workspace = true
 yamux = { version = "0.14.0" }
 whoami = { version = "2.1.3" }

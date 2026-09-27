@@ -458,7 +458,6 @@ dependencies = [
  "axe-artifact",
  "axe-paths",
  "axe-store-client",
- "axe-tls-roots",
  "base64 0.22.1",
  "brush-coreutils-builtins",
  "brush-shell",
@@ -559,6 +558,7 @@ dependencies = [
  "uucore 0.2.2",
  "uucore 0.7.0",
  "vzik",
+ "webpki-root-certs",
  "which",
  "whoami",
  "yamux",
@@ -634,7 +634,6 @@ version = "0.1.0"
 dependencies = [
  "axe-artifact",
  "axe-paths",
- "axe-tls-roots",
  "ciborium",
  "ed25519-dalek 2.2.0",
  "libc",
@@ -644,16 +643,6 @@ dependencies = [
  "tar",
  "ureq",
  "zstd",
-]
-
-[[package]]
-name = "axe-tls-roots"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "rustls-pemfile",
- "rustls-pki-types",
- "webpki-root-certs",
 ]
 
 [[package]]

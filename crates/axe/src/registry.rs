@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::sync::OnceLock;
 
 use brush_shell::bundled::{BundledCommand, BundledFn, InProcessFn, ShellExecution};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 pub(crate) const INDEX_CACHE_ONLY_ENV: &str = "__AXE_STORE_INDEX_CACHE_ONLY";
 
@@ -498,18 +498,9 @@ fn bundled_synopsis(name: &str) -> &'static str {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct Alias {
-    argv: Vec<String>,
-    #[serde(default)]
-    help: Vec<String>,
-    synopsis: Option<String>,
-}
-
 struct RuntimeAlias {
     entry: BundledFn,
     argv: Vec<OsString>,
-    help: Vec<String>,
 }
 
 static ALIASES: OnceLock<HashMap<String, RuntimeAlias>> = OnceLock::new();
@@ -526,11 +517,6 @@ pub fn build(
     preferred_local: Option<&str>,
     store_mode: StoreMode,
 ) -> Result<Registry, String> {
-    {
-        crate::relay_config::load()?;
-        crate::sshd_config::load()?;
-    }
-
     let mut commands = RegistryBuilder::default();
     commands.insert_bundled(
         "commands",
@@ -694,29 +680,24 @@ pub fn build(
 
     crate::ondemand::register_controls(&mut commands);
 
-    let config: HashMap<String, Alias> =
-        serde_json::from_str(include_str!("../../../config/aliases.json"))
-            .map_err(|error| format!("invalid config/aliases.json: {error}"))?;
-    let mut aliases = HashMap::with_capacity(config.len());
-    for (name, alias) in config {
-        if commands.contains_key(&name) {
+    let mut aliases = HashMap::with_capacity(crate::embedded::INPUTS.aliases.len());
+    for alias in crate::embedded::INPUTS.aliases {
+        let name = alias.name;
+        if commands.contains_key(name) {
             return Err(format!("alias '{name}' duplicates an applet"));
         }
-        let Some(target) = alias.argv.first().cloned() else {
-            return Err(format!("alias '{name}' has empty argv"));
-        };
-        let Some(entry) = commands.entry(&target) else {
-            continue;
-        };
+        let target = alias.argv[0];
+        let entry = commands
+            .entry(target)
+            .ok_or_else(|| format!("alias '{name}' targets unknown applet '{target}'"))?;
         aliases.insert(
-            name.clone(),
+            name.to_owned(),
             RuntimeAlias {
                 entry,
-                argv: alias.argv.into_iter().map(OsString::from).collect(),
-                help: alias.help,
+                argv: alias.argv.iter().map(OsString::from).collect(),
             },
         );
-        commands.insert_alias(name, &target, alias.synopsis.as_deref());
+        commands.insert_alias(name.to_owned(), target, alias.synopsis);
     }
     ALIASES
         .set(aliases)
@@ -779,15 +760,6 @@ fn alias_entry(args: Vec<OsString>) -> i32 {
         eprintln!("axe: unknown alias: {name}");
         return 127;
     };
-    if !alias.help.is_empty()
-        && args.len() == 2
-        && (args[1] == OsStr::new("--help") || args[1] == OsStr::new("-h"))
-    {
-        for line in &alias.help {
-            println!("{line}");
-        }
-        return 0;
-    }
     let mut argv = Vec::with_capacity(alias.argv.len() + args.len().saturating_sub(1));
     argv.extend(alias.argv.iter().cloned());
     argv.extend(args.into_iter().skip(1));
