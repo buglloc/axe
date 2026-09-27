@@ -18,6 +18,9 @@ dev *args:
     @if (( $# )); then exec nix develop . --command "$@"; else exec nix develop .; fi
 
 
+_require-reference-tools:
+    @if [[ -z "${AXE_REFERENCE_PATH:-}" ]]; then echo 'AXE_REFERENCE_PATH is not set; enter `nix develop .#default` before running this recipe' >&2; exit 1; fi
+
 build: build-linux-amd64
 
 build-linux: build-linux-arm64 build-linux-amd64
@@ -138,12 +141,12 @@ release-prepare bump:
     python3 tools/release.py prepare "$1"
 
 # Run only from the trusted publisher machine, after pushing the reviewed commit.
-release-publish:
+release-publish: _require-reference-tools
     python3 tools/release.py publish --edition-root "{{edition_root}}" --output "{{out}}"
 
 # Exercise both publisher phases without touching GitHub, S3, or tags.
 [positional-arguments]
-release-check directory:
+release-check directory: _require-reference-tools
     python3 tools/release.py publish --edition-root "{{edition_root}}" --output "{{out}}" --local-directory "$1"
 
 store-image:
@@ -249,8 +252,8 @@ nix-fmt:
 check: _prepare-axe-dev-keys check-store-bootstrap
     AXE_EDITION_ROOT="{{edition_root}}" cargo check --locked --workspace --all-targets --all-features
 
-smoke: _prepare-axe-dev-keys
+smoke: _require-reference-tools _prepare-axe-dev-keys
     AXE_EDITION_ROOT="{{edition_root}}" cargo test --locked --workspace --all-features
 
-applet-parity: _prepare-axe-dev-keys
+applet-parity: _require-reference-tools _prepare-axe-dev-keys
     AXE_EDITION_ROOT="{{edition_root}}" cargo test --locked -p axe --all-features --test applet_parity
