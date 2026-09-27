@@ -17,7 +17,6 @@ use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId, ChannelOpenFailure, server};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex, oneshot};
-#[cfg(feature = "on-demand")]
 use tokio::sync::{Notify, watch};
 
 const HOST_KEY: &[u8] = crate::embedded::SSH_HOST_KEY;
@@ -472,7 +471,6 @@ async fn run(
             .workdir
             .expect("sshd options were prepared before starting the server"),
     );
-    #[cfg(feature = "on-demand")]
     let index_refresher =
         (options.store_mode == crate::registry::StoreMode::Auto).then(IdleIndexRefresher::start);
     let mut factory = SshServer {
@@ -481,7 +479,6 @@ async fn run(
         workdir,
         store_dir: Arc::new(options.store_dir),
         store_mode: options.store_mode,
-        #[cfg(feature = "on-demand")]
         index_activity: index_refresher.as_ref().map(IdleIndexRefresher::activity),
         inputs: Arc::new(Mutex::new(HashMap::new())),
         session_channels: Arc::new(Mutex::new(HashMap::new())),
@@ -505,7 +502,6 @@ async fn run(
         .transpose()?;
 
     println!("sshd: serving on {local}");
-    #[cfg(feature = "on-demand")]
     if let Some(refresher) = &index_refresher {
         refresher.refresh_if_idle();
     }
@@ -556,7 +552,6 @@ async fn run(
         }
     }
 
-    #[cfg(feature = "on-demand")]
     if let Some(refresher) = index_refresher {
         refresher.shutdown().await;
     }
@@ -611,14 +606,12 @@ struct SpawnedShell {
 }
 
 type CancelMap<K> = Arc<Mutex<HashMap<K, oneshot::Sender<()>>>>;
-#[cfg(feature = "on-demand")]
 #[derive(Default)]
 struct SessionActivity {
     active: AtomicUsize,
     idle: Notify,
 }
 
-#[cfg(feature = "on-demand")]
 impl SessionActivity {
     fn start(self: &Arc<Self>) -> ActiveSession {
         self.active.fetch_add(1, Ordering::AcqRel);
@@ -634,12 +627,10 @@ impl SessionActivity {
     }
 }
 
-#[cfg(feature = "on-demand")]
 struct ActiveSession {
     activity: Arc<SessionActivity>,
 }
 
-#[cfg(feature = "on-demand")]
 impl Drop for ActiveSession {
     fn drop(&mut self) {
         let previous = self.activity.active.fetch_sub(1, Ordering::AcqRel);
@@ -650,14 +641,12 @@ impl Drop for ActiveSession {
     }
 }
 
-#[cfg(feature = "on-demand")]
 struct IdleIndexRefresher {
     activity: Arc<SessionActivity>,
     shutdown: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
 }
 
-#[cfg(feature = "on-demand")]
 impl IdleIndexRefresher {
     fn start() -> Self {
         let activity = Arc::new(SessionActivity::default());
@@ -687,7 +676,6 @@ impl IdleIndexRefresher {
     }
 }
 
-#[cfg(feature = "on-demand")]
 async fn refresh_index_while_idle(
     activity: Arc<SessionActivity>,
     mut shutdown: watch::Receiver<bool>,
@@ -805,7 +793,6 @@ struct SshServer {
     workdir: Arc<PathBuf>,
     store_dir: Arc<Option<PathBuf>>,
     store_mode: crate::registry::StoreMode,
-    #[cfg(feature = "on-demand")]
     index_activity: Option<Arc<SessionActivity>>,
     inputs: Arc<Mutex<HashMap<ChannelId, ChannelProcess>>>,
     session_channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
@@ -836,7 +823,6 @@ impl server::Server for SshServer {
             workdir: self.workdir.clone(),
             store_dir: self.store_dir.clone(),
             store_mode: self.store_mode,
-            #[cfg(feature = "on-demand")]
             index_activity: self.index_activity.clone(),
             executable: self.executable.clone(),
             inputs: Arc::new(Mutex::new(HashMap::new())),
@@ -1335,7 +1321,6 @@ impl SshServer {
         };
         #[cfg(not(unix))]
         let mut spawned = spawn_pipe_shell(process)?;
-        #[cfg(feature = "on-demand")]
         let active_session = self
             .index_activity
             .as_ref()
@@ -1375,7 +1360,6 @@ impl SshServer {
         #[cfg(unix)]
         let ptys = Arc::downgrade(&self.ptys);
         tokio::spawn(async move {
-            #[cfg(feature = "on-demand")]
             let _active_session = active_session;
             let mut child = spawned.child;
             let status = tokio::select! {
@@ -1876,7 +1860,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "on-demand")]
     #[tokio::test]
     async fn index_refresh_waits_for_last_active_session() {
         let activity = Arc::new(SessionActivity::default());
@@ -2105,7 +2088,6 @@ mod tests {
             workdir: Arc::new(workdir),
             store_dir: Arc::new(store_dir),
             store_mode,
-            #[cfg(feature = "on-demand")]
             index_activity: None,
             inputs: Arc::new(Mutex::new(HashMap::new())),
             session_channels: Arc::new(Mutex::new(HashMap::new())),
@@ -2357,7 +2339,6 @@ mod tests {
             workdir: Arc::new(workdir.clone()),
             store_dir: Arc::new(Some(store_dir.clone())),
             store_mode: crate::registry::StoreMode::CacheOnly,
-            #[cfg(feature = "on-demand")]
             index_activity: None,
             inputs: Arc::new(Mutex::new(HashMap::new())),
             session_channels: Arc::new(Mutex::new(HashMap::new())),

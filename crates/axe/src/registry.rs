@@ -80,7 +80,6 @@ pub struct Registry {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CommandSource {
     Bundled,
-    #[cfg(feature = "on-demand")]
     Store,
 }
 
@@ -94,7 +93,6 @@ pub(crate) struct CommandInfo {
     pub synopsis: String,
 }
 
-#[cfg(feature = "on-demand")]
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct StoreErrorInfo {
     pub class: &'static str,
@@ -106,12 +104,10 @@ pub(crate) struct StoreErrorInfo {
 #[serde(tag = "state", rename_all = "snake_case")]
 pub(crate) enum StoreInfo {
     Disabled,
-    #[cfg(feature = "on-demand")]
     Available {
         channel: String,
         index_generation: u64,
     },
-    #[cfg(feature = "on-demand")]
     Blocked {
         channel: String,
         index_generation: u64,
@@ -122,7 +118,6 @@ pub(crate) enum StoreInfo {
 impl StoreInfo {
     fn blocking_error(&self) -> Option<String> {
         match self {
-            #[cfg(feature = "on-demand")]
             Self::Blocked { error, .. } => Some(format!(
                 "store {} error ({}: {})",
                 error.class, error.stage, error.message
@@ -209,7 +204,6 @@ impl RegistryBuilder {
         );
     }
 
-    #[cfg(feature = "on-demand")]
     pub(crate) fn insert_bundled_if_vacant(
         &mut self,
         name: &str,
@@ -232,7 +226,6 @@ impl RegistryBuilder {
         }
     }
 
-    #[cfg(feature = "on-demand")]
     pub(crate) fn insert_store_if_vacant(
         &mut self,
         name: &str,
@@ -270,14 +263,12 @@ impl RegistryBuilder {
         self.commands.contains_key(name)
     }
 
-    #[cfg(feature = "on-demand")]
     fn local_command_requires_store(&self, name: &str) -> bool {
         self.commands.get(name).is_some_and(|command| {
             matches!(command.info.canonical_name.as_str(), "commands" | "sshd")
         })
     }
 
-    #[cfg(feature = "on-demand")]
     fn local_command_uses_store_cache_only(&self, name: &str) -> bool {
         self.commands
             .get(name)
@@ -535,7 +526,6 @@ pub fn build(
     preferred_local: Option<&str>,
     store_mode: StoreMode,
 ) -> Result<Registry, String> {
-    #[cfg(feature = "applet-daemons")]
     {
         crate::relay_config::load()?;
         crate::sshd_config::load()?;
@@ -555,20 +545,14 @@ pub fn build(
         crate::applets::doctor as BundledFn,
         crate::applets::doctor_builtin,
     );
-    #[cfg(feature = "bundled-coreutils")]
     commands.extend_bundled(brush_coreutils_builtins::bundled_commands(), "coreutils");
-    #[cfg(feature = "applet-admin-coreutils")]
     commands.extend_bundled(
         crate::applets::admin_coreutils::commands(),
         "administration",
     );
-    #[cfg(feature = "applet-awk")]
     commands.insert_bundled("awk", "text", None, crate::applets::awk as BundledFn);
-    #[cfg(feature = "applet-grep")]
     commands.insert_bundled("grep", "text", None, crate::applets::grep as BundledFn);
-    #[cfg(feature = "applet-sed")]
     commands.insert_bundled("sed", "text", None, crate::applets::sed as BundledFn);
-    #[cfg(feature = "applet-findutils")]
     {
         commands.insert_bundled(
             "find",
@@ -578,40 +562,32 @@ pub fn build(
         );
         commands.insert_bundled("xargs", "process", None, crate::applets::xargs as BundledFn);
     }
-    #[cfg(feature = "applet-diffutils")]
     {
         commands.insert_bundled("diff", "text", None, crate::applets::diff as BundledFn);
         commands.insert_bundled("cmp", "text", None, crate::applets::cmp as BundledFn);
         commands.insert_bundled("diff3", "text", None, crate::applets::diff3 as BundledFn);
     }
-    #[cfg(feature = "applet-file")]
     commands.insert_bundled("file", "binary", None, crate::applets::file as BundledFn);
-    #[cfg(feature = "applet-goblin")]
     commands.insert_bundled(
         "goblin",
         "binary",
         None,
         crate::applets::goblin as BundledFn,
     );
-    #[cfg(feature = "applet-jq")]
     commands.insert_bundled("jq", "data", None, crate::applets::jq as BundledFn);
-    #[cfg(feature = "applet-strings")]
     commands.insert_bundled(
         "strings",
         "binary",
         None,
         crate::applets::strings as BundledFn,
     );
-    #[cfg(feature = "applet-tar")]
     commands.insert_bundled("tar", "archive", None, crate::applets::tar as BundledFn);
-    #[cfg(feature = "applet-gzip")]
     commands.insert_bundled(
         "gzip",
         "compression",
         None,
         crate::applets::gzip as BundledFn,
     );
-    #[cfg(feature = "applet-compression")]
     {
         for name in ["bzip2", "bunzip2", "bzcat"] {
             commands.insert_bundled(
@@ -625,9 +601,8 @@ pub fn build(
             commands.insert_bundled(name, "compression", None, crate::applets::xz as BundledFn);
         }
     }
-    #[cfg(feature = "applet-http")]
     commands.insert_bundled("http", "network", None, crate::applets::http as BundledFn);
-    #[cfg(all(feature = "applet-linux-network", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     {
         commands.extend_bundled(crate::applets::linux_network::commands(), "network");
         commands.insert_bundled(
@@ -652,11 +627,11 @@ pub fn build(
             crate::applets::traceroute6 as BundledFn,
         );
     }
-    #[cfg(all(feature = "applet-linux-storage", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     commands.extend_bundled(crate::applets::linux_storage::commands(), "storage");
-    #[cfg(all(feature = "applet-linux-inspect", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     commands.extend_bundled(crate::applets::linux_inspect::commands(), "inspection");
-    #[cfg(all(feature = "applet-inotify", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     {
         commands.insert_bundled(
             "inotifywait",
@@ -671,7 +646,7 @@ pub fn build(
             crate::applets::inotifywatch as BundledFn,
         );
     }
-    #[cfg(all(feature = "applet-procutils", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     commands.extend_bundled(
         [
             ("free".into(), crate::applets::free as BundledFn),
@@ -695,25 +670,21 @@ pub fn build(
         ],
         "process",
     );
-    #[cfg(all(feature = "applet-util-linux", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     commands.extend_bundled(crate::applets::util_linux::commands(), "system");
-    #[cfg(feature = "applet-tree")]
     commands.insert_bundled(
         "tree",
         "filesystem",
         None,
         crate::applets::tree as BundledFn,
     );
-    #[cfg(feature = "applet-which")]
     commands.insert_bundled(
         "which",
         "environment",
         None,
         crate::applets::which as BundledFn,
     );
-    #[cfg(feature = "applet-daemons")]
     commands.insert_bundled("sshd", "service", None, crate::applets::sshd as BundledFn);
-    #[cfg(feature = "applet-vzik")]
     commands.insert_bundled(
         "vzik",
         "host-inspection",
@@ -721,7 +692,6 @@ pub fn build(
         crate::applets::vzik as BundledFn,
     );
 
-    #[cfg(feature = "on-demand")]
     crate::ondemand::register_controls(&mut commands);
 
     let config: HashMap<String, Alias> =
@@ -752,7 +722,6 @@ pub fn build(
         .set(aliases)
         .map_err(|_| "applet registry was built more than once".to_string())?;
 
-    #[cfg(feature = "on-demand")]
     let store_info = if store_mode == StoreMode::Off {
         StoreInfo::Disabled
     } else {
@@ -769,8 +738,6 @@ pub fn build(
             crate::ondemand::register(&mut commands, mode)?
         }
     };
-    #[cfg(not(feature = "on-demand"))]
-    let store_info = StoreInfo::Disabled;
     let blocking_index_error = store_info.blocking_error();
     let (commands, command_info) = commands.finish();
     let visible_names = command_info

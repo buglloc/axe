@@ -149,7 +149,6 @@ fn bundled_direct_dispatch_does_not_initialize_store() {
     ));
 }
 
-#[cfg(feature = "on-demand")]
 #[test]
 fn clean_tools_removes_only_current_metadata_namespace() {
     let scratch = Scratch::new("clean-tools");
@@ -886,7 +885,6 @@ fn bundled_pipeline_and_recursive_xargs_work_without_path() {
     );
 }
 
-#[cfg(feature = "applet-tar")]
 #[test]
 fn tar_extracts_relative_archive_after_changing_directory() {
     let scratch = Scratch::new("tar-directory");
@@ -931,11 +929,6 @@ fn tar_extracts_relative_archive_after_changing_directory() {
     );
 }
 
-#[cfg(all(
-    feature = "applet-admin-coreutils",
-    feature = "applet-findutils",
-    feature = "bundled-coreutils"
-))]
 #[test]
 fn child_spawning_applets_resolve_bundled_commands_without_path() {
     let scratch = Scratch::new("child-resolver");
@@ -1130,7 +1123,7 @@ fn shell_distinguishes_non_executable_and_missing_path_commands() {
     );
 }
 
-#[cfg(all(unix, feature = "bundled-coreutils"))]
+#[cfg(unix)]
 #[test]
 fn shell_builtin_kill_accepts_numeric_signal_and_job_spec() {
     let scratch = Scratch::new("shell-job-signal");
@@ -1164,7 +1157,6 @@ fn shell_builtin_kill_accepts_numeric_signal_and_job_spec() {
     assert_eq!(output.stderr, b"");
 }
 
-#[cfg(feature = "bundled-coreutils")]
 #[test]
 fn shell_tracks_bundled_background_process_lifecycle() {
     let scratch = Scratch::new("process-lifecycle");
@@ -2666,7 +2658,6 @@ fn unlinked_binary_still_launches_embedded_shell() {
     assert_eq!(output.stdout, b"a\nb\n");
 }
 
-#[cfg(all(feature = "applet-jq", feature = "on-demand"))]
 #[test]
 fn commands_is_queryable_with_bundled_jq_inside_shell() {
     let scratch = Scratch::new("commands");
@@ -2975,12 +2966,7 @@ fn doctor_reports_readable_shell_state_and_selected_environment() {
     );
 }
 
-#[cfg(all(
-    target_os = "linux",
-    feature = "bundled-coreutils",
-    feature = "applet-procutils",
-    feature = "applet-util-linux"
-))]
+#[cfg(target_os = "linux")]
 #[test]
 fn full_linux_uutils_sets_are_registered() {
     let scratch = Scratch::new("uutils-list");
@@ -3038,7 +3024,7 @@ fn full_linux_uutils_sets_are_registered() {
     assert!(missing.is_empty(), "missing uutils applets: {missing:?}");
 }
 
-#[cfg(all(target_os = "linux", feature = "applet-procutils"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn ps_accepts_conventional_auxww_options() {
     let scratch = Scratch::new("ps-auxww-options");
@@ -3082,7 +3068,7 @@ fn busybox_alias_prepends_configured_arguments() {
     assert_eq!(output.stdout, b"needle\n");
 }
 
-#[cfg(all(feature = "applet-vzik", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn vzik_collect_profile_is_an_ordered_protocol_v3_stream() {
     let output = Command::new(env!("CARGO_BIN_EXE_axe"))
@@ -3183,7 +3169,7 @@ fn vzik_collect_profile_is_an_ordered_protocol_v3_stream() {
     );
 }
 
-#[cfg(all(feature = "applet-vzik", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn vzik_nested_help_is_generated_for_bundled_commands() {
     let output = Command::new(env!("CARGO_BIN_EXE_axe"))
@@ -3203,7 +3189,7 @@ fn vzik_nested_help_is_generated_for_bundled_commands() {
     assert!(help.contains("[default: /run/portod.socket]"));
 }
 
-#[cfg(all(feature = "applet-vzik", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn vzik_targeted_file_read_is_chunked_and_bounded() {
     let scratch = Scratch::new("vzik-file-read");
@@ -3245,7 +3231,6 @@ fn vzik_targeted_file_read_is_chunked_and_bounded() {
     assert_eq!(stream_end["outcome"], "degraded");
 }
 
-#[cfg(feature = "applet-jq")]
 fn run_jq(args: &[&str], input: &[u8]) -> std::process::Output {
     run_with_input(
         Command::new(env!("CARGO_BIN_EXE_axe"))
@@ -3255,23 +3240,6 @@ fn run_jq(args: &[&str], input: &[u8]) -> std::process::Output {
     )
 }
 
-#[cfg(feature = "applet-jq")]
-#[test]
-fn jq_raw_field_extraction_is_compatible() {
-    let output = run_jq(&["-r", ".foo"], br#"{"foo":"bar"}"#);
-    assert!(output.status.success());
-    assert_eq!(output.stdout, b"bar\n");
-}
-
-#[cfg(feature = "applet-jq")]
-#[test]
-fn jq_compact_item_iteration_is_compatible() {
-    let output = run_jq(&["-c", ".items[]"], br#"{"items":[{"id":1},{"id":2}]}"#);
-    assert!(output.status.success());
-    assert_eq!(output.stdout, b"{\"id\":1}\n{\"id\":2}\n");
-}
-
-#[cfg(feature = "applet-jq")]
 #[test]
 fn jq_map_transformation_is_compatible() {
     let output = run_jq(
@@ -3282,7 +3250,6 @@ fn jq_map_transformation_is_compatible() {
     assert_eq!(output.stdout, b"[\n  \"one\",\n  \"two\"\n]\n");
 }
 
-#[cfg(feature = "applet-jq")]
 #[test]
 fn jq_select_filtering_is_compatible() {
     let output = run_jq(
@@ -3293,7 +3260,6 @@ fn jq_select_filtering_is_compatible() {
     assert_eq!(output.stdout, b"{\n  \"enabled\": true\n}\n");
 }
 
-#[cfg(feature = "applet-jq")]
 #[test]
 fn jq_string_argument_binding_is_compatible() {
     let output = Command::new(env!("CARGO_BIN_EXE_axe"))
@@ -3310,7 +3276,6 @@ fn jq_string_argument_binding_is_compatible() {
     assert_eq!(output.stdout, b"{\n  \"foo\": \"value\"\n}\n");
 }
 
-#[cfg(feature = "applet-jq")]
 #[test]
 fn jq_json_argument_binding_is_compatible() {
     let output = Command::new(env!("CARGO_BIN_EXE_axe"))
@@ -3330,15 +3295,6 @@ fn jq_json_argument_binding_is_compatible() {
     );
 }
 
-#[cfg(feature = "applet-jq")]
-#[test]
-fn jq_exit_status_is_compatible() {
-    let output = run_jq(&["-e", ".ok"], br#"{"ok":false}"#);
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(output.stdout, b"false\n");
-}
-
-#[cfg(feature = "applet-jq")]
 #[test]
 fn jq_null_input_construction_is_compatible() {
     let output = run_jq(&["-n", r#"{foo: "bar"}"#], b"");
@@ -3346,15 +3302,7 @@ fn jq_null_input_construction_is_compatible() {
     assert_eq!(output.stdout, b"{\n  \"foo\": \"bar\"\n}\n");
 }
 
-#[cfg(all(
-    target_os = "linux",
-    feature = "applet-linux-network",
-    feature = "applet-linux-storage",
-    feature = "applet-compression",
-    feature = "applet-linux-inspect",
-    feature = "applet-inotify",
-    feature = "applet-util-linux"
-))]
+#[cfg(target_os = "linux")]
 #[test]
 fn diagnostic_applets_are_registered() {
     let scratch = Scratch::new("diagnostic-list");
@@ -3412,36 +3360,7 @@ fn diagnostic_applets_are_registered() {
     );
 }
 
-#[cfg(feature = "applet-compression")]
-#[test]
-fn bzip2_and_xz_round_trip_concatenated_binary_input() {
-    let input = b"first\0member\nsecond member\xff";
-    for applet in ["bzip2", "xz"] {
-        let compressed = run_with_input(
-            Command::new(env!("CARGO_BIN_EXE_axe")).args(["--applet", applet, "--", "-c"]),
-            input,
-        );
-        assert!(
-            compressed.status.success(),
-            "{applet} compression stderr: {}",
-            String::from_utf8_lossy(&compressed.stderr)
-        );
-        assert_ne!(compressed.stdout, input);
-
-        let restored = run_with_input(
-            Command::new(env!("CARGO_BIN_EXE_axe")).args(["--applet", applet, "--", "-dc"]),
-            &compressed.stdout,
-        );
-        assert!(
-            restored.status.success(),
-            "{applet} decompression stderr: {}",
-            String::from_utf8_lossy(&restored.stderr)
-        );
-        assert_eq!(restored.stdout, input);
-    }
-}
-
-#[cfg(all(target_os = "linux", feature = "applet-linux-storage"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn blkid_probes_ext4_metadata_from_a_regular_file() {
     let scratch = Scratch::new("blkid-ext4");
@@ -3467,7 +3386,7 @@ fn blkid_probes_ext4_metadata_from_a_regular_file() {
     assert!(stdout.contains("TYPE=ext4\n"), "output: {stdout}");
 }
 
-#[cfg(all(target_os = "linux", feature = "applet-linux-network"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn ipcalc_reports_ipv4_network_boundaries() {
     let output = Command::new(env!("CARGO_BIN_EXE_axe"))
@@ -3482,7 +3401,7 @@ fn ipcalc_reports_ipv4_network_boundaries() {
     assert!(stdout.contains("Broadcast: 192.168.7.255\n"));
 }
 
-#[cfg(all(target_os = "linux", feature = "applet-inotify"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn inotifywait_reports_created_file() {
     let scratch = Scratch::new("inotifywait-create");

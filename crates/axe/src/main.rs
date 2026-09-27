@@ -1,16 +1,12 @@
 mod applets;
 mod child;
 mod executable;
-#[cfg(feature = "on-demand")]
 mod ondemand;
 #[cfg(unix)]
 mod path_bridge;
 mod registry;
-#[cfg(feature = "applet-daemons")]
 mod relay_config;
-#[cfg(feature = "applet-daemons")]
 mod sshd_config;
-#[cfg(feature = "applet-daemons")]
 mod supervisor;
 
 mod embedded {

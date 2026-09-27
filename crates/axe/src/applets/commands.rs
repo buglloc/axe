@@ -104,9 +104,7 @@ struct CommandLookup<'a> {
 #[serde(rename_all = "snake_case")]
 enum CommandAvailability {
     Local,
-    #[cfg(feature = "on-demand")]
     OnDemand,
-    #[cfg(feature = "on-demand")]
     Blocked,
 }
 
@@ -122,11 +120,9 @@ impl<'a> CommandRecord<'a> {
     fn new(info: &'a CommandInfo) -> Self {
         let availability = match info.source {
             CommandSource::Bundled => CommandAvailability::Local,
-            #[cfg(feature = "on-demand")]
             CommandSource::Store if crate::ondemand::store_is_blocked() => {
                 CommandAvailability::Blocked
             }
-            #[cfg(feature = "on-demand")]
             CommandSource::Store => CommandAvailability::OnDemand,
         };
         let local_path = if matches!(info.source, CommandSource::Bundled) {

@@ -206,7 +206,6 @@ fn snapshot(root: &Path) -> Vec<Entry> {
     entries
 }
 
-#[cfg(feature = "applet-jq")]
 #[test]
 fn jq_matches_reference_for_filters_bindings_and_exit_status() {
     assert_cases(
@@ -261,7 +260,6 @@ fn jq_matches_reference_for_filters_bindings_and_exit_status() {
     );
 }
 
-#[cfg(feature = "applet-strings")]
 #[test]
 fn strings_matches_gnu_for_offsets_encodings_and_whitespace() {
     assert_cases(
@@ -286,7 +284,6 @@ fn strings_matches_gnu_for_offsets_encodings_and_whitespace() {
     );
 }
 
-#[cfg(feature = "applet-file")]
 #[test]
 fn file_matches_reference_for_stable_media_types() {
     assert_cases(
@@ -321,7 +318,6 @@ fn file_matches_reference_for_stable_media_types() {
     );
 }
 
-#[cfg(feature = "applet-findutils")]
 #[test]
 fn xargs_matches_gnu_for_tokenization_and_replacement() {
     assert_cases(
@@ -393,7 +389,6 @@ fn assert_compression_interoperability(applet: &str) {
     );
 }
 
-#[cfg(feature = "applet-gzip")]
 #[test]
 fn gzip_streams_interoperate_with_gnu() {
     assert_compression_interoperability("gzip");
@@ -432,7 +427,6 @@ fn gzip_streams_interoperate_with_gnu() {
     assert_eq!(decoded.stdout, b"integrity payload\nsecond member\n");
 }
 
-#[cfg(feature = "applet-jq")]
 #[test]
 fn jq_binds_raw_and_slurped_files() {
     let scratch = Scratch::new("jq-file-bindings");
@@ -460,7 +454,6 @@ fn jq_binds_raw_and_slurped_files() {
     );
 }
 
-#[cfg(feature = "applet-compression")]
 #[test]
 fn bzip2_and_xz_streams_interoperate_with_reference_tools() {
     for applet in ["bzip2", "xz"] {
@@ -468,7 +461,6 @@ fn bzip2_and_xz_streams_interoperate_with_reference_tools() {
     }
 }
 
-#[cfg(feature = "applet-tar")]
 #[test]
 fn tar_lists_and_extracts_gnu_archives() {
     let scratch = Scratch::new("tar");
@@ -555,7 +547,7 @@ fn tar_lists_and_extracts_gnu_archives() {
     assert_eq!(snapshot(&from_axe_root.join("fixture")), snapshot(&fixture));
 }
 
-#[cfg(all(target_os = "linux", feature = "applet-linux-network"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn ip_link_and_address_json_match_iproute2_schema() {
     const LINK_KEYS: &[&str] = &[
@@ -673,7 +665,7 @@ fn ip_link_and_address_json_match_iproute2_schema() {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "applet-linux-network"))]
+#[cfg(target_os = "linux")]
 fn assert_json_projection(
     expected: &serde_json::Value,
     actual: &serde_json::Value,
@@ -691,7 +683,7 @@ fn assert_json_projection(
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "applet-linux-storage"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn blkid_matches_util_linux_for_filtered_filesystem_type() {
     let scratch = Scratch::new("blkid");

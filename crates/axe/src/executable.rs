@@ -490,7 +490,6 @@ impl Executable {
             .ok_or_else(executable_not_found)
     }
 
-    #[cfg(feature = "applet-daemons")]
     pub(crate) fn tokio_command(&self) -> io::Result<TokioExecutableCommand> {
         self.command().map(TokioExecutableCommand::new)
     }
@@ -1411,20 +1410,17 @@ impl ExecutableCommand {
         }
     }
 
-    #[cfg(feature = "applet-daemons")]
     fn into_prepared(mut self) -> io::Result<StdCommand> {
         self.prepare()?;
         Ok(self.inner)
     }
 }
 
-#[cfg(feature = "applet-daemons")]
 pub(crate) struct TokioExecutableCommand {
     command: Option<ExecutableCommand>,
     kill_on_drop: bool,
 }
 
-#[cfg(feature = "applet-daemons")]
 impl TokioExecutableCommand {
     fn new(command: ExecutableCommand) -> Self {
         Self {
