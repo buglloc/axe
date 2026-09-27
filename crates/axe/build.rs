@@ -13,7 +13,7 @@ use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use ssh_key::{HashAlg, PrivateKey, PublicKey};
 
-const EDITION_SCHEMA_VERSION: u32 = 2;
+const EDITION_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,6 +22,7 @@ struct Edition {
     id: String,
     sshd: SshdConfig,
     relay: RelayConfig,
+    aliases: BTreeMap<String, AliasConfig>,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +43,8 @@ struct RelayConfig {
 #[serde(deny_unknown_fields)]
 struct AliasConfig {
     argv: Vec<String>,
+    #[serde(default)]
+    help: Vec<String>,
     synopsis: Option<String>,
 }
 
@@ -101,10 +104,6 @@ fn run() -> Result<(), String> {
         println!("cargo:rustc-link-arg={build_id_argument}");
     }
 
-    println!(
-        "cargo:rerun-if-changed={}",
-        workspace.join("config/aliases.json").display()
-    );
     for path in [
         "edition.json",
         "config/store.json",
@@ -128,11 +127,6 @@ fn run() -> Result<(), String> {
     let store_json = read_text(&edition_root, "config/store.json")?;
     let store = StoreConfig::from_json(store_json.as_bytes())
         .map_err(|error| format!("invalid config/store.json: {error}"))?;
-    let aliases_json = fs::read_to_string(workspace.join("config/aliases.json"))
-        .map_err(|error| format!("read config/aliases.json: {error}"))?;
-    let aliases: BTreeMap<String, AliasConfig> = serde_json::from_str(&aliases_json)
-        .map_err(|error| format!("invalid config/aliases.json: {error}"))?;
-    validate_aliases(&aliases)?;
 
     let host_key = fs::read(edition_root.join("keys/ssh/host_ed25519")).map_err(|error| {
         format!(
@@ -197,6 +191,7 @@ fn run() -> Result<(), String> {
          pub name: &'static str,\n\
          pub argv: &'static [&'static str],\n\
          pub synopsis: Option<&'static str>,\n\
+         pub help: &'static [&'static str],\n\
          }\n\
          pub struct EmbeddedInputs {\n\
          pub edition_id: &'static str,\n\
@@ -245,11 +240,11 @@ fn run() -> Result<(), String> {
     )
     .unwrap();
     generated.push_str("},\naliases: &[\n");
-    for (name, alias) in &aliases {
+    for (name, alias) in &edition.aliases {
         writeln!(
             generated,
-            "AliasInput {{ name: {name:?}, argv: &{:?}, synopsis: {:?} }},",
-            alias.argv, alias.synopsis
+            "AliasInput {{ name: {name:?}, argv: &{:?}, help: &{:?}, synopsis: {:?} }},",
+            alias.argv, alias.help, alias.synopsis
         )
         .unwrap();
     }
@@ -351,7 +346,8 @@ fn validate_edition(edition: &Edition) -> Result<(), String> {
         return Err("edition.json id must match [a-z0-9-]+".into());
     }
     validate_principals(&edition.sshd.principals, "edition.json sshd.principals")?;
-    validate_relay(&edition.relay)
+    validate_relay(&edition.relay)?;
+    validate_aliases(&edition.aliases)
 }
 
 fn validate_principals(principals: &[String], name: &str) -> Result<(), String> {
@@ -394,11 +390,11 @@ fn validate_relay(config: &RelayConfig) -> Result<(), String> {
 fn validate_aliases(aliases: &BTreeMap<String, AliasConfig>) -> Result<(), String> {
     for (name, alias) in aliases {
         if name.is_empty() {
-            return Err("config/aliases.json contains an empty alias name".into());
+            return Err("edition.json aliases contains an empty alias name".into());
         }
         if alias.argv.first().is_none_or(String::is_empty) {
             return Err(format!(
-                "config/aliases.json alias {name:?} must have a non-empty argv"
+                "edition.json alias {name:?} must have a non-empty argv"
             ));
         }
     }

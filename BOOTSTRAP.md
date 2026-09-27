@@ -23,7 +23,7 @@ export AXE_EDITION_ROOT=/path/to/edition
 
 Required public inputs:
 
-- `edition.json`: schema version, edition ID, SSH principals, and relay defaults;
+- `edition.json`: schema version, edition ID, SSH principals, relay defaults, and compiled applet aliases;
 - `config/store.json`: Store endpoint, limits, pinned addresses, and cache roots;
 - `store/trusted/*.pub`: Store verification keys;
 - `store/bootstrap.json`: generated package inventory;
@@ -40,13 +40,13 @@ Conditional inputs:
 - `keys/relay/quic_server_cert.pem`, `quic_client_cert.pem`, and `quic_client_key.pem` when a QUIC endpoint is configured;
 - `store/nix/assets/trusted_ca.pem` for additional HTTPS roots.
 
-The build validates all JSON, aliases, SSH keys, certificates, Store trust, and bootstrap metadata before compiling the binary. `config/aliases.json` is source-owned and shared by all editions. Publisher keys, S3 credentials, and the relay server private key are never embedded.
+The build validates all JSON, aliases, SSH keys, certificates, Store trust, and bootstrap metadata before compiling the binary. Publisher keys, S3 credentials, and the relay server private key are never embedded.
 
-A minimal `edition.json` uses schema 2:
+A minimal `edition.json` uses schema 3:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "id": "my-axe",
   "sshd": {
     "principals": ["alice", "bob"]
@@ -55,7 +55,8 @@ A minimal `edition.json` uses schema 2:
     "enabled_by_default": false,
     "tcp_endpoint": null,
     "quic_endpoint": null
-  }
+  },
+  "aliases": {}
 }
 ```
 

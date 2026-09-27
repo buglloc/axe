@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::sync::OnceLock;
 
 use brush_shell::bundled::{BundledCommand, BundledFn, InProcessFn, ShellExecution};
@@ -501,6 +501,7 @@ fn bundled_synopsis(name: &str) -> &'static str {
 struct RuntimeAlias {
     entry: BundledFn,
     argv: Vec<OsString>,
+    help: &'static [&'static str],
 }
 
 static ALIASES: OnceLock<HashMap<String, RuntimeAlias>> = OnceLock::new();
@@ -695,6 +696,7 @@ pub fn build(
             RuntimeAlias {
                 entry,
                 argv: alias.argv.iter().map(OsString::from).collect(),
+                help: alias.help,
             },
         );
         commands.insert_alias(name.to_owned(), target, alias.synopsis);
@@ -750,6 +752,15 @@ fn alias_entry(args: Vec<OsString>) -> i32 {
         eprintln!("axe: unknown alias: {name}");
         return 127;
     };
+    if !alias.help.is_empty()
+        && args.len() == 2
+        && (args[1] == OsStr::new("--help") || args[1] == OsStr::new("-h"))
+    {
+        for line in alias.help {
+            println!("{line}");
+        }
+        return 0;
+    }
     let mut argv = Vec::with_capacity(alias.argv.len() + args.len().saturating_sub(1));
     argv.extend(alias.argv.iter().cloned());
     argv.extend(args.into_iter().skip(1));

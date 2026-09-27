@@ -15,9 +15,8 @@ Resolution order:
   Without a usable descriptor or executable path Brush builtins remain available, bundled children cannot launch, and sshd fails before bind.
 
 Repository configuration:
-  config/aliases.json              compiled applet aliases
   config/store.json                AXE Store endpoints, limits and storage roots
-  edition.json                     edition ID, default SSH principals, and relay endpoints
+  edition.json                     edition ID, SSH/relay defaults, and compiled applet aliases
   keys/                            ignored local SSH/relay identities and Store publisher credentials
   store/trusted/*.pub, store/bootstrap-index.cbor.zst
                                    public Store trust and signed bootstrap snapshot
