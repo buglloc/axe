@@ -5,7 +5,7 @@ AXE has two execution paths:
 - **In-process entry dispatch:** the current process enters an applet through BusyBox-style `argv[0]`, `axe --applet`, a positional command, or hidden dispatch. Shell aliases, functions, and builtins also run in-process.
 - **Self-exec:** a running AXE process starts another AXE process for a bundled command from Brush, a nested `xargs` invocation, a daemon worker, an SSH shell/exec session, or a BusyBox-style PATH bridge.
 
-Entry dispatch does not need access to the executable. That does not mean a running Brush can execute every bundled applet without spawning: the usual applet shim starts a child AXE process. The native `doctor` callback runs in the shell process and reads a snapshot of live shell state. If self-exec is unavailable, the shell still has its builtins, aliases, and functions.
+Entry dispatch runs without access to the executable. Most bundled applets launched from Brush use the applet shim to start a child AXE process. The native `doctor` callback runs in the shell process and reads a snapshot of live shell state. Builtins, aliases, and functions remain available when self-exec is unavailable.
 
 When starting a new process, AXE preserves:
 
@@ -87,7 +87,7 @@ A relay preserves AXE's executable bytes, not the original filesystem security o
 
 The bundled executable provider selects a fallback again before each launch. If the original path disappears between launches, AXE prepares the relay in the parent before `fork`: copying and filesystem mutations are unsafe inside `pre_exec`. A relay may be materialized even when descriptor execution later succeeds, because the path fallback must be ready before entering the child.
 
-## What remains available
+## Availability by launch state
 
 <!-- markdownlint-disable MD013 -->
 
@@ -109,7 +109,7 @@ The bundled executable provider selects a fallback again before each launch. If 
 
 ### No procfs
 
-A missing `/proc`, a masked proc mount, or an unusable `/proc/self/fd` disables only the proc backend. If the filesystem image can be read, AXE still obtains a retained descriptor. After the first descriptor launch, AXE hands that capability to later processes without procfs.
+A missing `/proc`, a masked proc mount, or an unusable `/proc/self/fd` disables only the proc backend. AXE obtains a retained descriptor whenever it can read the filesystem image. After the first descriptor launch, AXE hands that capability to later processes without procfs.
 
 ### Image removed or replaced
 
@@ -119,7 +119,7 @@ An existing PATH bridge to the original path cannot survive unlink automatically
 
 ### `execveat` unavailable or blocked by seccomp
 
-`ENOSYS`, `EPERM`, and other `execveat` errors move execution to `fexecve`, then to one preselected checked path. That path is the original on a confirmed executable mount, or the relay if the original is lost or on `noexec`. If policy blocks descriptor syscalls but permits ordinary `execve` on the selected path, bundled children, workers, and SSH sessions still run.
+`ENOSYS`, `EPERM`, and other `execveat` errors move execution to `fexecve`, then to one preselected checked path. That path is the original on a confirmed executable mount, or the relay if the original is lost or on `noexec`. When policy blocks descriptor syscalls but permits ordinary `execve`, bundled children, workers, and SSH sessions use the checked path.
 
 If neither descriptor nor filesystem execution is allowed, AXE does not disguise the failure by running an external command from `PATH`. Starting a new process fails with status 126 or `NotFound`, depending on the caller.
 
@@ -137,15 +137,15 @@ After the original path is removed, a path-only consumer cannot launch. AXE retu
 
 ### Broken environment
 
-An empty `PATH`, stale `AXE_APPLET_DIR`, invalid `AXE_WORK_DIR`, or inaccessible `HOME` does not disable the in-process registry. AXE removes a stale bridge marker and its exact PATH components. Failure to publish a new bridge remains a warning: direct entry dispatch and Brush builtins do not depend on it.
+An empty `PATH`, stale `AXE_APPLET_DIR`, invalid `AXE_WORK_DIR`, or inaccessible `HOME` leaves the in-process registry available. AXE removes a stale bridge marker and its exact PATH components. Failure to publish a new bridge is a warning; direct entry dispatch and Brush builtins run without it.
 
 Descriptor handoff takes priority only after fd and identity checks. AXE ignores and removes an invalid environment value.
 
 ### Unable to create a process
 
-Non-interactive/minimal Brush uses a current-thread Tokio runtime and starts without worker threads. Reedline needs a blocking pool, so the interactive shell uses a multi-thread runtime. If `clone` or `fork` returns `EAGAIN` or `ENOMEM`, or policy blocks it, that spawn fails; the running shell can still execute another native builtin.
+Non-interactive/minimal Brush uses a current-thread Tokio runtime and starts without worker threads. Reedline needs a blocking pool, so the interactive shell uses a multi-thread runtime. If `clone` or `fork` returns `EAGAIN` or `ENOMEM`, or policy blocks it, that spawn fails; native builtins remain available in the running shell.
 
-Ordinary bundled applets in Brush require a new process: the shim starts a child AXE process. `doctor` is a native callback and remains available without spawn, including output through shell redirection. With spawning completely blocked, other bundled applets do not run in-process.
+Ordinary bundled applets in Brush require a new process: the shim starts a child AXE process. `doctor` runs without spawn, including output through shell redirection. Other bundled applets cannot run in-process when spawning is blocked.
 
 ## Consumers
 

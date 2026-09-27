@@ -9,7 +9,7 @@ AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl commands ps
 AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl doctor --json
 ```
 
-`commands` returns a versioned JSON inventory. `availability` is `local`, `on_demand`, or `blocked`; `local_path` is the published applet path, if one exists. To inspect shell aliases, functions, and builtins, use `type` and `command -v`. AXE does not replace `command`.
+`commands` returns a versioned JSON inventory. `availability` is `local`, `on_demand`, or `blocked`; `local_path` is the published applet path, if one exists. Use the shell's `type`, `command`, and `command -v` builtins to inspect aliases, functions, and builtins.
 
 ## Command resolution
 

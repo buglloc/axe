@@ -15,7 +15,7 @@ just build
 AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl --list
 ```
 
-`just build` creates missing development keys and writes `dist/axe-x86_64-unknown-linux-musl`. `AXE_STORE_MODE=off` makes the first run independent of Store network and cache state. The Linux binary can run without a system shell, coreutils, or dynamic loader.
+`just build` creates missing development keys and writes `dist/axe-x86_64-unknown-linux-musl`. `AXE_STORE_MODE=off` makes the first run independent of Store network and cache state.
 
 ## Downloads
 

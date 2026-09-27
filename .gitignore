@@ -3,6 +3,7 @@ target/
 /nix/builders.conf
 /keys/
 /dist/
+/draft/
 /store/dist/
 /store/.axe-store-stage*/
 /store/.axe-store-work*/

@@ -40,7 +40,7 @@ Conditional inputs:
 - `keys/relay/quic_server_cert.pem`, `quic_client_cert.pem`, and `quic_client_key.pem` when a QUIC endpoint is configured;
 - `store/nix/assets/trusted_ca.pem` for additional HTTPS roots.
 
-The build validates all JSON, aliases, SSH keys, certificates, Store trust, and bootstrap metadata before compiling the binary. `config/aliases.json` remains source-owned and is not edition-specific. Publisher keys, S3 credentials, and the relay server private key are never embedded.
+The build validates all JSON, aliases, SSH keys, certificates, Store trust, and bootstrap metadata before compiling the binary. `config/aliases.json` is source-owned and shared by all editions. Publisher keys, S3 credentials, and the relay server private key are never embedded.
 
 A minimal `edition.json` uses schema 2:
 
@@ -186,7 +186,7 @@ axe-relay --api https://ops.example.net \
   wait --client-id host-01 --transport quic --timeout 60 --json
 ```
 
-A registration is not proof of SSH login. Verify certificate authentication, command execution, SFTP, forwarding, and plain-key rejection. `just relay-live-smoke` covers local TCP and QUIC protocol paths; remote installation and activation remain operator actions.
+A registration is not proof of SSH login. Verify certificate authentication, command execution, SFTP, forwarding, and plain-key rejection. `just relay-live-smoke` covers local TCP and QUIC protocol paths; operators install and activate AXE on remote machines.
 
 Rotate each relay identity on both peers: replace the server certificate and key together, replace the client certificate and key together, and update the TCP token on relay and targets. Rebuild targets when changing embedded credentials.
 

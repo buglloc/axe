@@ -1,12 +1,12 @@
 # Architecture
 
-AXE is one executable with a Brush shell, bundled applets, and optional on-demand commands. `crates/axe/src/main.rs` initializes the executable capability and parses the direct entry route once: hidden dispatch, a PATH bridge or BusyBox-style symlink name, `--applet`, or a positional command. That route selects the Store mode before the command registry is built. The registry is then installed into Brush, and the same route either dispatches an applet from it or falls through to the shell.
+AXE is one executable with a Brush shell, bundled applets, and optional on-demand commands. `crates/axe/src/main.rs` initializes the executable capability, then parses the direct entry route once. The route can be hidden dispatch, a PATH bridge or BusyBox-style symlink name, `--applet`, or a positional command. It selects the Store mode before the command registry is built. AXE installs that registry into Brush, then either dispatches the selected applet or starts the shell.
 
 ## Commands and execution
 
 `crates/axe/src/registry.rs` builds the bundled command registry and adds Store commands without overriding bundled names. Brush holds the only installed copy; direct entry, shell shims, and nested AXE children resolve names through it. In the shell, aliases/functions and builtins precede bundled applets; Store precedes the host `PATH` only under the failure rules in [Commands](commands.md). Brush runs interactive TTY sessions through Reedline and non-terminal execution through its minimal backend.
 
-Most bundled commands launched by the shell start another AXE process. `crates/axe/src/executable.rs` retains the means to launch that process, and `path_bridge.rs` publishes a best-effort command path. The in-process registry still works if the bridge cannot be published. See [Runtime survivability](runtime-survivability.md) for descriptor execution, checked paths, and failure cases.
+Most bundled commands launched by the shell start another AXE process. `crates/axe/src/executable.rs` retains the means to launch that process, and `path_bridge.rs` publishes a best-effort command path. Bridge publication is optional for the in-process registry. See [Runtime survivability](runtime-survivability.md) for descriptor execution, checked paths, and failure cases.
 
 ## On-demand software
 
