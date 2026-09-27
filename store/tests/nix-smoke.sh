@@ -94,23 +94,6 @@ AXE_STORE_SIGNING_KEY="$signing_key" "$target_dir/debug/axe-store" build \
 
 grep -Fq 'unsupported: nix-smoke/missing x86_64-linux:' "$tmp/build.log"
 test ! -d "$tmp/output/tools/nix-smoke/missing/manifests"
-manifest=$(python3 - "$tmp/output" <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
-
-output = Path(sys.argv[1])
-index = json.loads((output / "index.json").read_text(encoding="utf-8"))
-assert "missing-nix-package" not in index["tools"]
-entry = index["tools"]["hello"]
-digest = entry["manifest_sha256"]
-manifest = output / "tools" / entry["id"] / "manifests" / f"{digest}.cbor"
-assert hashlib.sha256(manifest.read_bytes()).hexdigest() == digest
-print(manifest)
-PY
-)
-
 cat >"$tmp/inspect/Cargo.toml" <<EOF
 [package]
 name = "axe-store-nix-smoke-inspect"
@@ -126,40 +109,53 @@ EOF
 cat >"$tmp/inspect/src/main.rs" <<'EOF'
 use std::{env, fs};
 
-use axe_artifact::{ToolManifest, TrustedKeys, verify_document};
+use axe_artifact::{StoreIndex, ToolManifest, TrustedKeys, decode_hex_32, verify_document};
 use ed25519_dalek::VerifyingKey;
 
 fn main() {
-    let mut args = env::args_os().skip(1);
-    let manifest = fs::read(args.next().expect("manifest path")).expect("read manifest");
+    let mut args = env::args().skip(1);
+    let kind = args.next().expect("document kind");
+    let document = fs::read(args.next().expect("document path")).expect("read document");
     let encoded = fs::read_to_string(args.next().expect("key path")).expect("read key");
-    let encoded = encoded.trim().as_bytes();
-    assert_eq!(encoded.len(), 64, "public key must be lowercase hex");
-    let mut bytes = [0_u8; 32];
-    for (index, pair) in encoded.as_chunks::<2>().0.iter().enumerate() {
-        bytes[index] = (nibble(pair[0]) << 4) | nibble(pair[1]);
-    }
+    let key = decode_hex_32(encoded.trim(), "public key").expect("hex public key");
     let mut trusted = TrustedKeys::new();
-    trusted.insert(VerifyingKey::from_bytes(&bytes).expect("valid public key"));
-    let manifest: ToolManifest = verify_document(&manifest, &trusted).expect("verified manifest");
-    let version = manifest.channels.get("stable").expect("stable channel");
-    for (target, artifact) in &manifest.versions.get(version).expect("stable version").targets {
-        println!("{target} {}", artifact.fully_static);
-    }
-}
+    trusted.insert(VerifyingKey::from_bytes(&key).expect("valid public key"));
 
-fn nibble(byte: u8) -> u8 {
-    match byte {
-        b'0'..=b'9' => byte - b'0',
-        b'a'..=b'f' => byte - b'a' + 10,
-        _ => panic!("invalid hex"),
+    match kind.as_str() {
+        "index" => {
+            let index: StoreIndex = verify_document(&document, &trusted).expect("verified Index");
+            index.validate().expect("valid Index");
+            for (name, entry) in &index.tools {
+                println!("{name} {}", entry.manifest_path());
+            }
+        }
+        "manifest" => {
+            let manifest: ToolManifest =
+                verify_document(&document, &trusted).expect("verified manifest");
+            let version = manifest.channels.get("stable").expect("stable channel");
+            for (target, artifact) in &manifest.versions.get(version).expect("stable version").targets {
+                println!("{target} {}", artifact.fully_static);
+            }
+        }
+        _ => panic!("unknown document kind {kind}"),
     }
 }
 EOF
+inspect() {
+    cargo run --quiet --manifest-path "$tmp/inspect/Cargo.toml" -- "$@"
+}
 trusted_path=$(printf '%s\n' "$tmp"/store/trusted/*.pub | sort | sed -n '1p')
-cargo run --quiet --manifest-path "$tmp/inspect/Cargo.toml" -- \
-    "$manifest" "$trusted_path" \
-    >"$tmp/manifest.txt"
+zstd -q -d -c "$tmp/output/index.cbor.zst" >"$tmp/index.cbor"
+inspect index "$tmp/index.cbor" "$trusted_path" >"$tmp/index.txt"
+if grep -q '^missing-nix-package ' "$tmp/index.txt"; then
+    echo 'Nix smoke Index lists the failed package' >&2
+    exit 1
+fi
+manifest_relative=$(sed -n 's/^hello //p' "$tmp/index.txt")
+test -n "$manifest_relative"
+manifest="$tmp/output/$manifest_relative"
+test "$(sha256sum "$manifest" | cut -d ' ' -f 1).cbor" = "$(basename "$manifest")"
+inspect manifest "$manifest" "$trusted_path" >"$tmp/manifest.txt"
 grep -Fxq 'x86_64-linux true' "$tmp/manifest.txt"
 if ! grep -Fxq 'aarch64-darwin false' "$tmp/manifest.txt"; then
     grep -Fq 'unsupported: nix-smoke/hello aarch64-darwin:' "$tmp/build.log"

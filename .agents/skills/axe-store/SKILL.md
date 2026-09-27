@@ -68,6 +68,6 @@ Read [references/package-recipes.md](references/package-recipes.md) for helper e
 
 Remove obsolete definitions cleanly; do not leave aliases, empty categories, compatibility attributes, or stale bootstrap entries. Regenerate bootstrap after removal.
 
-Publication deliberately rejects removal of an already published package, channel, or target. Confirm that the removal is intended, inspect the newly built Index, then pass `--allow-target-removal` only to that explicit publish or sync operation. Never add this flag to default recipes.
+Publication deliberately rejects removal of an already published package, channel, or target. Confirm that every removal listed by the rejected publication is intended, then pass `--allow-target-removal` only to that explicit publish or sync operation. Never add this flag to default recipes.
 
 Do not publish unless the user explicitly requests publication and the configured credentials, signing key, and destination are known.

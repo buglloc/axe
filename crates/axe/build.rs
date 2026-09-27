@@ -3,11 +3,12 @@ use std::env;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
-use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use axe_artifact::{KeyId, StoreIndex, Target, TrustedKeys, decode_hex_32, verify_document};
+use axe_artifact::{
+    KeyId, StoreConfig, StoreIndex, Target, TrustedKeys, decode_hex_32, verify_document,
+};
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use ssh_key::PrivateKey;
@@ -19,40 +20,6 @@ const EDITION_SCHEMA_VERSION: u32 = 1;
 struct Edition {
     schema_version: u32,
     id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoreConfig {
-    consumer: ConsumerConfig,
-    storage: StorageConfig,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ConsumerConfig {
-    addresses: Vec<IpAddr>,
-    max_object_bytes: u64,
-    max_metadata_bytes: u64,
-    index_ttl_secs: u64,
-    manifest_ttl_secs: u64,
-    metadata_timeout_secs: u64,
-    object_timeout_secs: u64,
-    transient_retry_secs: u64,
-    free_space_reserve_bytes: u64,
-    channel: String,
-    persistent_roots: Vec<PathBuf>,
-    tmpfs_roots: Vec<PathBuf>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StorageConfig {
-    endpoint: String,
-    region: String,
-    bucket: String,
-    prefix: String,
-    release_prefix: String,
 }
 
 #[derive(Deserialize)]
@@ -143,9 +110,8 @@ fn run() -> Result<(), String> {
     }
 
     let store_json = read_text(&edition_root, "config/store.json")?;
-    let store: StoreConfig = serde_json::from_str(&store_json)
+    let store = StoreConfig::from_json(store_json.as_bytes())
         .map_err(|error| format!("invalid config/store.json: {error}"))?;
-    validate_store(&store)?;
 
     let sshd_json = read_text(&edition_root, "config/sshd.json")?;
     let sshd: SshdConfig = serde_json::from_str(&sshd_json)
@@ -378,31 +344,6 @@ fn validate_relay(config: &RelayConfig) -> Result<(), String> {
                 .into(),
         );
     }
-    Ok(())
-}
-
-fn validate_store(config: &StoreConfig) -> Result<(), String> {
-    let consumer = &config.consumer;
-    let storage = &config.storage;
-    if consumer.addresses.is_empty()
-        || consumer.max_object_bytes == 0
-        || consumer.max_metadata_bytes == 0
-        || consumer.index_ttl_secs == 0
-        || consumer.manifest_ttl_secs == 0
-        || consumer.metadata_timeout_secs == 0
-        || consumer.object_timeout_secs == 0
-        || consumer.transient_retry_secs == 0
-        || consumer.free_space_reserve_bytes == 0
-        || consumer.channel.is_empty()
-        || !storage.endpoint.starts_with("https://")
-        || storage.region.is_empty()
-        || storage.bucket.is_empty()
-        || storage.prefix.is_empty()
-        || storage.release_prefix.is_empty()
-    {
-        return Err("config/store.json contains an empty or invalid required value".into());
-    }
-    let _ = (&consumer.persistent_roots, &consumer.tmpfs_roots);
     Ok(())
 }
 

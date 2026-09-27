@@ -141,17 +141,6 @@ fn automatic_runtime_roots_from(
     roots
 }
 
-pub fn select_writable_root(
-    roots: impl IntoIterator<Item = PathBuf>,
-    required_bytes: u64,
-) -> Option<PathBuf> {
-    roots.into_iter().find_map(|root| {
-        ensure_writable_root(&root, required_bytes)
-            .ok()
-            .and_then(|()| root.canonicalize().ok().or(Some(root)))
-    })
-}
-
 pub fn ensure_writable_root(root: &Path, required_bytes: u64) -> io::Result<()> {
     fs::create_dir_all(root)?;
 
@@ -443,28 +432,6 @@ fn check_available_space(_root: &Path, _required_bytes: u64) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn selector_skips_unusable_candidates() {
-        let root = std::env::temp_dir().join(format!(
-            "axe-paths-selector-{}-{}",
-            std::process::id(),
-            NEXT_PROBE.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir(&root).expect("create selector fixture");
-        let unusable = root.join("file");
-        fs::write(&unusable, b"not a directory").expect("create unusable candidate");
-        let usable = root.join("writable");
-
-        let selected = select_writable_root([unusable, usable.clone()], 0);
-
-        assert_eq!(
-            selected,
-            Some(usable.canonicalize().expect("canonical root"))
-        );
-        fs::remove_dir_all(root).expect("remove selector fixture");
-    }
 
     #[test]
     fn runtime_candidates_ignore_mounts_and_use_fixed_order() {

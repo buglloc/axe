@@ -637,24 +637,15 @@ fn write_index(
     let index = StoreIndex {
         schema_version: SCHEMA_VERSION,
         generation,
-        ttl_secs: 3_600,
+        ttl_secs: axe_artifact::INDEX_TTL_SECS,
         tools,
     };
     index.validate().map_err(|error| error.to_string())?;
-    let json = index_json(&index)?;
     let signed = sign_document(&index, signing).map_err(|error| format!("sign Index: {error}"))?;
     let compressed = zstd::stream::encode_all(signed.as_slice(), 9)
         .map_err(|error| format!("compress Index: {error}"))?;
 
-    write_file(&stage.join("index.cbor.zst"), &compressed)?;
-    write_file(&stage.join("index.json"), &json)
-}
-
-pub(crate) fn index_json(index: &StoreIndex) -> Result<Vec<u8>, String> {
-    let mut bytes = serde_json::to_vec_pretty(index)
-        .map_err(|error| format!("serialize Index as JSON: {error}"))?;
-    bytes.push(b'\n');
-    Ok(bytes)
+    write_file(&stage.join("index.cbor.zst"), &compressed)
 }
 
 fn write_deterministic_tar(tree: &CanonicalTree, destination: &Path) -> Result<(), String> {
@@ -846,11 +837,6 @@ mod tests {
         let verified: ToolManifest =
             axe_artifact::verify_document(&signed_manifest, &trusted).expect("verify manifest");
         assert_eq!(verified, manifest);
-        assert_eq!(
-            serde_json::from_slice::<StoreIndex>(&fs::read(stage.join("index.json")).unwrap())
-                .expect("parse JSON inventory"),
-            index
-        );
         assert!(!stage.join("tools/test/tool/manifest.cbor").exists());
         fs::remove_dir_all(stage).expect("remove staging directory");
     }

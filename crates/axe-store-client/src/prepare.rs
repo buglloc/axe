@@ -1447,8 +1447,6 @@ mod tests {
                 addresses: vec!["127.0.0.1".parse().expect("loopback address")],
                 max_object_bytes: 1024 * 1024,
                 max_metadata_bytes: 1024 * 1024,
-                index_ttl_secs: 60,
-                manifest_ttl_secs: 60,
                 metadata_timeout: Duration::from_secs(1),
                 object_timeout: Duration::from_secs(1),
                 transient_retry: Duration::from_secs(30),

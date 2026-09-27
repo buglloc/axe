@@ -1,3 +1,5 @@
+mod store_config;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
@@ -10,7 +12,11 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest as _, Sha256, Sha512};
 
+pub use store_config::{ConsumerConfig, StorageConfig, StoreConfig};
+
 pub const SCHEMA_VERSION: u32 = 2;
+/// Revalidation interval of every published Index.
+pub const INDEX_TTL_SECS: u64 = 3_600;
 pub const METADATA_CONTEXT: &[u8] = b"axe-metadata-v2";
 pub const ARTIFACT_CONTEXT: &[u8] = b"axe-artifact-v1";
 const ARTIFACT_SCHEMA_VERSION: u32 = 1;

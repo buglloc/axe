@@ -1,23 +1,21 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axe_artifact::{
-    Digest, KeyId, StoreIndex, StoreIndexEntry, TrustedKeys, sign_document, verify_document,
+    Digest, KeyId, StorageConfig, StoreConfig, StoreIndex, TrustedKeys, sign_document,
+    verify_document,
 };
 use rusty_s3::actions::CreateMultipartUpload;
 use rusty_s3::{Bucket, Credentials, S3Action, UrlStyle};
-use serde::{Deserialize, Serialize};
 
-use crate::build_pipeline::index_json;
 use crate::fs_atomic::{self, InstallMode};
 use crate::keys::{load_signing_key, load_trusted_keys};
 
 const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
 const METADATA_CACHE: &str = "public, max-age=0, must-revalidate";
-const INDEX_JSON_CAS_ATTEMPTS: usize = 8;
 const S3_DIAGNOSTIC_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,58 +74,6 @@ impl DiagnosticConnection {
 struct DiagnosticFailure {
     class: &'static str,
     detail: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct PublishedIndex {
-    schema_version: u32,
-    generation: u64,
-    ttl_secs: u64,
-    tools: BTreeMap<String, PublishedIndexEntry>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct PublishedIndexEntry {
-    id: String,
-    aliases: Vec<String>,
-    manifest_sha256: Digest,
-    channels: BTreeMap<String, BTreeSet<String>>,
-    synopsis: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct StoreConfig {
-    consumer: ConsumerConfig,
-    pub(crate) storage: StorageConfig,
-}
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ConsumerConfig {
-    addresses: Vec<String>,
-    max_object_bytes: u64,
-    max_metadata_bytes: u64,
-    index_ttl_secs: u64,
-    manifest_ttl_secs: u64,
-    metadata_timeout_secs: u64,
-    object_timeout_secs: u64,
-    transient_retry_secs: u64,
-    free_space_reserve_bytes: u64,
-    channel: String,
-    persistent_roots: Vec<PathBuf>,
-    tmpfs_roots: Vec<PathBuf>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct StorageConfig {
-    pub(crate) endpoint: String,
-    region: String,
-    pub(crate) bucket: String,
-    prefix: String,
-    pub(crate) release_prefix: String,
 }
 
 pub fn publish(options: &PublishOptions<'_>) -> Result<u64, String> {
@@ -306,38 +252,8 @@ fn run_upload_diagnostics(
 }
 
 pub(crate) fn read_config(path: &Path) -> Result<StoreConfig, String> {
-    let config = serde_json::from_slice(
-        &fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?,
-    )
-    .map_err(|error| format!("parse {}: {error}", path.display()))?;
-    validate_config(&config)?;
-    Ok(config)
-}
-
-fn validate_config(config: &StoreConfig) -> Result<(), String> {
-    if config.consumer.addresses.is_empty()
-        || config.consumer.max_object_bytes == 0
-        || config.consumer.max_metadata_bytes == 0
-        || config.consumer.index_ttl_secs == 0
-        || config.consumer.manifest_ttl_secs == 0
-        || config.consumer.metadata_timeout_secs == 0
-        || config.consumer.object_timeout_secs == 0
-        || config.consumer.transient_retry_secs == 0
-        || config.consumer.free_space_reserve_bytes == 0
-        || config.consumer.channel.is_empty()
-        || !config.storage.endpoint.starts_with("https://")
-        || config.storage.region.is_empty()
-        || config.storage.bucket.is_empty()
-        || config.storage.prefix.is_empty()
-        || config.storage.release_prefix.is_empty()
-    {
-        return Err("invalid AXE Store configuration".into());
-    }
-    let _ = (
-        &config.consumer.persistent_roots,
-        &config.consumer.tmpfs_roots,
-    );
-    Ok(())
+    let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+    StoreConfig::from_json(&bytes).map_err(|error| format!("parse {}: {error}", path.display()))
 }
 
 fn publish_to(options: &PublishOptions<'_>, sink: &mut dyn ObjectSink) -> Result<u64, String> {
@@ -357,7 +273,7 @@ fn publish_to(options: &PublishOptions<'_>, sink: &mut dyn ObjectSink) -> Result
     eprintln!("axe-store: publish: reading current remote Index");
     let remote = sink.get("index.cbor.zst")?;
     let (generation, etag) = if let Some(remote) = remote {
-        let current = decode_published_index(&remote.bytes, &trusted)?;
+        let current = decode_index(&remote.bytes, &trusted)?;
         if !options.allow_target_removal {
             reject_target_removals(&current, &staged_index)?;
         }
@@ -416,15 +332,13 @@ fn publish_to(options: &PublishOptions<'_>, sink: &mut dyn ObjectSink) -> Result
 
     let mut index = staged_index;
     index.generation = generation;
-    let json = index_json(&index)?;
     let signed = sign_document(&index, &signing).map_err(|error| format!("sign Index: {error}"))?;
     let compressed = zstd::stream::encode_all(signed.as_slice(), 9)
         .map_err(|error| format!("compress Index: {error}"))?;
 
     eprintln!("axe-store: publish: committing Index generation {generation}");
     sink.compare_and_swap_index(&compressed, etag.as_deref())?;
-    sink.put_index_json(&json, generation)?;
-    eprintln!("axe-store: publish: Index generation {generation} committed as CBOR and JSON");
+    eprintln!("axe-store: publish: Index generation {generation} committed");
     Ok(generation)
 }
 
@@ -475,7 +389,7 @@ fn read_staged_manifests(
     Ok(manifests)
 }
 
-fn reject_target_removals(current: &PublishedIndex, staged: &StoreIndex) -> Result<(), String> {
+fn reject_target_removals(current: &StoreIndex, staged: &StoreIndex) -> Result<(), String> {
     let staged_by_id = staged
         .tools
         .values()
@@ -519,80 +433,6 @@ fn decode_index(bytes: &[u8], trusted: &TrustedKeys) -> Result<StoreIndex, Strin
     Ok(index)
 }
 
-fn decode_published_index(bytes: &[u8], trusted: &TrustedKeys) -> Result<PublishedIndex, String> {
-    let signed =
-        zstd::stream::decode_all(bytes).map_err(|error| format!("decompress Index: {error}"))?;
-    let index: PublishedIndex =
-        verify_document(&signed, trusted).map_err(|error| format!("verify Index: {error}"))?;
-
-    let tools = index
-        .tools
-        .iter()
-        .filter_map(|(name, entry)| {
-            let channels = entry
-                .channels
-                .iter()
-                .filter(|(_, targets)| !targets.is_empty())
-                .map(|(channel, targets)| (channel.clone(), targets.clone()))
-                .collect::<BTreeMap<_, _>>();
-            (!channels.is_empty()).then(|| {
-                (
-                    name.clone(),
-                    StoreIndexEntry {
-                        id: entry.id.clone(),
-                        aliases: entry.aliases.clone(),
-                        manifest_sha256: entry.manifest_sha256,
-                        channels,
-                        synopsis: entry.synopsis.clone(),
-                    },
-                )
-            })
-        })
-        .collect();
-
-    StoreIndex {
-        schema_version: index.schema_version,
-        generation: index.generation,
-        ttl_secs: index.ttl_secs,
-        tools,
-    }
-    .validate()
-    .map_err(|error| error.to_string())?;
-
-    Ok(index)
-}
-
-fn should_replace_index_json(
-    current: &[u8],
-    desired: &[u8],
-    generation: u64,
-) -> Result<bool, String> {
-    let Ok(current): Result<StoreIndex, _> = serde_json::from_slice(current) else {
-        return Ok(true);
-    };
-    if current.validate().is_err() {
-        return Ok(true);
-    }
-
-    if current.generation > generation {
-        return Ok(false);
-    }
-    if current.generation == generation {
-        if current
-            == serde_json::from_slice(desired).map_err(|error| {
-                format!("parse generated Index JSON generation {generation}: {error}")
-            })?
-        {
-            return Ok(false);
-        }
-        return Err(format!(
-            "Index JSON generation {generation} already exists with different contents"
-        ));
-    }
-
-    Ok(true)
-}
-
 struct RemoteObject {
     bytes: Vec<u8>,
     etag: String,
@@ -602,7 +442,6 @@ trait ObjectSink {
     fn get(&mut self, key: &str) -> Result<Option<RemoteObject>, String>;
     fn put_immutable(&mut self, key: &str, bytes: &[u8]) -> Result<(), String>;
     fn compare_and_swap_index(&mut self, bytes: &[u8], etag: Option<&str>) -> Result<(), String>;
-    fn put_index_json(&mut self, bytes: &[u8], generation: u64) -> Result<(), String>;
 }
 
 struct DirectorySink {
@@ -682,17 +521,6 @@ impl ObjectSink for DirectorySink {
         }
         self.put("index.cbor.zst", bytes, InstallMode::Replace)
             .map_err(|error| format!("write {}: {error}", self.path("index.cbor.zst").display()))
-    }
-
-    fn put_index_json(&mut self, bytes: &[u8], generation: u64) -> Result<(), String> {
-        let _lock = self.lock_index()?;
-        if let Some(current) = self.get("index.json")?
-            && !should_replace_index_json(&current.bytes, bytes, generation)?
-        {
-            return Ok(());
-        }
-        self.put("index.json", bytes, InstallMode::Replace)
-            .map_err(|error| format!("write {}: {error}", self.path("index.json").display()))
     }
 }
 
@@ -1560,39 +1388,6 @@ impl ObjectSink for S3Sink {
         }
         Err(self.response_error("conditional Index PUT", "index.cbor.zst", &mut response))
     }
-
-    fn put_index_json(&mut self, bytes: &[u8], generation: u64) -> Result<(), String> {
-        for _ in 0..INDEX_JSON_CAS_ATTEMPTS {
-            let current = self.get("index.json")?;
-            if let Some(current) = current.as_ref()
-                && !should_replace_index_json(&current.bytes, bytes, generation)?
-            {
-                return Ok(());
-            }
-
-            let condition = match current.as_ref() {
-                Some(current) => ("if-match", current.etag.as_str()),
-                None => ("if-none-match", "*"),
-            };
-            let headers = [
-                ("cache-control", METADATA_CACHE),
-                ("content-type", "application/json"),
-                condition,
-            ];
-            let mut response = self.put_bytes_response("index.json", bytes, &headers)?;
-            if response.status().is_success() {
-                return Ok(());
-            }
-            if response.status() != ureq::http::StatusCode::PRECONDITION_FAILED {
-                return Err(self.response_error(
-                    "conditional Index JSON PUT",
-                    "index.json",
-                    &mut response,
-                ));
-            }
-        }
-        Err("Index JSON changed concurrently too many times; refusing to overwrite it".into())
-    }
 }
 
 fn load_s3_credentials(workspace: &Path) -> Result<Credentials, String> {
@@ -1672,6 +1467,8 @@ fn relative_key(root: &Path, path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axe_artifact::StoreIndexEntry;
+    use std::collections::BTreeSet;
     use std::net::{TcpListener, TcpStream};
 
     use testcontainers::{
@@ -1931,10 +1728,10 @@ mod tests {
     }
 
     #[test]
-    fn target_removal_requires_explicit_permission() {
-        let staged = StoreIndex {
+    fn retired_target_removal_requires_explicit_permission() {
+        let index = |targets: &[&str]| StoreIndex {
             schema_version: axe_artifact::SCHEMA_VERSION,
-            generation: 1,
+            generation: 7,
             ttl_secs: 3_600,
             tools: BTreeMap::from([(
                 "tool".into(),
@@ -1944,72 +1741,25 @@ mod tests {
                     manifest_sha256: Digest([3; 32]),
                     channels: BTreeMap::from([(
                         "stable".into(),
-                        BTreeSet::from([axe_artifact::Target::X86_64Linux.to_string()]),
+                        targets.iter().map(|target| (*target).to_owned()).collect(),
                     )]),
                     synopsis: None,
                 },
             )]),
         };
-
-        let current = PublishedIndex {
-            schema_version: axe_artifact::SCHEMA_VERSION,
-            generation: 1,
-            ttl_secs: 3_600,
-            tools: BTreeMap::from([(
-                "tool".into(),
-                PublishedIndexEntry {
-                    id: "test/tool".into(),
-                    aliases: Vec::new(),
-                    manifest_sha256: Digest([3; 32]),
-                    channels: BTreeMap::from([(
-                        "stable".into(),
-                        BTreeSet::from(["retired-target".into(), "x86_64-linux".into()]),
-                    )]),
-                    synopsis: None,
-                },
-            )]),
-        };
-
-        let error = reject_target_removals(&current, &staged)
-            .expect_err("retired target removal must be rejected");
-        assert!(error.contains("test/tool stable retired-target"));
-    }
-
-    #[test]
-    fn published_index_decoder_accepts_retired_targets() {
         let signing = ed25519_dalek::SigningKey::from_bytes(&[31; 32]);
         let mut trusted = TrustedKeys::new();
         trusted.insert(signing.verifying_key());
-        let index = PublishedIndex {
-            schema_version: axe_artifact::SCHEMA_VERSION,
-            generation: 7,
-            ttl_secs: 3_600,
-            tools: BTreeMap::from([(
-                "tool".into(),
-                PublishedIndexEntry {
-                    id: "test/tool".into(),
-                    aliases: Vec::new(),
-                    manifest_sha256: Digest([3; 32]),
-                    channels: BTreeMap::from([(
-                        "stable".into(),
-                        BTreeSet::from(["retired-target".into(), "x86_64-linux".into()]),
-                    )]),
-                    synopsis: None,
-                },
-            )]),
-        };
-
-        let signed = sign_document(&index, &signing).expect("sign published Index");
+        let signed = sign_document(&index(&["retired-target", "x86_64-linux"]), &signing)
+            .expect("sign published Index");
         let compressed =
             zstd::stream::encode_all(signed.as_slice(), 1).expect("compress published Index");
 
-        let decoded =
-            decode_published_index(&compressed, &trusted).expect("decode published Index");
-        assert_eq!(decoded.generation, 7);
-        assert!(
-            decoded.tools["tool"].channels["stable"].contains("retired-target"),
-            "retired target must remain visible to removal checks"
-        );
+        let current = decode_index(&compressed, &trusted).expect("decode published Index");
+        assert_eq!(current.generation, 7);
+        let error = reject_target_removals(&current, &index(&["x86_64-linux"]))
+            .expect_err("retired target removal must be rejected");
+        assert!(error.contains("test/tool stable retired-target"));
     }
 
     struct TempWorkspace(PathBuf);
@@ -2200,10 +1950,6 @@ mod tests {
             publish_to(&self.winner, &mut self.inner)?;
             self.inner.compare_and_swap_index(bytes, etag)
         }
-
-        fn put_index_json(&mut self, bytes: &[u8], generation: u64) -> Result<(), String> {
-            self.inner.put_index_json(bytes, generation)
-        }
     }
 
     #[test]
@@ -2330,45 +2076,6 @@ mod tests {
                 .expect("inspect manifest")
                 .as_deref(),
             Some(IMMUTABLE_CACHE)
-        );
-
-        let human_index = |generation| {
-            index_json(&StoreIndex {
-                schema_version: axe_artifact::SCHEMA_VERSION,
-                generation,
-                ttl_secs: 3_600,
-                tools: std::collections::BTreeMap::new(),
-            })
-            .expect("serialize human-readable Index")
-        };
-        let generation_two_json = human_index(2);
-        first
-            .put_index_json(&generation_two_json, 2)
-            .expect("create JSON Index");
-        first
-            .put_index_json(&human_index(1), 1)
-            .expect("ignore stale JSON Index");
-        assert_eq!(
-            first
-                .get("index.json")
-                .expect("read JSON Index")
-                .expect("JSON Index exists")
-                .bytes,
-            generation_two_json
-        );
-        assert_eq!(
-            first
-                .head_header("index.json", "cache-control")
-                .expect("inspect JSON Index cache control")
-                .as_deref(),
-            Some(METADATA_CACHE)
-        );
-        assert_eq!(
-            first
-                .head_header("index.json", "content-type")
-                .expect("inspect JSON Index content type")
-                .as_deref(),
-            Some("application/json")
         );
 
         first

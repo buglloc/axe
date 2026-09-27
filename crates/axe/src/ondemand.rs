@@ -2,10 +2,10 @@ use std::ffi::{OsStr, OsString};
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::process::{Command, ExitStatus};
-use std::sync::{LazyLock, OnceLock};
+use std::sync::LazyLock;
 
 use axe_store_client::{
-    CachePolicy, Client, ClientConfig, DownloadEvent, FailureClass, IndexResult, NetworkPolicy,
+    CachePolicy, Client, ClientConfig, DownloadEvent, FailureClass, NetworkPolicy,
     ProgressReporter, StoreError,
 };
 
@@ -26,7 +26,6 @@ static CLIENT: LazyLock<Result<Client, String>> = LazyLock::new(|| {
     };
     Client::new(config, network_policy).map_err(|error| error.to_string())
 });
-static INDEX: OnceLock<IndexResult> = OnceLock::new();
 
 fn client() -> Result<&'static Client, String> {
     CLIENT.as_ref().map_err(Clone::clone)
@@ -40,10 +39,10 @@ pub(crate) fn revalidate_index_if_stale() -> Result<(), String> {
 }
 
 pub(crate) fn store_is_blocked() -> bool {
-    INDEX
-        .get()
-        .and_then(|index| index.blocking_error.as_ref())
-        .is_some()
+    client()
+        .ok()
+        .and_then(|client| client.index(CachePolicy::CacheOnly).ok())
+        .is_some_and(|index| index.blocking_error.is_some())
 }
 
 pub fn register_controls(commands: &mut RegistryBuilder) {
@@ -115,7 +114,6 @@ pub fn register(commands: &mut RegistryBuilder, mode: BuildMode) -> Result<Store
             index_generation: result.index.generation,
         },
     };
-    let _ = INDEX.set(result);
     Ok(store)
 }
 
@@ -145,9 +143,6 @@ pub fn entry(args: Vec<OsString>) -> i32 {
         eprintln!("axe: invalid AXE Store command name");
         return 127;
     };
-    if let Some(error) = INDEX.get().and_then(|index| index.blocking_error.as_ref()) {
-        return hard_error(name, error);
-    }
 
     let client = match client() {
         Ok(client) => client,

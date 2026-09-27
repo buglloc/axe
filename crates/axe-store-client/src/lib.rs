@@ -15,8 +15,8 @@ use std::time::Instant;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axe_artifact::{
-    Artifact, KeyId, StoreIndex, StoreIndexEntry, Target, ToolManifest, TrustedKeys, decode_hex_32,
-    verify_document,
+    Artifact, KeyId, StoreConfig, StoreIndex, StoreIndexEntry, Target, ToolManifest, TrustedKeys,
+    decode_hex_32, verify_document,
 };
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
@@ -147,59 +147,12 @@ pub struct IndexResult {
     pub blocking_error: Option<StoreError>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoreConfigFile {
-    consumer: ConsumerConfigFile,
-    storage: StorageConfigFile,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ConsumerConfigFile {
-    addresses: Vec<IpAddr>,
-    max_object_bytes: u64,
-    max_metadata_bytes: u64,
-    index_ttl_secs: u64,
-    manifest_ttl_secs: u64,
-    metadata_timeout_secs: u64,
-    object_timeout_secs: u64,
-    transient_retry_secs: u64,
-    free_space_reserve_bytes: u64,
-    channel: String,
-    persistent_roots: Vec<PathBuf>,
-    tmpfs_roots: Vec<PathBuf>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StorageConfigFile {
-    endpoint: String,
-    region: String,
-    bucket: String,
-    prefix: String,
-    release_prefix: String,
-}
-
-impl StorageConfigFile {
-    fn public_base_url(&self) -> String {
-        format!(
-            "{}/{}/{}/",
-            self.endpoint.trim_end_matches('/'),
-            self.bucket.trim_matches('/'),
-            self.prefix.trim_matches('/')
-        )
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
     pub public_base_url: String,
     pub addresses: Vec<IpAddr>,
     pub max_object_bytes: u64,
     pub max_metadata_bytes: u64,
-    pub index_ttl_secs: u64,
-    pub manifest_ttl_secs: u64,
     pub metadata_timeout: Duration,
     pub object_timeout: Duration,
     pub transient_retry: Duration,
@@ -217,13 +170,12 @@ impl ClientConfig {
         trusted: &[(&str, &str)],
         embedded_index: &[u8],
     ) -> Result<Self, StoreError> {
-        let file: StoreConfigFile = serde_json::from_str(json).map_err(|error| {
+        let file = StoreConfig::from_json(json.as_bytes()).map_err(|error| {
             StoreError::configuration(
                 StoreStage::Configuration,
                 format!("invalid config/store.json: {error}"),
             )
         })?;
-        validate_config_file(&file)?;
 
         let mut trusted_keys = TrustedKeys::new();
         for (id, key) in trusted {
@@ -277,8 +229,6 @@ impl ClientConfig {
             addresses,
             max_object_bytes: consumer.max_object_bytes,
             max_metadata_bytes: consumer.max_metadata_bytes,
-            index_ttl_secs: consumer.index_ttl_secs,
-            manifest_ttl_secs: consumer.manifest_ttl_secs,
             metadata_timeout: Duration::from_secs(consumer.metadata_timeout_secs),
             object_timeout: Duration::from_secs(consumer.object_timeout_secs),
             transient_retry: Duration::from_secs(consumer.transient_retry_secs),
@@ -290,31 +240,6 @@ impl ClientConfig {
             embedded_index: embedded_index.to_vec(),
         })
     }
-}
-
-fn validate_config_file(file: &StoreConfigFile) -> Result<(), StoreError> {
-    let consumer = &file.consumer;
-    if consumer.max_object_bytes == 0
-        || consumer.max_metadata_bytes == 0
-        || consumer.index_ttl_secs == 0
-        || consumer.manifest_ttl_secs == 0
-        || consumer.metadata_timeout_secs == 0
-        || consumer.object_timeout_secs == 0
-        || consumer.transient_retry_secs == 0
-        || consumer.free_space_reserve_bytes == 0
-        || consumer.channel.is_empty()
-        || file.storage.endpoint.is_empty()
-        || file.storage.region.is_empty()
-        || file.storage.bucket.is_empty()
-        || file.storage.prefix.is_empty()
-        || file.storage.release_prefix.is_empty()
-    {
-        return Err(StoreError::configuration(
-            StoreStage::Configuration,
-            "config/store.json has an empty or zero required value",
-        ));
-    }
-    Ok(())
 }
 
 fn validate_base_url(url: &str, explicit_override: bool) -> Result<(), StoreError> {
@@ -432,7 +357,7 @@ pub struct Client {
     pub(crate) object_agent: ureq::Agent,
     network_policy: NetworkPolicy,
     embedded: StoreIndex,
-    state: Mutex<Option<IndexResult>>,
+    state: Mutex<Option<IndexState>>,
     network_backoff: Mutex<Option<NetworkBackoffState>>,
     metadata_namespace: String,
     #[cfg(test)]
@@ -449,7 +374,7 @@ impl Client {
             StoreIndex {
                 schema_version: axe_artifact::SCHEMA_VERSION,
                 generation: 1,
-                ttl_secs: config.index_ttl_secs,
+                ttl_secs: axe_artifact::INDEX_TTL_SECS,
                 tools: Default::default(),
             }
         } else {
@@ -507,8 +432,16 @@ impl Client {
             .state
             .lock()
             .map_err(|_| StoreError::transient(StoreStage::Index, "Index state lock poisoned"))?;
-        if !force && let Some(result) = state.as_ref() {
-            return Ok(result.clone());
+        if !force
+            && let Some(memo) = state.as_ref()
+            && (policy == CachePolicy::CacheOnly
+                || self.network_policy == NetworkPolicy::Offline
+                || memo
+                    .freshness
+                    .as_ref()
+                    .is_some_and(|freshness| !freshness.is_stale()))
+        {
+            return Ok(memo.result.clone());
         }
 
         let cache = self.metadata_root().map(|root| root.join("index"));
@@ -533,14 +466,13 @@ impl Client {
 
         let mut remote = None;
         let mut refresh_error = cached_error;
+        let mut freshness = cache_state;
         if should_fetch {
-            match self.fetch_index(cache_state.as_ref().and_then(|state| state.etag.as_deref())) {
+            match self.fetch_index(freshness.as_ref().and_then(|state| state.etag.as_deref())) {
                 Ok(Fetch::NotModified) => {
-                    if let (Some(directory), Some(mut metadata_state)) =
-                        (&cache, cache_state.clone())
-                    {
+                    if let (Some(directory), Some(metadata_state)) = (&cache, &mut freshness) {
                         metadata_state.checked_at = now_secs();
-                        if let Err(error) = write_state(directory, &metadata_state)
+                        if let Err(error) = write_state(directory, metadata_state)
                             && refresh_error.is_none()
                         {
                             refresh_error = Some(error);
@@ -564,19 +496,19 @@ impl Client {
                                     "remote Index generation decreased",
                                 ));
                             } else {
-                                if let Some(directory) = &cache {
-                                    let metadata_state = MetadataState {
-                                        etag,
-                                        checked_at: now_secs(),
-                                        ttl: index.ttl_secs,
-                                    };
-                                    if let Err(error) =
+                                let metadata_state = MetadataState {
+                                    etag,
+                                    checked_at: now_secs(),
+                                    ttl: index.ttl_secs,
+                                };
+                                if let Some(directory) = &cache
+                                    && let Err(error) =
                                         write_metadata(directory, &bytes, &metadata_state)
-                                        && error.class != FailureClass::Transient
-                                    {
-                                        refresh_error = Some(error);
-                                    }
+                                    && error.class != FailureClass::Transient
+                                {
+                                    refresh_error = Some(error);
                                 }
+                                freshness = Some(metadata_state);
                                 remote = Some(index);
                             }
                         }
@@ -595,7 +527,10 @@ impl Client {
             blocking_error,
         };
 
-        *state = Some(result.clone());
+        *state = Some(IndexState {
+            result: result.clone(),
+            freshness,
+        });
         Ok(result)
     }
 
@@ -680,20 +615,6 @@ impl Client {
             removed_roots.push(root);
         }
         Ok(removed_roots)
-    }
-
-    pub fn select_store_dir(&self) -> Option<PathBuf> {
-        self.select_store_dir_from(None)
-    }
-
-    pub fn select_store_dir_from(&self, explicit: Option<&Path>) -> Option<PathBuf> {
-        axe_paths::select_writable_root(
-            explicit
-                .into_iter()
-                .map(Path::to_owned)
-                .chain(self.storage_roots()),
-            0,
-        )
     }
 
     fn load_manifest(&self, entry: &StoreIndexEntry) -> Result<ToolManifest, StoreError> {
@@ -1050,6 +971,12 @@ pub(crate) enum Fetch {
         bytes: Vec<u8>,
         etag: Option<String>,
     },
+}
+
+struct IndexState {
+    result: IndexResult,
+    /// Freshness of the verified Index behind `result`, if any was verified.
+    freshness: Option<MetadataState>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1892,8 +1819,6 @@ mod tests {
                 addresses: vec!["127.0.0.1".parse().expect("parse loopback")],
                 max_object_bytes: 1024 * 1024,
                 max_metadata_bytes: 1024 * 1024,
-                index_ttl_secs: 60,
-                manifest_ttl_secs: 60,
                 metadata_timeout: Duration::from_millis(10),
                 object_timeout: Duration::from_secs(2),
                 transient_retry: Duration::from_secs(30),
@@ -1941,6 +1866,26 @@ mod tests {
             },
         )
         .expect("cache signed manifest");
+    }
+
+    fn cache_signed_index(client: &Client, index: &StoreIndex) {
+        let signed =
+            sign_document(index, &SigningKey::from_bytes(&[17; 32])).expect("sign cached Index");
+        let compressed =
+            zstd::stream::encode_all(signed.as_slice(), 3).expect("compress cached Index");
+        write_metadata(
+            &client
+                .metadata_root()
+                .expect("select metadata root")
+                .join("index"),
+            &compressed,
+            &MetadataState {
+                etag: Some("\"index\"".into()),
+                checked_at: now_secs(),
+                ttl: index.ttl_secs,
+            },
+        )
+        .expect("cache signed Index");
     }
 
     #[test]
@@ -2020,22 +1965,6 @@ mod tests {
 
         assert_eq!(error.class, FailureClass::Unavailable);
         assert_eq!(error.stage, StoreStage::Manifest);
-    }
-
-    #[test]
-    fn storage_config_builds_consumer_url() {
-        let storage = StorageConfigFile {
-            endpoint: "https://storage.yandexcloud.net/".into(),
-            region: "ru-central1".into(),
-            bucket: "test-bucket".into(),
-            prefix: "/tools/".into(),
-            release_prefix: "/axe/".into(),
-        };
-
-        assert_eq!(
-            storage.public_base_url(),
-            "https://storage.yandexcloud.net/test-bucket/tools/"
-        );
     }
 
     #[cfg(target_os = "linux")]
@@ -2218,9 +2147,15 @@ mod tests {
             .manifest_sha256 = Digest::of(&expected);
         let entry = &index.tools["swap"];
 
+        let directory =
+            std::env::temp_dir().join(format!("axe-store-manifest-swap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).expect("create cache fixture");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind manifest server");
         let url = format!("http://{}/", listener.local_addr().expect("server address"));
-        let client = client_for(&index, url);
+        let mut client = client_for(&index, url);
+        client.storage_roots_override = Some(vec![directory.clone()]);
+        cache_signed_index(&client, &index);
         client
             .index(CachePolicy::CacheOnly)
             .expect("load signed Index");
@@ -2254,10 +2189,6 @@ mod tests {
             (StoreStage::Manifest, FailureClass::Integrity)
         );
 
-        let directory =
-            std::env::temp_dir().join(format!("axe-store-manifest-swap-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
-        fs::create_dir_all(&directory).expect("create cache fixture");
         let mut offline =
             client_for_policy(&index, "http://127.0.0.1:9/".into(), NetworkPolicy::Offline);
         offline.storage_roots_override = Some(vec![directory.clone()]);
@@ -2318,6 +2249,7 @@ mod tests {
         );
         client.storage_roots_override = Some(vec![directory.clone()]);
         cache_signed_manifest(&client, entry, &expected);
+        cache_signed_index(&client, &index);
         let cache = client
             .metadata_root()
             .expect("own cache root")
@@ -2363,6 +2295,64 @@ mod tests {
     }
 
     #[test]
+    fn stale_memoized_index_is_revalidated() {
+        use std::io::{Read as _, Write as _};
+
+        let target = Target::detect().expect("supported target");
+        let signing = SigningKey::from_bytes(&[17; 32]);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind Index server");
+        let url = format!("http://{}/", listener.local_addr().expect("server address"));
+        let mut config = client_for(&index_with_target("embedded", 1, target), url).config;
+        config.metadata_timeout = Duration::from_secs(5);
+        let mut client = Client::new(config, NetworkPolicy::Online).expect("create client");
+        client.storage_roots_override = Some(Vec::new());
+        let server = std::thread::spawn(move || {
+            for generation in [2, 3] {
+                let (mut stream, _) = listener.accept().expect("accept Index request");
+                let mut request = [0; 2048];
+                let length = stream.read(&mut request).expect("read Index request");
+                assert!(
+                    String::from_utf8_lossy(&request[..length])
+                        .starts_with("GET /index.cbor.zst HTTP/1.1")
+                );
+                let signed =
+                    sign_document(&index_with_target("remote", generation, target), &signing)
+                        .expect("sign remote Index");
+                let body =
+                    zstd::stream::encode_all(signed.as_slice(), 3).expect("compress remote Index");
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .expect("write Index response headers");
+                stream.write_all(&body).expect("write remote Index");
+            }
+        });
+        let generation = |policy| client.index(policy).expect("load Index").index.generation;
+
+        assert_eq!(generation(CachePolicy::CacheOnly), 1);
+        assert_eq!(generation(CachePolicy::RevalidateIfStale), 2);
+        assert_eq!(
+            generation(CachePolicy::RevalidateIfStale),
+            2,
+            "a fresh memo must not refetch the Index"
+        );
+
+        {
+            let mut state = client.state.lock().expect("lock Index state");
+            let freshness = state
+                .as_mut()
+                .and_then(|memo| memo.freshness.as_mut())
+                .expect("remote Index freshness");
+            freshness.checked_at -= freshness.ttl;
+        }
+        assert_eq!(generation(CachePolicy::CacheOnly), 2);
+        assert_eq!(generation(CachePolicy::RevalidateIfStale), 3);
+        server.join().expect("join Index server");
+    }
+
+    #[test]
     fn fallback_root_isolates_two_editions_metadata_and_clean() {
         let directory =
             std::env::temp_dir().join(format!("axe-store-editions-{}", std::process::id()));
@@ -2404,15 +2394,6 @@ mod tests {
         first.storage_roots_override = Some(vec![blocked.clone(), shared.clone()]);
         second.storage_roots_override = Some(vec![blocked.clone(), shared.clone()]);
         fs::create_dir_all(&shared).expect("create fallback root");
-        let canonical_shared = shared.canonicalize().expect("canonical shared root");
-        assert_eq!(
-            first.select_store_dir_from(Some(&blocked)),
-            Some(canonical_shared.clone())
-        );
-        assert_eq!(
-            second.select_store_dir_from(Some(&blocked)),
-            Some(canonical_shared)
-        );
         assert_ne!(first.metadata_namespace, second.metadata_namespace);
         assert!(
             first

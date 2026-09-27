@@ -144,25 +144,16 @@ cp "$root/config/store.json" "$tmp/workspace/config/store.json"
     cd "$tmp/workspace"
     "$producer" keys generate >/dev/null
     "$producer" build --flake . --output store/dist >/dev/null
-    snapshot_before=$(sha256sum store/dist/index.cbor.zst store/dist/index.json store/dist/objects/sha256/*/* store/dist/tools/*/*/manifests/*.cbor | sort)
+    snapshot_before=$(sha256sum store/dist/index.cbor.zst store/dist/objects/sha256/*/* store/dist/tools/*/*/manifests/*.cbor | sort)
     "$producer" build --flake . --output store/dist >/dev/null
-    snapshot_after=$(sha256sum store/dist/index.cbor.zst store/dist/index.json store/dist/objects/sha256/*/* store/dist/tools/*/*/manifests/*.cbor | sort)
+    snapshot_after=$(sha256sum store/dist/index.cbor.zst store/dist/objects/sha256/*/* store/dist/tools/*/*/manifests/*.cbor | sort)
     test "$snapshot_before" = "$snapshot_after"
-    python3 - >"$tmp/manifest-relative" <<'PY'
-import hashlib
-import json
-from pathlib import Path
-
-with open("store/dist/index.json", encoding="utf-8") as source:
-    index = json.load(source)
-assert index["generation"] == 1
-assert sorted(index["tools"]) == ["pkg-smoke", "rg"]
-for entry in index["tools"].values():
-    digest = entry["manifest_sha256"]
-    path = f'tools/{entry["id"]}/manifests/{digest}.cbor'
-    assert hashlib.sha256((Path("store/dist") / path).read_bytes()).hexdigest() == digest
-print(f'tools/{index["tools"]["rg"]["id"]}/manifests/{index["tools"]["rg"]["manifest_sha256"]}.cbor')
-PY
+    for manifest in store/dist/tools/*/*/manifests/*.cbor; do
+        test "$(sha256sum "$manifest" | cut -d ' ' -f 1).cbor" = "$(basename "$manifest")"
+    done
+    rg_manifests=(store/dist/tools/search/rg/manifests/*.cbor)
+    test "${#rg_manifests[@]}" -eq 1
+    printf '%s\n' "${rg_manifests[0]#store/dist/}" >"$tmp/manifest-relative"
     package_compatible=false
     for object in store/dist/objects/sha256/*/*; do
         zstd --test --quiet "$object"
@@ -173,7 +164,7 @@ PY
     "$package_compatible"
     "$producer" publish --input store/dist --backend directory \
         --directory "$tmp/published" --config config/store.json >/dev/null
-    cmp store/dist/index.json "$tmp/published/store/index.json"
+    cmp store/dist/index.cbor.zst "$tmp/published/store/index.cbor.zst"
 )
 manifest_relative=$(cat "$tmp/manifest-relative")
 
@@ -235,6 +226,30 @@ fi
 run_axe "$cache" refresh-tools >"$tmp/refresh.out" 2>"$tmp/refresh.err"
 grep -q 'verified Index generation 1' "$tmp/refresh.out"
 grep -q 'GET /store/index.cbor.zst HTTP/1.1" 304' "$tmp/store.requests"
+run_axe "$cache" commands --json >"$tmp/commands.json"
+python3 - "$tmp/commands.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    commands = json.load(source)["commands"]
+assert {"pkg-smoke", "rg"} <= {c["name"] for c in commands if c["source"] == "store"}
+PY
+
+# Like the sshd daemon, register from the cache, then revalidate the stale Index on use.
+python3 - "$metadata_namespace/index/state.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+state = json.load(open(path, encoding="utf-8"))
+state["checked_at"] = 0
+json.dump(state, open(path, "w", encoding="utf-8"))
+PY
+index_requests_before=$(grep -c 'GET /store/index.cbor.zst' "$tmp/store.requests")
+__AXE_STORE_INDEX_CACHE_ONLY=1 run_axe "$cache" rg >"$tmp/stale.out" 2>"$tmp/stale.err"
+test "$(cat "$tmp/stale.out")" = store-ok
+index_requests_after=$(grep -c 'GET /store/index.cbor.zst' "$tmp/store.requests")
+test "$index_requests_after" -eq "$((index_requests_before + 1))"
+
 run_axe "$cache" pkg-smoke >"$tmp/package.out" 2>"$tmp/package.err"
 test "$(cat "$tmp/package.out")" = store-ok
 package_entry=$(printf '%s\n' "$cache"/unpacked/sha256/*/*/tree/bin/pkg-smoke)
