@@ -170,7 +170,7 @@ _store-run *args:
             exit 2
             ;;
     esac
-    exec ${CONTAINER_RUNTIME:-podman} run --rm --init "${run_extra[@]}" -v {{store_volume}}:/nix -v "{{store_output}}:/output" -v "{{edition_root}}/config:/workspace/config:ro" -v "{{edition_root}}/keys/store:/workspace/keys/store:ro" -v "{{edition_root}}/store/trusted:/workspace/store/trusted:ro" -v "{{store_flake}}:/flake:ro" {{store_image}} "$@"
+    exec ${CONTAINER_RUNTIME:-podman} run --rm --init --network=host "${run_extra[@]}" -v {{store_volume}}:/nix -v "{{store_output}}:/output" -v "{{edition_root}}/config:/workspace/config:ro" -v "{{edition_root}}/keys/store:/workspace/keys/store:ro" -v "{{edition_root}}/store/trusted:/workspace/store/trusted:ro" -v "{{store_flake}}:/flake:ro" {{store_image}} "$@"
 
 keyscan-nix-builders:
     #!/usr/bin/env bash
@@ -204,13 +204,13 @@ store-build-remote:
     AXE_STORE_REMOTE=1 just store-build
 
 store-publish: store-image
-    ${CONTAINER_RUNTIME:-podman} run --rm --init -v "{{edition_root}}/config:/workspace/config:ro" -v "{{store_output}}/dist:/workspace/store/dist:ro" -v "{{edition_root}}/keys/store:/workspace/keys/store:ro" -v "{{edition_root}}/store/trusted:/workspace/store/trusted:ro" {{store_image}} publish
+    ${CONTAINER_RUNTIME:-podman} run --rm --init --network=host -v "{{edition_root}}/config:/workspace/config:ro" -v "{{store_output}}/dist:/workspace/store/dist:ro" -v "{{edition_root}}/keys/store:/workspace/keys/store:ro" -v "{{edition_root}}/store/trusted:/workspace/store/trusted:ro" {{store_image}} publish
 
 [positional-arguments]
 store-diagnose-upload *args: store-image
     #!/usr/bin/env bash
     set -euo pipefail
-    exec ${CONTAINER_RUNTIME:-podman} run --rm --init -v "{{edition_root}}/config:/workspace/config:ro" -v "{{edition_root}}/keys/store:/workspace/keys/store:ro" {{store_image}} diagnose-upload "$@"
+    exec ${CONTAINER_RUNTIME:-podman} run --rm --init --network=host -v "{{edition_root}}/config:/workspace/config:ro" -v "{{edition_root}}/keys/store:/workspace/keys/store:ro" {{store_image}} diagnose-upload "$@"
 
 _sync-store-snapshot: store-bootstrap store-image _store-volume
     removal=(); if [[ ${AXE_STORE_ALLOW_TARGET_REMOVAL:-0} == 1 ]]; then removal+=(--allow-target-removal); fi; just _store-run sync --flake /flake --output /output/dist "${removal[@]}"
