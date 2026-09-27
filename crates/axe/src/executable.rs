@@ -1616,6 +1616,17 @@ mod tests {
         assert!(legacy.exists());
         assert!(unmanaged.exists());
 
+        // Other parallel tests may fork while this descriptor is open. An
+        // inherited duplicate shares its flock until exec despite O_CLOEXEC,
+        // so explicitly end the lease before checking post-release pruning.
+        // SAFETY: active_lease owns a live descriptor and flock does not access Rust memory.
+        let unlock_result = unsafe { libc::flock(active_lease.as_raw_fd(), libc::LOCK_UN) };
+        assert_eq!(
+            unlock_result,
+            0,
+            "unlock active relay: {}",
+            io::Error::last_os_error()
+        );
         drop(active_lease);
         prune_relays(&base, &current).expect("prune relays after releasing the lease");
 

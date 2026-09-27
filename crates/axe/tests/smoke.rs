@@ -1982,88 +1982,61 @@ fn inherited_runtime_root_stabilizes_child_selection() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn descriptor_denial_refreshes_original_fallback_to_relay() {
+fn bundled_command_survives_original_unlink_under_hostile_exec_policy() {
     use std::os::unix::process::CommandExt as _;
 
-    const CHILD: &str = "AXE_TEST_DESCRIPTOR_DENIAL_CHILD";
-    const AXE_EXECUTABLE: &str = "AXE_TEST_DESCRIPTOR_DENIAL_EXECUTABLE";
-    const POLICY_SCRIPT: &str = "AXE_TEST_DESCRIPTOR_DENIAL_SCRIPT";
-    const TEST_NAME: &str = "descriptor_denial_refreshes_original_fallback_to_relay";
+    const CHILD: &str = "AXE_TEST_HOSTILE_UNLINK_CHILD";
+    const AXE_EXECUTABLE: &str = "AXE_TEST_HOSTILE_UNLINK_EXECUTABLE";
+    const TEST_NAME: &str = "bundled_command_survives_original_unlink_under_hostile_exec_policy";
 
     if std::env::var_os(CHILD).is_some() {
         install_hostile_exec_policy().expect("install hostile execution policy");
         let axe =
             PathBuf::from(std::env::var_os(AXE_EXECUTABLE).expect("policy AXE path is inherited"));
-        let script = std::env::var_os(POLICY_SCRIPT).expect("policy script is inherited");
         let error = Command::new(axe)
             .env_remove(CHILD)
-            .args(["--no-config", "--norc", "--noprofile", "-c"])
-            .arg(script)
+            .args([
+                "--no-config",
+                "--norc",
+                "--noprofile",
+                "-c",
+                "rm \"$AXE_SHELL\" && sort </dev/null && printf 'sort-ok\\n'",
+            ])
             .exec();
         panic!("exec policy-constrained AXE: {error}");
     }
 
-    let scratch = Scratch::new("descriptor-denial-refresh");
+    let scratch = Scratch::new("hostile-unlink");
+    let work = scratch.path().join("work");
+    fs::create_dir(&work).expect("create policy work directory");
+    let axe = scratch.path().join("axe");
+    fs::copy(env!("CARGO_BIN_EXE_axe"), &axe).expect("copy AXE executable");
     let test_binary = std::env::current_exe().expect("locate smoke test binary");
-    let run_case = |label: &str, script: &str| {
-        let work = scratch.path().join(format!("{label}-work"));
-        fs::create_dir(&work).expect("create policy work directory");
-        let axe = scratch.path().join(format!("{label}-axe"));
-        fs::copy(env!("CARGO_BIN_EXE_axe"), &axe).expect("copy AXE executable");
-        let output = Command::new(&test_binary)
-            .args(["--exact", TEST_NAME, "--nocapture"])
-            .env(CHILD, "1")
-            .env(AXE_EXECUTABLE, &axe)
-            .env(POLICY_SCRIPT, script)
-            .env("HOME", scratch.path())
-            .env("PATH", "/nonexistent")
-            .env("AXE_WORK_DIR", &work)
-            .env("AXE_STORE_DIR", scratch.path().join("store"))
-            .env("AXE_STORE_URL", "http://127.0.0.1:9")
-            .env("AXE_STORE_ADDRESSES", "127.0.0.1")
-            .output()
-            .expect("run AXE with descriptor execution denied");
-        assert!(
-            output.status.success(),
-            "stdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        (work, axe, output)
-    };
+    let output = Command::new(test_binary)
+        .env_clear()
+        .args(["--exact", TEST_NAME, "--nocapture"])
+        .env(CHILD, "1")
+        .env(AXE_EXECUTABLE, &axe)
+        .env("HOME", scratch.path())
+        .env("PATH", "/nonexistent")
+        .env("AXE_WORK_DIR", &work)
+        .env("AXE_STORE_DIR", scratch.path().join("store"))
+        .env("AXE_STORE_URL", "http://127.0.0.1:9")
+        .env("AXE_STORE_ADDRESSES", "127.0.0.1")
+        .output()
+        .expect("run AXE under hostile execution policy");
 
-    let (original_work, original_axe, original) =
-        run_case("original", "sort </dev/null; printf 'alive\\n'");
-    assert!(original.stdout.ends_with(b"alive\n"));
-    assert!(original_axe.exists());
     assert!(
-        !original_work.join(".axe-self").exists(),
-        "supported original path must not eagerly materialize a relay"
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
-
-    let (relay_work, relay_axe, relay) = run_case(
-        "relay",
-        "rm \"$AXE_SHELL\"; sort </dev/null; printf 'alive\\n'",
-    );
-    assert!(relay.stdout.ends_with(b"alive\n"));
-    assert!(!relay_axe.exists());
+    assert!(output.stdout.ends_with(b"sort-ok\n"));
     assert!(
-        relay_work.join(".axe-self").exists(),
-        "provider must materialize a relay after the original path disappears"
+        !axe.exists(),
+        "fixture did not unlink the original AXE path"
     );
-
-    let relays = fs::read_dir(relay_work.join(".axe-self"))
-        .expect("read relay directory")
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry.file_name().to_str().is_some_and(|name| {
-                name.strip_prefix("nolock-").is_some_and(|build_id| {
-                    build_id.len() == 40 && build_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-                })
-            })
-        })
-        .count();
-    assert_eq!(relays, 1, "one build-ID-addressed relay must be retained");
 }
 
 #[cfg(target_os = "linux")]
