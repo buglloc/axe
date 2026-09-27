@@ -3,11 +3,9 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 source_root := justfile_directory()
 edition_root := env_var_or_default("AXE_EDITION_ROOT", source_root)
 cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", source_root + "/target")
-bin := "axe"
 out := env_var_or_default("AXE_RELEASE_DIR", source_root + "/dist")
 store_output := env_var_or_default("AXE_STORE_OUTPUT_DIR", edition_root + "/store")
 store_flake := env_var_or_default("AXE_STORE_FLAKE", source_root)
-web_inventory := env_var_or_default("AXE_WEB_INVENTORY", edition_root + "/web/data/registry.json")
 store_image := "axe-store"
 store_volume := env_var_or_default("AXE_STORE_VOLUME", "axe-store-nix")
 apple_sdk_url := env_var_or_default("AXE_APPLE_SDK_URL", "https://storage.yandexcloud.net/axe-store/toolchain/MacOSX26.2.sdk.tar.gz")
@@ -28,12 +26,12 @@ build-darwin: build-darwin-arm64
 
 build-all: build-linux build-darwin
 
-_web-inventory axe:
-    inventory="{{web_inventory}}"; mkdir -p "$(dirname "$inventory")"; tmp=$(mktemp "$inventory.XXXXXX"); store=$(mktemp -d); trap 'rm -f "$tmp"; rm -rf "$store"' EXIT; AXE_STORE_DIR="$store" AXE_STORE_URL=http://127.0.0.1:9 AXE_STORE_ADDRESSES=127.0.0.1 {{axe}} commands | jq -e '{commands: [.commands[] | select(.alias_of == null) | {name, source, category, synopsis}]} | if all(.commands[]; (.synopsis | type) == "string" and (.synopsis | length) > 0) then . else error("commands returned an entry without synopsis") end' > "$tmp"; mv "$tmp" "$inventory"
+_web-inventory axe inventory:
+    mkdir -p "$(dirname "{{inventory}}")"; tmp=$(mktemp "{{inventory}}.XXXXXX"); store=$(mktemp -d); trap 'rm -f "$tmp"; rm -rf "$store"' EXIT; AXE_STORE_DIR="$store" AXE_STORE_URL=http://127.0.0.1:9 AXE_STORE_ADDRESSES=127.0.0.1 {{axe}} commands | jq -e '{commands: [.commands[] | select(.alias_of == null) | {name, source, category, synopsis}]} | if (.commands | length) > 0 and all(.commands[]; (.synopsis | type) == "string" and (.synopsis | length) > 0) then . else error("commands returned no entries or an entry without synopsis") end' > "$tmp"; mv "$tmp" "{{inventory}}"
 
 web-inventory: _prepare-axe-dev-keys
     AXE_EDITION_ROOT="{{edition_root}}" cargo build --locked -p axe
-    just _web-inventory {{cargo_target_dir}}/debug/axe
+    just _web-inventory {{cargo_target_dir}}/debug/axe {{edition_root}}/web/data/registry.json
 
 web-build: web-inventory
     hugo --source web --minify --cleanDestinationDir
@@ -74,48 +72,61 @@ apple-sdk:
     if ! printf '%s  %s\n' {{apple_sdk_sha256}} {{apple_sdk_archive}} | sha256sum -c - >/dev/null 2>&1; then tmp={{apple_sdk_archive}}.part; rm -f "$tmp"; curl -fL --retry 3 -o "$tmp" {{apple_sdk_url}}; printf '%s  %s\n' {{apple_sdk_sha256}} "$tmp" | sha256sum -c -; mv "$tmp" {{apple_sdk_archive}}; fi
     if ! test -f {{apple_sdk_root}}/SDKSettings.json; then tmp={{apple_sdk_root}}.unpack; rm -rf "$tmp"; mkdir -p "$tmp"; tar --warning=no-unknown-keyword --no-same-owner --no-same-permissions -xzf {{apple_sdk_archive}} -C "$tmp"; test -f "$tmp/MacOSX26.2.sdk/SDKSettings.json"; rm -rf {{apple_sdk_root}}; mv "$tmp/MacOSX26.2.sdk" {{apple_sdk_root}}; rmdir "$tmp"; fi
 
-_build-darwin target: apple-sdk
-    rustup target add {{target}}
-    SDKROOT="{{apple_sdk_root}}" AXE_EDITION_ROOT="{{edition_root}}" cargo zigbuild --locked -p axe --release --target {{target}}
+_build-rust package target:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    artifact="{{cargo_target_dir}}/{{target}}/release/{{package}}"
+    rm -f "$artifact"
+    case "{{target}}" in
+        *-unknown-linux-musl)
+            linker="CARGO_TARGET_$(tr 'a-z-' 'A-Z_' <<<"{{target}}")_LINKER"
+            env AXE_EDITION_ROOT="{{edition_root}}" "$linker={{source_root}}/tools/rust-lld" cargo build --locked -p {{package}} --release --target {{target}}
+            if ! readelf -hW "$artifact" | grep -Eq '^[[:space:]]*Type:[[:space:]]*EXEC'; then echo "$artifact is not a static executable (ELF type must be EXEC)" >&2; exit 1; fi
+            if ! file "$artifact" | grep -F 'statically linked' >/dev/null; then echo "$artifact is not statically linked" >&2; exit 1; fi
+            if readelf -lW "$artifact" | grep -Eq '^[[:space:]]*INTERP[[:space:]]'; then echo "$artifact contains an INTERP program header" >&2; exit 1; fi
+            if readelf -dW "$artifact" | grep -q '(NEEDED)'; then echo "$artifact contains DT_NEEDED entries" >&2; exit 1; fi
+            ;;
+        *-apple-darwin)
+            just apple-sdk
+            rustup target add {{target}}
+            SDKROOT="{{apple_sdk_root}}" AXE_EDITION_ROOT="{{edition_root}}" cargo zigbuild --locked -p {{package}} --release --target {{target}}
+            ;;
+        *)
+            echo "unsupported target: {{target}}" >&2
+            exit 2
+            ;;
+    esac
 
-build-darwin-arm64: _prepare-axe-dev-keys
-    just _build-darwin aarch64-apple-darwin
-    just _stage-artifact {{cargo_target_dir}}/aarch64-apple-darwin/release/{{bin}} {{out}}/{{bin}}-aarch64-apple-darwin
+    if [[ "{{package}} {{target}}" == "axe x86_64-unknown-linux-musl" ]]; then
+        smoke_dir=$(mktemp -d)
+        trap 'rm -rf "$smoke_dir"' EXIT
+        env -i HOME=/tmp PATH=/nonexistent AXE_STORE_DIR="$smoke_dir" AXE_STORE_URL=http://127.0.0.1:9 AXE_STORE_ADDRESSES=127.0.0.1 "$artifact" --list >/dev/null
+        env -i HOME=/tmp PATH=/nonexistent AXE_STORE_DIR="$smoke_dir" AXE_STORE_URL=http://127.0.0.1:9 AXE_STORE_ADDRESSES=127.0.0.1 "$artifact" --no-config --norc --noprofile -c 'commands >/dev/null && ps >/dev/null'
+    fi
 
-_verify-linux artifact:
-    if ! readelf -hW "{{artifact}}" | grep -Eq '^[[:space:]]*Type:[[:space:]]*EXEC'; then echo "{{artifact}} is not a static executable (ELF type must be EXEC)" >&2; exit 1; fi; if ! file "{{artifact}}" | grep -F 'statically linked' >/dev/null; then echo "{{artifact}} is not statically linked" >&2; exit 1; fi; if readelf -lW "{{artifact}}" | grep -Eq '^[[:space:]]*INTERP[[:space:]]'; then echo "{{artifact}} contains an INTERP program header" >&2; exit 1; fi; if readelf -dW "{{artifact}}" | grep -q '(NEEDED)'; then echo "{{artifact}} contains DT_NEEDED entries" >&2; exit 1; fi
-
-_stage-artifact source destination:
-    mkdir -p {{out}}
-    staged={{destination}}.tmp; rm -f "$staged"; cp {{source}} "$staged"; mv -f "$staged" {{destination}}
+    mkdir -p "{{out}}"
+    staged="{{out}}/{{package}}-{{target}}"
+    rm -f "$staged.tmp"
+    cp "$artifact" "$staged.tmp"
+    mv -f "$staged.tmp" "$staged"
 
 build-linux-arm64: _prepare-axe-dev-keys
-    rm -f {{cargo_target_dir}}/aarch64-unknown-linux-musl/release/{{bin}}
-    AXE_EDITION_ROOT="{{edition_root}}" CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$PWD/tools/rust-lld" cargo build --locked -p axe --release --target aarch64-unknown-linux-musl
-    just _verify-linux {{cargo_target_dir}}/aarch64-unknown-linux-musl/release/{{bin}}
-    just _stage-artifact {{cargo_target_dir}}/aarch64-unknown-linux-musl/release/{{bin}} {{out}}/{{bin}}-aarch64-unknown-linux-musl
+    just _build-rust axe aarch64-unknown-linux-musl
 
 build-linux-amd64: _prepare-axe-dev-keys
-    rm -f {{cargo_target_dir}}/x86_64-unknown-linux-musl/release/{{bin}}
-    AXE_EDITION_ROOT="{{edition_root}}" CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$PWD/tools/rust-lld" cargo build --locked -p axe --release --target x86_64-unknown-linux-musl
-    just _verify-linux {{cargo_target_dir}}/x86_64-unknown-linux-musl/release/{{bin}}
-    smoke_dir=$(mktemp -d); trap 'rm -rf "$smoke_dir"' EXIT; env -i HOME=/tmp PATH=/nonexistent AXE_STORE_DIR="$smoke_dir" AXE_STORE_URL=http://127.0.0.1:9 AXE_STORE_ADDRESSES=127.0.0.1 {{cargo_target_dir}}/x86_64-unknown-linux-musl/release/{{bin}} --list >/dev/null; env -i HOME=/tmp PATH=/nonexistent AXE_STORE_DIR="$smoke_dir" AXE_STORE_URL=http://127.0.0.1:9 AXE_STORE_ADDRESSES=127.0.0.1 {{cargo_target_dir}}/x86_64-unknown-linux-musl/release/{{bin}} --no-config --norc --noprofile -c 'commands >/dev/null && ps >/dev/null'
-    just _stage-artifact {{cargo_target_dir}}/x86_64-unknown-linux-musl/release/{{bin}} {{out}}/{{bin}}-x86_64-unknown-linux-musl
+    just _build-rust axe x86_64-unknown-linux-musl
+
+build-darwin-arm64: _prepare-axe-dev-keys
+    just _build-rust axe aarch64-apple-darwin
 
 build-relay-linux-amd64:
-    CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$PWD/tools/rust-lld" cargo build --locked -p axe-relay --release --target x86_64-unknown-linux-musl
-    just _verify-linux {{cargo_target_dir}}/x86_64-unknown-linux-musl/release/axe-relay
-    just _stage-artifact {{cargo_target_dir}}/x86_64-unknown-linux-musl/release/axe-relay {{out}}/axe-relay-x86_64-unknown-linux-musl
+    just _build-rust axe-relay x86_64-unknown-linux-musl
 
 build-relay-linux-arm64:
-    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$PWD/tools/rust-lld" cargo build --locked -p axe-relay --release --target aarch64-unknown-linux-musl
-    just _verify-linux {{cargo_target_dir}}/aarch64-unknown-linux-musl/release/axe-relay
-    just _stage-artifact {{cargo_target_dir}}/aarch64-unknown-linux-musl/release/axe-relay {{out}}/axe-relay-aarch64-unknown-linux-musl
+    just _build-rust axe-relay aarch64-unknown-linux-musl
 
-build-relay-darwin-arm64: apple-sdk
-    rustup target add aarch64-apple-darwin
-    SDKROOT="{{apple_sdk_root}}" cargo zigbuild --locked -p axe-relay --release --target aarch64-apple-darwin
-    just _stage-artifact {{cargo_target_dir}}/aarch64-apple-darwin/release/axe-relay {{out}}/axe-relay-aarch64-apple-darwin
+build-relay-darwin-arm64:
+    just _build-rust axe-relay aarch64-apple-darwin
 
 build-relay-all: build-relay-linux-amd64 build-relay-linux-arm64 build-relay-darwin-arm64
 

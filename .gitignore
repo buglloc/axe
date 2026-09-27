@@ -9,6 +9,8 @@ target/
 /tools/__pycache__/
 *.tar
 /web/public/
+/web/.hugo_build.lock
+/web/data/registry.json
 /.axe-*
 /.axe/
 *.tar.gz

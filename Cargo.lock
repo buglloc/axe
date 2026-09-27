@@ -1097,6 +1097,7 @@ dependencies = [
 [[package]]
 name = "brush-coreutils-builtins"
 version = "0.1.0"
+source = "git+https://github.com/reubeno/brush?rev=08db87a62345f11a4fc43bf385e318677f641089#08db87a62345f11a4fc43bf385e318677f641089"
 dependencies = [
  "uu_arch",
  "uu_b2sum",
@@ -1186,6 +1187,7 @@ dependencies = [
 [[package]]
 name = "brush-interactive"
 version = "0.4.0"
+source = "git+https://github.com/reubeno/brush?rev=08db87a62345f11a4fc43bf385e318677f641089#08db87a62345f11a4fc43bf385e318677f641089"
 dependencies = [
  "bon",
  "brush-core",
@@ -1203,6 +1205,7 @@ dependencies = [
 [[package]]
 name = "brush-parser"
 version = "0.4.0"
+source = "git+https://github.com/reubeno/brush?rev=08db87a62345f11a4fc43bf385e318677f641089#08db87a62345f11a4fc43bf385e318677f641089"
 dependencies = [
  "bon",
  "cached",

@@ -39,16 +39,16 @@ just release-check /path/outside/checkout/axe-release-check
 just release-publish
 ```
 
-`release-check` runs formatting, project checks, Clippy, smoke tests, and builds AXE and `axe-relay` for all three supported targets. It checks the runnable x86_64 binary's version, commit, and `oss` edition, then exercises both publisher phases against a local directory. Use a directory outside the checkout, or an ignored path under `dist/`, so the generated objects do not dirty the worktree. The command neither creates a tag nor uploads anything. Keep `dist/releases/vX.Y.Z/`: it contains the tested assets, `SHA256SUMS`, reviewed notes, and snapshot digest needed for publication and retries.
+`release-check` runs formatting, project checks, Clippy, smoke tests, and builds AXE and `axe-relay` for all three supported targets. It checks the runnable x86_64 binary's version, commit, and `oss` edition, generates the website command inventory `registry.json` from that staged binary, then exercises both publisher phases against a local directory. Use a directory outside the checkout, or an ignored path under `dist/`, so the generated objects do not dirty the worktree. The command neither creates a tag nor uploads anything. Keep `dist/releases/vX.Y.Z/`: it contains the tested assets, `registry.json`, `SHA256SUMS`, reviewed notes, and snapshot digest needed for publication and retries.
 
 `release-publish` requires that commit on `origin/main` and refuses staged bytes from another commit or snapshot. It then:
 
 1. Creates and pushes the annotated `vX.Y.Z` tag and opens a draft GitHub Release with the reviewed notes.
 2. Uploads immutable S3 objects with `axe-store release --immutable-only`, downloads them without credentials, and checks their SHA-256 against the staged AXE binaries.
-3. Uploads three `axe` binaries, three `axe-relay` binaries, and `SHA256SUMS` to GitHub. It downloads and verifies every asset before publishing the draft.
+3. Uploads three `axe` binaries, three `axe-relay` binaries, `registry.json`, and `SHA256SUMS` to GitHub. It downloads and verifies every asset before publishing the draft.
 4. Runs `axe-store release --stable-only`. This checks the staged metadata and every remote immutable AXE object before updating stable paths. The publisher then downloads the stable objects without credentials, verifies their SHA-256, writes `nix/axe-releases.json`, adds the reviewed notes to `web/content/changelog.md`, and fills in the README download table.
 
-Check the published URLs, hashes, metadata, README table, and `/changelog/`. Regenerate `web/data/registry.json` from the built binary with `just _web-inventory dist/axe-x86_64-unknown-linux-musl`. Review those post-publication changes, commit them, and push `main`; the website workflow deploys the site with separate credentials. It does not build or publish release binaries.
+Check the published URLs, hashes, metadata, README table, and `/changelog/`. Review those post-publication changes, commit them, and push `main`; the website workflow downloads `registry.json` from the latest GitHub Release and deploys the site with separate credentials. It does not build or publish release binaries.
 
 GitHub, S3, Git, and the website cannot be published atomically. If a step fails, retry from the same commit with the same `dist/releases/vX.Y.Z/` bytes. Do not move the tag, rebuild it with different inputs, replace immutable objects, or silently change the approved notes. The publisher checks existing assets on retry. A failure while updating stable paths can leave targets on different versions; retry with the same staged release. The GitHub Release may be public before all stable paths or the README have been updated.
 

@@ -371,6 +371,9 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
             shutil.copy2(source, pending / name)
             assets[name] = sha256(pending / name)
 
+        run("just", "_web-inventory", str(pending / TARGETS["x86_64-linux"]), str(pending / "registry.json"))
+        assets["registry.json"] = sha256(pending / "registry.json")
+
         atomic_write(pending / "notes.md", notes)
         atomic_write(pending / "SHA256SUMS", "".join(f"{digest}  {name}\n" for name, digest in sorted(assets.items())))
         assets["SHA256SUMS"] = sha256(pending / "SHA256SUMS")

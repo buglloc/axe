@@ -12,7 +12,9 @@ members = [
 ]
 
 [workspace.metadata.brush-fork]
-# Update all six vendored crates together from this immutable upstream revision.
+# Update all six crates together from this immutable upstream revision: the three
+# patched crates are vendored under `paths`, the three unmodified crates are pinned
+# to the same revision through [patch.crates-io].
 repository = "https://github.com/reubeno/brush"
 revision = "08db87a62345f11a4fc43bf385e318677f641089"
 brush-shell-version = "0.4.0"
@@ -21,14 +23,7 @@ brush-builtins-version = "0.2.0"
 brush-parser-version = "0.4.0"
 brush-interactive-version = "0.4.0"
 brush-coreutils-builtins-version = "0.1.0"
-paths = [
-    "vendor/brush-shell",
-    "vendor/brush-core",
-    "vendor/brush-builtins",
-    "vendor/brush-parser",
-    "vendor/brush-interactive",
-    "vendor/brush-coreutils-builtins",
-]
+paths = ["vendor/brush-shell", "vendor/brush-core", "vendor/brush-builtins"]
 
 [workspace.package]
 version = "0.1.0"
@@ -90,9 +85,13 @@ zstd = "0.13"
 brush-shell = { path = "vendor/brush-shell" }
 brush-core = { path = "vendor/brush-core" }
 brush-builtins = { path = "vendor/brush-builtins" }
-brush-parser = { path = "vendor/brush-parser" }
-brush-interactive = { path = "vendor/brush-interactive" }
-brush-coreutils-builtins = { path = "vendor/brush-coreutils-builtins" }
+brush-parser = { git = "https://github.com/reubeno/brush", rev = "08db87a62345f11a4fc43bf385e318677f641089" }
+brush-interactive = { git = "https://github.com/reubeno/brush", rev = "08db87a62345f11a4fc43bf385e318677f641089" }
+brush-coreutils-builtins = { git = "https://github.com/reubeno/brush", rev = "08db87a62345f11a4fc43bf385e318677f641089" }
+
+# brush-interactive depends on its upstream brush-core sibling by path; keep one patched copy.
+[patch."https://github.com/reubeno/brush"]
+brush-core = { path = "vendor/brush-core" }
 
 [profile.release]
 opt-level = "s"

@@ -75,7 +75,7 @@ The version must say `edition my-axe`; the last command reads the signed built-i
 
 The copied Store URL, pinned IP addresses, trusted keys, bootstrap inventory, and signed snapshot must describe the **same** Store. Public trust keys authenticate Store metadata; the publisher's private signing key and S3 credentials are not needed to build or run this edition. For another Store, get those public inputs from its owner instead of copying the OSS files. If you omit the signed snapshot, AXE can fetch and verify the published Index at runtime with network access, but it has no built-in Store inventory when offline; the release publisher currently requires a snapshot. Neither the build nor the runtime downloads a replacement snapshot file.
 
-For other targets use `just build-linux-arm64` or `just build-darwin-arm64`. You do not need `AXE_STORE_FLAKE`, `AXE_STORE_OUTPUT_DIR`, or `AXE_WEB_INVENTORY` unless you are publishing your own Store or release metadata.
+For other targets use `just build-linux-arm64` or `just build-darwin-arm64`. You do not need `AXE_STORE_FLAKE` or `AXE_STORE_OUTPUT_DIR` unless you are publishing your own Store.
 
 ## Development shell and local keys
 
@@ -439,14 +439,14 @@ For AXE binary and GitHub release publication, see [docs/release.md](docs/releas
 
 ## Website publication
 
-The OSS website uses `web/` and the checked-in `web/data/registry.json`. Before committing a website change, run `just web-inventory` in the development shell to refresh the command inventory, then review the generated diff. The CI website build does not generate development keys, build AXE, or publish Store releases.
+The OSS website uses `web/`. Its command inventory, `web/data/registry.json`, is not tracked: the release publisher generates it from the staged x86_64 AXE binary and attaches it to the GitHub Release. The CI website build downloads `registry.json` from the latest GitHub Release; it does not generate development keys, build AXE, or publish Store releases.
 
-`.github/workflows/deploy-web.yml` runs only on a push to `main`. It builds with Hugo 0.166.0 and synchronizes `web/public/` to `s3://axe.buglloc.com/` with `--delete`. Set GitHub Actions secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for an identity with object write/delete access only to that website bucket. Optional secrets are `AWS_REGION` (default `ru-central1`) and `S3_ENDPOINT_URL` (default `https://storage.yandexcloud.net`). Do not use the AXE Store publisher identity for the website.
+`.github/workflows/deploy-web.yml` runs only on a push to `main`. It downloads the command inventory, builds with Hugo 0.166.0, and synchronizes `web/public/` to `s3://axe.buglloc.com/` with `--delete`. Set GitHub Actions secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for an identity with object write/delete access only to that website bucket. Optional secrets are `AWS_REGION` (default `ru-central1`) and `S3_ENDPOINT_URL` (default `https://storage.yandexcloud.net`). Do not use the AXE Store publisher identity for the website.
 
-Check the build locally, without uploading:
+Check the build locally, without uploading. `just web-build` (or `just web-serve`) builds a development AXE and generates `web/data/registry.json` from it first:
 
 ```bash
-nix develop .#default --command hugo --source web --gc --minify --cleanDestinationDir
+nix develop .#default --command just web-build
 ```
 
 ## Remote builders
