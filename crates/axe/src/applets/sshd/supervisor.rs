@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 use signal_hook::iterator::Signals;
 
+const APPLET: &str = "sshd";
 const SUPERVISOR_FLAG: &str = "--axe-supervisor";
 const WORKER_FLAG: &str = "--axe-worker";
 const READY_FD_ENV: &str = "AXE_INTERNAL_READY_FD";
@@ -17,23 +18,23 @@ const READY_BYTE: u8 = 1;
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(crate) struct ReadyNotifier(File);
+pub(super) struct ReadyNotifier(File);
 
 impl ReadyNotifier {
-    pub(crate) fn notify(mut self) -> io::Result<()> {
+    pub(super) fn notify(mut self) -> io::Result<()> {
         self.0.write_all(&[READY_BYTE])?;
         self.0.flush()
     }
 }
 
-pub(crate) struct ShutdownSignals {
+pub(super) struct ShutdownSignals {
     interrupt: tokio::signal::unix::Signal,
     terminate: tokio::signal::unix::Signal,
     quit: tokio::signal::unix::Signal,
 }
 
 impl ShutdownSignals {
-    pub(crate) fn new() -> io::Result<Self> {
+    pub(super) fn new() -> io::Result<Self> {
         Ok(Self {
             interrupt: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?,
             terminate: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
@@ -41,7 +42,7 @@ impl ShutdownSignals {
         })
     }
 
-    pub(crate) async fn recv(&mut self) -> io::Result<()> {
+    pub(super) async fn recv(&mut self) -> io::Result<()> {
         tokio::select! {
             signal = self.interrupt.recv() => signal
                 .map(|_| ())
@@ -56,11 +57,7 @@ impl ShutdownSignals {
     }
 }
 
-pub fn is_supervisor(args: &[OsString]) -> bool {
-    args.iter().any(|arg| arg == OsStr::new(SUPERVISOR_FLAG))
-}
-
-pub fn strip_internal(args: &[OsString]) -> Vec<OsString> {
+fn strip_internal(args: &[OsString]) -> Vec<OsString> {
     args.iter()
         .filter(|arg| {
             *arg != OsStr::new("--daemon")
@@ -71,7 +68,7 @@ pub fn strip_internal(args: &[OsString]) -> Vec<OsString> {
         .collect()
 }
 
-pub(crate) fn take_ready_notifier() -> io::Result<Option<ReadyNotifier>> {
+pub(super) fn take_ready_notifier() -> io::Result<Option<ReadyNotifier>> {
     let value = std::env::var_os(READY_FD_ENV);
     // SAFETY: workers consume the inherited readiness descriptor before they
     // create a runtime or any other thread.
@@ -105,7 +102,9 @@ pub(crate) fn take_ready_notifier() -> io::Result<Option<ReadyNotifier>> {
     })))
 }
 
-pub fn daemonize(applet: &str, args: &[OsString], log_path: Option<&OsStr>) -> io::Result<u32> {
+/// Starts a detached supervisor and returns its PID once the first worker is
+/// serving.
+pub(super) fn daemonize(args: &[OsString], log_path: Option<&OsStr>) -> io::Result<u32> {
     let (mut readiness, notifier) = UnixStream::pair()?;
     readiness.set_read_timeout(Some(READY_TIMEOUT))?;
 
@@ -122,7 +121,7 @@ pub fn daemonize(applet: &str, args: &[OsString], log_path: Option<&OsStr>) -> i
 
     command
         .arg(brush_shell::bundled::DISPATCH_FLAG)
-        .arg(applet)
+        .arg(APPLET)
         .args(strip_internal(args))
         .arg(SUPERVISOR_FLAG)
         .env(READY_FD_ENV, ready_fd.to_string())
@@ -153,13 +152,14 @@ pub fn daemonize(applet: &str, args: &[OsString], log_path: Option<&OsStr>) -> i
     }
 }
 
-pub fn supervise_applet(applet: &str, args: &[OsString]) -> i32 {
+/// Runs sshd workers until a shutdown signal, restarting them with backoff.
+pub(super) fn supervise(args: &[OsString]) -> i32 {
     let executable = crate::executable::current();
     let worker_args = strip_internal(args);
     let mut signals = match Signals::new([SIGTERM, SIGINT, SIGQUIT, SIGHUP]) {
         Ok(signals) => signals,
         Err(error) => {
-            eprintln!("{applet}: install supervisor signal handlers: {error}");
+            eprintln!("sshd: install supervisor signal handlers: {error}");
             return 1;
         }
     };
@@ -170,14 +170,14 @@ pub fn supervise_applet(applet: &str, args: &[OsString]) -> i32 {
         let mut command = match executable.command() {
             Ok(command) => command,
             Err(error) => {
-                eprintln!("{applet}: cannot preserve executable: {error}");
+                eprintln!("sshd: cannot preserve executable: {error}");
                 close_readiness(&mut readiness);
                 return 1;
             }
         };
         command
             .arg(brush_shell::bundled::DISPATCH_FLAG)
-            .arg(applet)
+            .arg(APPLET)
             .args(&worker_args)
             .arg(WORKER_FLAG);
         install_parent_death_signal(&mut command);
@@ -186,12 +186,12 @@ pub fn supervise_applet(applet: &str, args: &[OsString]) -> i32 {
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) if readiness.is_some() => {
-                eprintln!("{applet}: initial worker launch failed ({error})");
+                eprintln!("sshd: initial worker launch failed ({error})");
                 close_readiness(&mut readiness);
                 return 1;
             }
             Err(error) => {
-                eprintln!("{applet}: worker launch failed ({error}); retrying");
+                eprintln!("sshd: worker launch failed ({error}); retrying");
                 failures = failures.saturating_add(1).min(6);
                 thread::sleep(retry_delay(failures));
                 continue;
@@ -209,7 +209,7 @@ pub fn supervise_applet(applet: &str, args: &[OsString]) -> i32 {
             let signal = signals.pending().next();
             if let Some(signal) = signal {
                 if let Err(error) = signal_process(child.id(), signal) {
-                    eprintln!("{applet}: forward signal {signal} to worker: {error}");
+                    eprintln!("sshd: forward signal {signal} to worker: {error}");
                 }
                 if matches!(signal, SIGTERM | SIGINT | SIGQUIT) {
                     wait_for_shutdown(&mut child);
@@ -226,8 +226,8 @@ pub fn supervise_applet(applet: &str, args: &[OsString]) -> i32 {
         }
 
         match status {
-            Ok(status) => eprintln!("{applet}: worker exited ({status}); restarting"),
-            Err(error) => eprintln!("{applet}: wait for worker failed ({error}); restarting"),
+            Ok(status) => eprintln!("sshd: worker exited ({status}); restarting"),
+            Err(error) => eprintln!("sshd: wait for worker failed ({error}); restarting"),
         }
         thread::sleep(retry_delay(failures));
     }

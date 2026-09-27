@@ -6,26 +6,38 @@ rust-version.workspace = true
 license.workspace = true
 description = "Standalone AXE SSH relay with monitoring dashboard and API"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "axe-relay"
 path = "src/main.rs"
+required-features = ["server"]
+
+[[test]]
+name = "monitor"
+required-features = ["server"]
+
+[features]
+default = ["server"]
+server = ["dep:axum", "dep:hickory-resolver", "dep:serde_json", "dep:ureq", "dep:url", "dep:uuid"]
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", optional = true }
 ciborium.workspace = true
 clap.workspace = true
-hickory-resolver.workspace = true
+hickory-resolver = { workspace = true, optional = true }
 quinn.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, optional = true }
 socket2 = "0.6"
 tokio = { version = "1.52", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7.19", features = ["compat"] }
-ureq.workspace = true
-url.workspace = true
-uuid = { version = "1.26", features = ["serde", "v4"] }
+ureq = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+uuid = { version = "1.26", features = ["serde", "v4"], optional = true }
 yamux = "0.14.0"
 
 [target.'cfg(unix)'.dev-dependencies]

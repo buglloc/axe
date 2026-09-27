@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use axe_relay::Transport;
+use clap::{Parser, Subcommand};
 use monitor::{Client, EventBatch, EventKind, Monitor, Status};
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
@@ -85,21 +86,6 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum Transport {
-    Tcp,
-    Quic,
-}
-
-impl Transport {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Tcp => "tcp",
-            Self::Quic => "quic",
-        }
-    }
 }
 
 struct ApiClient {

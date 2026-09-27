@@ -24,7 +24,6 @@ pub(crate) mod linux_storage;
 mod ping;
 #[cfg(target_os = "linux")]
 mod procutils;
-pub(crate) mod relay;
 pub(crate) mod sftp;
 mod sshd;
 mod strings;

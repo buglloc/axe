@@ -33,6 +33,7 @@ license = "MIT"
 [workspace.dependencies]
 axe-artifact = { path = "crates/axe-artifact" }
 axe-paths = { path = "crates/axe-paths" }
+axe-relay = { path = "crates/axe-relay", default-features = false }
 axe-store-client = { path = "crates/axe-store-client" }
 vzik = { path = "crates/vzik" }
 base64 = "0.22"

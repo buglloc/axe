@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
 #[cfg(unix)]
@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use axe_relay::Transport;
+use axe_relay::client::{Credentials, QuicIdentity};
 use clap::Parser;
 use russh::keys::{
     Certificate, PrivateKey,
@@ -18,6 +20,9 @@ use russh::{Channel, ChannelId, ChannelOpenFailure, server};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex, oneshot};
 use tokio::sync::{Notify, watch};
+use tokio::task::JoinSet;
+
+mod supervisor;
 
 const NO_SHELL_EXECUTABLE: &str = "sshd: cannot locate AXE executable for shell sessions";
 const SHELL_WELCOME: &[u8] = b"AXE shell | agent context: skill://axe | runtime: doctor --json | host evidence: vzik capabilities\r\n---\r\n\r\n";
@@ -46,7 +51,7 @@ struct Options {
     #[arg(long)]
     log_file: Option<OsString>,
     #[arg(long, value_enum, default_value_t)]
-    relay_transport: super::relay::RelayTransport,
+    relay_transport: Transport,
     #[arg(
         long,
         conflicts_with = "no_relay",
@@ -88,7 +93,7 @@ pub fn sshd(args: Vec<OsString>) -> i32 {
         }
     };
     if let Some(principals) = &options.principals
-        && let Err(error) = validate_principals(principals)
+        && let Err(error) = validate_principals(principals, "principals override")
     {
         eprintln!("sshd: {error}");
         return 2;
@@ -100,7 +105,7 @@ pub fn sshd(args: Vec<OsString>) -> i32 {
     }
 
     if options.daemon && !options.axe_supervisor && !options.axe_worker {
-        match crate::supervisor::daemonize("sshd", &args[1..], options.log_file.as_deref()) {
+        match supervisor::daemonize(&args[1..], options.log_file.as_deref()) {
             Ok(pid) => {
                 println!("sshd: started supervisor pid {pid}");
                 return 0;
@@ -112,13 +117,13 @@ pub fn sshd(args: Vec<OsString>) -> i32 {
         }
     }
 
-    if options.axe_supervisor || crate::supervisor::is_supervisor(&args) {
-        return crate::supervisor::supervise_applet("sshd", &args[1..]);
+    if options.axe_supervisor {
+        return supervisor::supervise(&args[1..]);
     }
     if options.relay.is_some() && options.relay_id.is_empty() {
         options.relay_id = default_relay_id();
     }
-    let ready = match crate::supervisor::take_ready_notifier() {
+    let ready = match supervisor::take_ready_notifier() {
         Ok(ready) => ready,
         Err(error) => {
             eprintln!("sshd: readiness channel: {error}");
@@ -131,7 +136,7 @@ pub fn sshd(args: Vec<OsString>) -> i32 {
 fn start_server(
     options: Options,
     executable: Arc<crate::executable::Executable>,
-    ready: Option<crate::supervisor::ReadyNotifier>,
+    ready: Option<supervisor::ReadyNotifier>,
 ) -> i32 {
     if let Err(error) = require_shell_executable(&executable) {
         eprintln!("{error}");
@@ -244,23 +249,20 @@ fn require_shell_executable(
         .ok_or(NO_SHELL_EXECUTABLE)
 }
 
-fn validate_principals(principals: &[String]) -> Result<(), String> {
+fn validate_principals(principals: &[String], source: &str) -> Result<(), String> {
     if principals.is_empty() {
-        return Err("principals override must not be empty".into());
+        return Err(format!("{source} must not be empty"));
     }
-
-    let mut unique = HashSet::with_capacity(principals.len());
-    for principal in principals {
+    for (index, principal) in principals.iter().enumerate() {
         if principal.is_empty() {
-            return Err("principals override must not contain empty names".into());
+            return Err(format!("{source} must not contain empty names"));
         }
-        if !unique.insert(principal) {
+        if principals[..index].contains(principal) {
             return Err(format!(
-                "principals override contains duplicate principal '{principal}'"
+                "{source} contains duplicate principal '{principal}'"
             ));
         }
     }
-
     Ok(())
 }
 
@@ -316,8 +318,8 @@ fn prepare(options: &mut Options) -> io::Result<()> {
     } else if options.relay.is_none() && crate::embedded::INPUTS.relay.enabled_by_default {
         options.relay = Some(
             match options.relay_transport {
-                super::relay::RelayTransport::Tcp => crate::embedded::INPUTS.relay.tcp_endpoint,
-                super::relay::RelayTransport::Quic => crate::embedded::INPUTS.relay.quic_endpoint,
+                Transport::Tcp => crate::embedded::INPUTS.relay.tcp_endpoint,
+                Transport::Quic => crate::embedded::INPUTS.relay.quic_endpoint,
             }
             .ok_or_else(|| {
                 io::Error::new(
@@ -332,7 +334,7 @@ fn prepare(options: &mut Options) -> io::Result<()> {
         );
     }
     if options.relay.is_some()
-        && options.relay_transport == super::relay::RelayTransport::Tcp
+        && options.relay_transport == Transport::Tcp
         && options.relay_token.len() < 32
     {
         return Err(io::Error::new(
@@ -429,23 +431,13 @@ fn publish_applet_bridge(
 async fn run(
     options: Options,
     executable: Arc<crate::executable::Executable>,
-    ready: Option<crate::supervisor::ReadyNotifier>,
+    ready: Option<supervisor::ReadyNotifier>,
 ) -> io::Result<()> {
-    let relay_quic_config = if options.relay.is_some()
-        && options.relay_transport == super::relay::RelayTransport::Quic
-    {
-        Some(
-            super::relay::load_quic_client_config(
-                options.relay_quic_server_cert.as_deref(),
-                options.relay_quic_client_cert.as_deref(),
-                options.relay_quic_client_key.as_deref(),
-            )
-            .await?,
-        )
-    } else {
-        None
+    let relay_credentials = match options.relay {
+        Some(_) => Some(relay_credentials(&options).await?),
+        None => None,
     };
-    let mut shutdown = crate::supervisor::ShutdownSignals::new()?;
+    let mut shutdown = supervisor::ShutdownSignals::new()?;
     let host_key = load_host_key()?;
     let principals: Arc<[String]> = options
         .principals
@@ -493,14 +485,11 @@ async fn run(
         store_dir: Arc::new(options.store_dir),
         store_mode: options.store_mode,
         index_activity: index_refresher.as_ref().map(IdleIndexRefresher::activity),
-        inputs: Arc::new(Mutex::new(HashMap::new())),
-        session_channels: Arc::new(Mutex::new(HashMap::new())),
-        sftp_tasks: Arc::new(Mutex::new(HashMap::new())),
-        tcp_forwards: Arc::new(Mutex::new(HashMap::new())),
+        channels: Arc::default(),
+        tcp_forwards: Arc::default(),
         #[cfg(unix)]
-        ptys: Arc::new(Mutex::new(HashMap::new())),
-        #[cfg(unix)]
-        unix_forwards: Arc::new(Mutex::new(HashMap::new())),
+        unix_forwards: Arc::default(),
+        forwarding: JoinSet::new(),
         executable,
         active_connections: Arc::new(AtomicUsize::new(0)),
         welcome_sent: false,
@@ -510,34 +499,28 @@ async fn run(
     let mut server = factory.run_on_socket(config, &listener);
     let handle = server.handle();
 
-    ready
-        .map(crate::supervisor::ReadyNotifier::notify)
-        .transpose()?;
+    ready.map(supervisor::ReadyNotifier::notify).transpose()?;
 
     println!("sshd: serving on {local}");
     if let Some(refresher) = &index_refresher {
         refresher.refresh_if_idle();
     }
 
-    let relay_task = if let Some(relay) = options.relay.filter(|relay| !relay.is_empty()) {
-        let target = if options.relay_target.is_empty() {
-            loopback_address(local)
-        } else {
-            options.relay_target
+    let relay_task = if let Some(relay) = options.relay.filter(|relay| !relay.is_empty())
+        && let Some(credentials) = relay_credentials
+    {
+        let client = axe_relay::client::Client {
+            relay,
+            target: if options.relay_target.is_empty() {
+                loopback_address(local)
+            } else {
+                options.relay_target
+            },
+            client_id: options.relay_id,
+            credentials,
         };
         let (shutdown, shutdown_receiver) = oneshot::channel();
-        let task = tokio::spawn(async move {
-            super::relay::run_client(
-                options.relay_transport,
-                &relay,
-                &target,
-                &options.relay_id,
-                &options.relay_token,
-                relay_quic_config,
-                shutdown_receiver,
-            )
-            .await;
-        });
+        let task = tokio::spawn(async move { client.run(shutdown_receiver).await });
         Some((shutdown, task))
     } else {
         None
@@ -572,21 +555,101 @@ async fn run(
     result
 }
 
+/// Builds relay credentials from CLI/environment overrides or the embedded
+/// edition identity; the relay library never reads edition material itself.
+async fn relay_credentials(options: &Options) -> io::Result<Credentials> {
+    match options.relay_transport {
+        Transport::Tcp => Ok(Credentials::Token(options.relay_token.clone())),
+        Transport::Quic => Credentials::quic(relay_quic_identity(options).await?),
+    }
+}
+
+async fn relay_quic_identity(options: &Options) -> io::Result<QuicIdentity> {
+    match (
+        options.relay_quic_server_cert.as_deref(),
+        options.relay_quic_client_cert.as_deref(),
+        options.relay_quic_client_key.as_deref(),
+    ) {
+        (None, None, None) => {
+            if crate::embedded::INPUTS
+                .relay
+                .quic_server_cert_der
+                .is_empty()
+                || crate::embedded::INPUTS
+                    .relay
+                    .quic_client_cert_der
+                    .is_empty()
+                || crate::embedded::INPUTS.relay.quic_client_key_der.is_empty()
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "relay QUIC credentials are not embedded; set AXE_RELAY_QUIC_SERVER_CERT_FILE, AXE_RELAY_QUIC_CLIENT_CERT_FILE, and AXE_RELAY_QUIC_CLIENT_KEY_FILE",
+                ));
+            }
+            Ok(QuicIdentity::from_der(
+                crate::embedded::INPUTS.relay.quic_server_cert_der,
+                crate::embedded::INPUTS.relay.quic_client_cert_der,
+                crate::embedded::INPUTS.relay.quic_client_key_der,
+            ))
+        }
+        (Some(server), Some(client), Some(key)) => QuicIdentity::from_pem(
+            &read_relay_file(server, "QUIC server certificate").await?,
+            &read_relay_file(client, "QUIC client certificate").await?,
+            &read_relay_file(key, "QUIC client private key").await?,
+        ),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "QUIC relay credentials require server certificate, client certificate, and client private key files",
+        )),
+    }
+}
+
+async fn read_relay_file(path: &Path, name: &str) -> io::Result<Vec<u8>> {
+    tokio::fs::read(path).await.map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("read {name} {}: {error}", path.display()),
+        )
+    })
+}
+
 type ProcessInput = Box<dyn AsyncWrite + Send + Unpin>;
 type ProcessOutput = Box<dyn AsyncRead + Send + Unpin>;
 
-struct ChannelProcess {
+/// Everything one SSH channel owns. Dropping the state terminates the channel's
+/// child process and SFTP task.
+#[derive(Default)]
+struct ChannelState {
+    /// Session channel not yet claimed by a shell, exec, or subsystem request.
+    unclaimed: Option<Channel<Msg>>,
     input: Option<Arc<Mutex<ProcessInput>>>,
-    cancel: Option<oneshot::Sender<()>>,
+    /// Asks the task that owns the child to kill and reap it.
+    child: Option<oneshot::Sender<()>>,
+    sftp: Option<tokio::task::JoinHandle<io::Result<()>>>,
+    #[cfg(unix)]
+    pty: Option<PtyState>,
 }
 
-impl Drop for ChannelProcess {
+impl ChannelState {
+    fn session(channel: Channel<Msg>) -> Self {
+        let mut state = Self::default();
+        state.unclaimed = Some(channel);
+        state
+    }
+}
+
+impl Drop for ChannelState {
     fn drop(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            let _ = cancel.send(());
+        if let Some(child) = self.child.take() {
+            let _ = child.send(());
+        }
+        if let Some(sftp) = &self.sftp {
+            sftp.abort();
         }
     }
 }
+
+type Channels = Arc<Mutex<HashMap<ChannelId, ChannelState>>>;
 
 #[cfg(unix)]
 struct PtyRequest {
@@ -619,6 +682,7 @@ struct SpawnedShell {
 }
 
 type CancelMap<K> = Arc<Mutex<HashMap<K, oneshot::Sender<()>>>>;
+
 #[derive(Default)]
 struct SessionActivity {
     active: AtomicUsize,
@@ -807,14 +871,12 @@ struct SshServer {
     store_dir: Arc<Option<PathBuf>>,
     store_mode: crate::registry::StoreMode,
     index_activity: Option<Arc<SessionActivity>>,
-    inputs: Arc<Mutex<HashMap<ChannelId, ChannelProcess>>>,
-    session_channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
-    sftp_tasks: Arc<Mutex<HashMap<ChannelId, tokio::task::JoinHandle<io::Result<()>>>>>,
+    channels: Channels,
     tcp_forwards: CancelMap<(String, u32)>,
     #[cfg(unix)]
-    ptys: Arc<Mutex<HashMap<ChannelId, PtyState>>>,
-    #[cfg(unix)]
     unix_forwards: CancelMap<PathBuf>,
+    /// Forwarding tasks that must not outlive this connection's handler.
+    forwarding: JoinSet<()>,
     executable: Arc<crate::executable::Executable>,
     active_connections: Arc<AtomicUsize>,
     welcome_sent: bool,
@@ -838,14 +900,11 @@ impl server::Server for SshServer {
             store_mode: self.store_mode,
             index_activity: self.index_activity.clone(),
             executable: self.executable.clone(),
-            inputs: Arc::new(Mutex::new(HashMap::new())),
-            session_channels: Arc::new(Mutex::new(HashMap::new())),
-            sftp_tasks: Arc::new(Mutex::new(HashMap::new())),
+            channels: Arc::default(),
+            tcp_forwards: Arc::default(),
             #[cfg(unix)]
-            ptys: Arc::new(Mutex::new(HashMap::new())),
-            tcp_forwards: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(unix)]
-            unix_forwards: Arc::new(Mutex::new(HashMap::new())),
+            unix_forwards: Arc::default(),
+            forwarding: JoinSet::new(),
             active_connections,
             welcome_sent: false,
             connection,
@@ -907,10 +966,10 @@ impl server::Handler for SshServer {
         reply: server::ChannelOpenHandle,
         _: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.session_channels
+        self.channels
             .lock()
             .await
-            .insert(channel.id(), channel);
+            .insert(channel.id(), ChannelState::session(channel));
 
         reply.accept().await;
 
@@ -935,7 +994,7 @@ impl server::Handler for SshServer {
         match tokio::net::TcpStream::connect((host_to_connect, port)).await {
             Ok(stream) => {
                 reply.accept().await;
-                tokio::spawn(forward_stream(
+                self.spawn_forwarding(forward_stream(
                     channel.into_stream(),
                     stream,
                     "direct-tcpip",
@@ -963,19 +1022,26 @@ impl server::Handler for SshServer {
     ) -> Result<(), Self::Error> {
         #[cfg(unix)]
         {
-            self.ptys.lock().await.insert(
-                channel,
-                PtyState::Requested(PtyRequest {
-                    term: term.to_owned(),
-                    size: PtySize {
-                        columns,
-                        rows,
-                        pixel_width,
-                        pixel_height,
-                    },
-                }),
-            );
-            let _ = session.channel_success(channel);
+            let requested = match self.channels.lock().await.get_mut(&channel) {
+                Some(state) => {
+                    state.pty = Some(PtyState::Requested(PtyRequest {
+                        term: term.to_owned(),
+                        size: PtySize {
+                            columns,
+                            rows,
+                            pixel_width,
+                            pixel_height,
+                        },
+                    }));
+                    true
+                }
+                None => false,
+            };
+            if requested {
+                let _ = session.channel_success(channel);
+            } else {
+                let _ = session.channel_failure(channel);
+            }
         }
         #[cfg(not(unix))]
         {
@@ -1002,7 +1068,11 @@ impl server::Handler for SshServer {
                 pixel_width,
                 pixel_height,
             };
-            let result = match self.ptys.lock().await.get_mut(&channel) {
+            let mut channels = self.channels.lock().await;
+            let result = match channels
+                .get_mut(&channel)
+                .and_then(|state| state.pty.as_mut())
+            {
                 Some(PtyState::Requested(request)) => {
                     request.size = size;
                     Ok(())
@@ -1013,6 +1083,7 @@ impl server::Handler for SshServer {
                     "channel has no pseudo-terminal",
                 )),
             };
+            drop(channels);
             if result.is_ok() {
                 let _ = session.channel_success(channel);
             } else {
@@ -1033,18 +1104,24 @@ impl server::Handler for SshServer {
         name: &str,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        let ssh_channel = self.session_channels.lock().await.remove(&channel);
+        let mut channels = self.channels.lock().await;
+        let state = channels.get_mut(&channel);
+        let ssh_channel = state.and_then(|state| state.unclaimed.take());
 
         if name == "sftp"
             && let Some(ssh_channel) = ssh_channel
         {
-            let _ = session.channel_success(channel);
             let filesystem = super::sftp::Filesystem::new((*self.workdir).clone());
             let task = tokio::spawn(async move {
                 super::sftp::run(ssh_channel.into_stream(), filesystem).await
             });
-            self.sftp_tasks.lock().await.insert(channel, task);
+            if let Some(state) = channels.get_mut(&channel) {
+                state.sftp = Some(task);
+            }
+            drop(channels);
+            let _ = session.channel_success(channel);
         } else {
+            drop(channels);
             let _ = session.channel_failure(channel);
         }
 
@@ -1056,12 +1133,14 @@ impl server::Handler for SshServer {
         channel: ChannelId,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.session_channels.lock().await.remove(&channel);
-
         #[cfg(unix)]
         let show_welcome = !self.welcome_sent
             && matches!(
-                self.ptys.lock().await.get(&channel),
+                self.channels
+                    .lock()
+                    .await
+                    .get(&channel)
+                    .and_then(|state| state.pty.as_ref()),
                 Some(PtyState::Requested(_))
             );
         #[cfg(not(unix))]
@@ -1087,8 +1166,6 @@ impl server::Handler for SshServer {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.session_channels.lock().await.remove(&channel);
-
         let command = match std::str::from_utf8(data) {
             Ok(command) => command,
             Err(_) => {
@@ -1121,11 +1198,11 @@ impl server::Handler for SshServer {
         _: &mut Session,
     ) -> Result<(), Self::Error> {
         let input = self
-            .inputs
+            .channels
             .lock()
             .await
             .get(&channel)
-            .and_then(|process| process.input.clone());
+            .and_then(|state| state.input.clone());
 
         if let Some(input) = input {
             let _ = input.lock().await.write_all(data).await;
@@ -1138,15 +1215,20 @@ impl server::Handler for SshServer {
         channel: ChannelId,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.session_channels.lock().await.remove(&channel);
-
-        if let Some(process) = self.inputs.lock().await.get_mut(&channel) {
-            process.input.take();
-        }
+        let sftp = self
+            .channels
+            .lock()
+            .await
+            .get_mut(&channel)
+            .and_then(|state| {
+                state.unclaimed.take();
+                state.input.take();
+                state.sftp.take()
+            });
 
         // A client that finished its SFTP session sends EOF and waits for the
         // exit status before accepting the channel close.
-        if let Some(task) = self.sftp_tasks.lock().await.remove(&channel) {
+        if let Some(task) = sftp {
             task.abort();
             let _ = task.await;
             let _ = session.exit_status_request(channel, 0);
@@ -1161,15 +1243,8 @@ impl server::Handler for SshServer {
         channel: ChannelId,
         _: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.inputs.lock().await.remove(&channel);
-        #[cfg(unix)]
-        self.ptys.lock().await.remove(&channel);
-        if let Some(task) = self.sftp_tasks.lock().await.remove(&channel) {
-            task.abort();
-            let _ = task.await;
-        }
-
-        self.session_channels.lock().await.remove(&channel);
+        let state = self.channels.lock().await.remove(&channel);
+        drop(state);
         Ok(())
     }
 
@@ -1225,7 +1300,7 @@ impl server::Handler for SshServer {
         match tokio::net::UnixStream::connect(socket_path).await {
             Ok(stream) => {
                 reply.accept().await;
-                tokio::spawn(forward_stream(
+                self.spawn_forwarding(forward_stream(
                     channel.into_stream(),
                     stream,
                     "direct-streamlocal",
@@ -1323,7 +1398,13 @@ impl SshServer {
         }
 
         #[cfg(unix)]
-        let requested_pty = match self.ptys.lock().await.remove(&channel) {
+        let requested_pty = match self
+            .channels
+            .lock()
+            .await
+            .get_mut(&channel)
+            .and_then(|state| state.pty.take())
+        {
             Some(PtyState::Requested(request)) => Some(request),
             _ => None,
         };
@@ -1339,22 +1420,17 @@ impl SshServer {
             .as_ref()
             .map(|activity| activity.start());
 
-        #[cfg(unix)]
-        if let Some(pty) = spawned.pty.take() {
-            self.ptys
-                .lock()
-                .await
-                .insert(channel, PtyState::Active(pty));
-        }
-
         let (cancel, cancelled) = oneshot::channel();
-        self.inputs.lock().await.insert(
-            channel,
-            ChannelProcess {
-                input: Some(Arc::new(Mutex::new(spawned.input))),
-                cancel: Some(cancel),
-            },
-        );
+        {
+            let mut channels = self.channels.lock().await;
+            let state = channels.entry(channel).or_default();
+            state.input = Some(Arc::new(Mutex::new(spawned.input)));
+            state.child = Some(cancel);
+            #[cfg(unix)]
+            {
+                state.pty = spawned.pty.take().map(PtyState::Active);
+            }
+        }
 
         let stdout_handle = handle.clone();
         let stdout_task = tokio::spawn(pump(
@@ -1369,9 +1445,7 @@ impl SshServer {
             tokio::spawn(pump(stderr, stderr_handle, channel, Some(1), None))
         });
 
-        let inputs = Arc::downgrade(&self.inputs);
-        #[cfg(unix)]
-        let ptys = Arc::downgrade(&self.ptys);
+        let channels = Arc::downgrade(&self.channels);
         tokio::spawn(async move {
             let _active_session = active_session;
             let mut child = spawned.child;
@@ -1389,12 +1463,9 @@ impl SshServer {
                 }
             };
 
-            if let Some(inputs) = inputs.upgrade() {
-                inputs.lock().await.remove(&channel);
-            }
-            #[cfg(unix)]
-            if let Some(ptys) = ptys.upgrade() {
-                ptys.lock().await.remove(&channel);
+            if let Some(channels) = channels.upgrade() {
+                let state = channels.lock().await.remove(&channel);
+                drop(state);
             }
 
             if let Err(error) = stdout_task.await {
@@ -1421,8 +1492,14 @@ impl SshServer {
         Ok(())
     }
 
+    /// Runs `task` for as long as this connection's handler lives.
+    fn spawn_forwarding(&mut self, task: impl Future<Output = ()> + Send + 'static) {
+        while self.forwarding.try_join_next().is_some() {}
+        self.forwarding.spawn(task);
+    }
+
     async fn start_tcp_forward(
-        &self,
+        &mut self,
         address: &str,
         port: u32,
         handle: server::Handle,
@@ -1452,13 +1529,13 @@ impl SshServer {
         forwards.insert(key, cancel);
         drop(forwards);
 
-        tokio::spawn(serve_tcp_forward(listener, handle, cancelled));
+        self.spawn_forwarding(serve_tcp_forward(listener, handle, cancelled));
         Ok(assigned_port)
     }
 
     #[cfg(unix)]
     async fn start_unix_forward(
-        &self,
+        &mut self,
         socket_path: PathBuf,
         handle: server::Handle,
     ) -> io::Result<()> {
@@ -1478,7 +1555,7 @@ impl SshServer {
         forwards.insert(socket_path.clone(), cancel);
         drop(forwards);
 
-        tokio::spawn(serve_unix_forward(
+        self.spawn_forwarding(serve_unix_forward(
             listener,
             socket_path,
             handle,
@@ -1618,13 +1695,15 @@ async fn serve_tcp_forward(
         }
     };
 
+    let mut connections = JoinSet::new();
     loop {
         tokio::select! {
-            _ = &mut cancelled => return,
+            _ = &mut cancelled => break,
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
             accepted = listener.accept() => match accepted {
                 Ok((stream, originator)) => {
                     let handle = handle.clone();
-                    tokio::spawn(async move {
+                    connections.spawn(async move {
                         match handle
                             .channel_open_forwarded_tcpip(
                                 connected.ip().to_string(),
@@ -1648,6 +1727,10 @@ async fn serve_tcp_forward(
             }
         }
     }
+
+    // Cancellation stops new connections; established ones keep running.
+    drop(listener);
+    while connections.join_next().await.is_some() {}
 }
 
 #[cfg(unix)]
@@ -1666,17 +1749,19 @@ async fn serve_unix_forward(
     socket_path: PathBuf,
     handle: server::Handle,
     mut cancelled: oneshot::Receiver<()>,
-    _cleanup: UnixSocketPath,
+    cleanup: UnixSocketPath,
 ) {
+    let mut connections = JoinSet::new();
     loop {
         tokio::select! {
-            _ = &mut cancelled => return,
+            _ = &mut cancelled => break,
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
                     let handle = handle.clone();
                     let socket_path = socket_path.clone();
 
-                    tokio::spawn(async move {
+                    connections.spawn(async move {
                         match handle.channel_open_forwarded_streamlocal(
                             socket_path.to_string_lossy().into_owned(),
                         ).await {
@@ -1700,6 +1785,11 @@ async fn serve_unix_forward(
             }
         }
     }
+
+    // Cancellation stops new connections; established ones keep running.
+    drop(listener);
+    drop(cleanup);
+    while connections.join_next().await.is_some() {}
 }
 
 async fn pump(
@@ -2107,14 +2197,11 @@ mod tests {
             store_dir: Arc::new(store_dir),
             store_mode,
             index_activity: None,
-            inputs: Arc::new(Mutex::new(HashMap::new())),
-            session_channels: Arc::new(Mutex::new(HashMap::new())),
-            sftp_tasks: Arc::new(Mutex::new(HashMap::new())),
+            channels: Arc::default(),
+            tcp_forwards: Arc::default(),
             #[cfg(unix)]
-            ptys: Arc::new(Mutex::new(HashMap::new())),
-            tcp_forwards: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(unix)]
-            unix_forwards: Arc::new(Mutex::new(HashMap::new())),
+            unix_forwards: Arc::default(),
+            forwarding: JoinSet::new(),
             executable: match executable {
                 Some(path) => Arc::new(
                     crate::executable::Executable::from_filesystem_path(&path)
@@ -2259,6 +2346,79 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn closing_session_channel_kills_and_reaps_child() {
+        let directory = std::env::temp_dir().join(format!("axe-sshd-close-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir(&directory).expect("create channel close test directory");
+        let source = directory.join("close-fixture.c");
+        let executable = directory.join("close-fixture");
+        std::fs::write(
+            &source,
+            b"#include <stdio.h>\n#include <unistd.h>\nint main(void) {\n printf(\"%d\\n\", (int)getpid());\n fflush(stdout);\n for (;;) pause();\n}\n",
+        )
+        .expect("write channel close fixture source");
+        let compiled = std::process::Command::new("cc")
+            .arg("-Os")
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .status()
+            .expect("compile channel close fixture");
+        assert!(compiled.success(), "compile channel close fixture");
+
+        let (client, _, server) = test_connection(directory.clone(), None, Some(executable)).await;
+        let mut channel = client
+            .channel_open_session()
+            .await
+            .expect("open session channel");
+        channel
+            .exec(true, &b"ignored"[..])
+            .await
+            .expect("start session child");
+
+        let mut stdout = Vec::new();
+        let pid = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match channel.wait().await {
+                    Some(russh::ChannelMsg::Data { data }) => {
+                        stdout.extend_from_slice(&data);
+                        if let Some(line) = stdout.strip_suffix(b"\n") {
+                            break std::str::from_utf8(line)
+                                .expect("fixture PID is UTF-8")
+                                .parse::<libc::pid_t>()
+                                .expect("parse fixture PID");
+                        }
+                    }
+                    Some(_) => {}
+                    None => panic!("session channel closed before the child started"),
+                }
+            }
+        })
+        .await
+        .expect("session child did not report its PID");
+
+        channel.close().await.expect("close session channel");
+
+        // A zombie still answers signal 0, so ESRCH proves kill and reap.
+        let error = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                // SAFETY: signal 0 only checks whether the fixture PID still exists.
+                if unsafe { libc::kill(pid, 0) } == -1 {
+                    break io::Error::last_os_error();
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("closed session channel left its child running or unreaped");
+        assert_eq!(error.raw_os_error(), Some(libc::ESRCH));
+
+        close_test_connection(client, server).await;
+        std::fs::remove_dir_all(directory).expect("remove channel close test directory");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     #[ignore = "requires a Docker-compatible container runtime"]
     async fn vanilla_openssh_client_observes_pinned_storage_environment() {
         use std::os::unix::fs::PermissionsExt;
@@ -2359,12 +2519,10 @@ mod tests {
             store_dir: Arc::new(Some(store_dir.clone())),
             store_mode: crate::registry::StoreMode::CacheOnly,
             index_activity: None,
-            inputs: Arc::new(Mutex::new(HashMap::new())),
-            session_channels: Arc::new(Mutex::new(HashMap::new())),
-            sftp_tasks: Arc::new(Mutex::new(HashMap::new())),
-            ptys: Arc::new(Mutex::new(HashMap::new())),
-            tcp_forwards: Arc::new(Mutex::new(HashMap::new())),
-            unix_forwards: Arc::new(Mutex::new(HashMap::new())),
+            channels: Arc::default(),
+            tcp_forwards: Arc::default(),
+            unix_forwards: Arc::default(),
+            forwarding: JoinSet::new(),
             executable: Arc::new(
                 crate::executable::Executable::from_filesystem_path(&executable)
                     .expect("open SSH session fixture"),

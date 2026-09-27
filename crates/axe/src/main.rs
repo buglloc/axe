@@ -5,7 +5,6 @@ mod ondemand;
 #[cfg(unix)]
 mod path_bridge;
 mod registry;
-mod supervisor;
 mod tls_roots;
 
 mod embedded {
