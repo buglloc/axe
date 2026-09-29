@@ -147,15 +147,15 @@ The returned SRI `hash` belongs to that exact URL. Never reuse a hash across pla
 
 ## Adding a package
 
-1. Choose the category and attribute name.
+1. Choose the category and globally unique attribute and command names.
 2. Add the definition to `store/nix/packages/<category>.nix`.
 3. If the category is new, import it once from `store/nix/packages/default.nix`.
    New category files are absent from Git-backed flake evaluation until Git knows about them; use `git add --intent-to-add store/nix/packages/<category>.nix` before the first Nix command.
-4. Build every target output explicitly.
-5. Inspect each executable format and architecture.
-6. Regenerate bootstrap.
-7. Build the package through `axe-store` into a temporary output.
-8. Run the AXE Store Nix smoke test.
+4. Build every target output explicitly; inspect formats and architectures.
+5. Regenerate and check `store/bootstrap.json`.
+6. Update the package inventory in `docs/store.md` from the generated command, synopsis, and targets.
+7. Build each target through `axe-store` into its own temporary output and check the signed manifest.
+8. Run the AXE Store Nix smoke test when the signed bootstrap snapshot matches the inventory; see [the skill's signed-snapshot boundary](../SKILL.md#signed-snapshot-boundary).
 
 `artifact.path` for a single binary must match the installed path under the Nix output, normally `bin/<name>`. Use the package artifact form only when the tool needs a tree of runtime files.
 
@@ -179,11 +179,11 @@ To remove one target, delete only its source/package mapping and rebuild the rem
 
 Then:
 
-1. Run `just store-bootstrap`.
-2. Confirm the package or target disappeared from `store/bootstrap.json`.
-3. Build a fresh AXE Store snapshot.
-4. Compare its Index against the currently published Index.
-5. Publish with `--allow-target-removal` only after the user explicitly confirms that removal.
+1. Run `just store-bootstrap` and `just check-store-bootstrap`.
+2. Confirm the package or target disappeared from `store/bootstrap.json` and update `docs/store.md`.
+3. Build and inspect remaining targets. Do not sync or publish without explicit authorization.
+4. For approved publication, compare a full new signed Index against the published Index and review all removal warnings.
+5. Set `AXE_STORE_ALLOW_TARGET_REMOVAL=1` only on the approved `just store-sync` invocation when the reviewed removal requires it.
 
 Do not silently retain obsolete aliases or add placeholder derivations to evade the removal gate.
 
@@ -205,7 +205,7 @@ readelf -l /nix/store/<output>/bin/<tool>
 readelf -d /nix/store/<output>/bin/<tool>
 ```
 
-For a required static binary, `readelf -l` must have no `INTERP`, `readelf -d` must have no `NEEDED`, and the binary must contain no `/nix/store/` runtime reference. Smoke-run the native binary with `--help` or a harmless real operation.
+For a required static binary, `readelf -l` must have no `INTERP`, `readelf -d` must have no `NEEDED`, and the binary must contain no `/nix/store/` runtime reference.
 
 Build through the producer pipeline one target at a time. Give each build its own temporary output because the command replaces that directory:
 
@@ -219,29 +219,23 @@ cargo run --quiet -p axe-store -- build \
   --output "$output"
 ```
 
-Read stderr. `axe-store` reports unsupported targets without necessarily failing the whole aggregate build. Verify the final summary target count and inspect the generated signed manifest when target membership is the change under test.
+Read stderr. `axe-store` reports unsupported targets without necessarily failing the whole aggregate build. Verify the final summary target count and inspect the generated signed manifest when target membership is the change under test. Run the native executable with a harmless real operation using `PATH=/nonexistent`; inspect format, ABI, linkage, and package tree for foreign targets.
 
-Finish formatting and metadata checks with:
+Format and verify generated metadata without publishing:
 
 ```bash
 just nix-fmt
 just store-bootstrap
 just check-store-bootstrap
 nix flake check --no-build .
-just store-nix-smoke
 ```
+
+When the signed bootstrap snapshot matches the inventory, also run `just store-nix-smoke` and `just store-smoke`. These checks compile `axe`; a retained snapshot for the old inventory fails the build. Do not remove or forge the tracked snapshot to pass them. A full authorized `just store-sync` publishes objects and updates the snapshot; until then, report the pending checks and focused build evidence separately.
 
 Never write `path:.` in these commands.
 
 ## Publishing
 
-Use `just store-build` for the complete signed snapshot and `just store-publish` only with an intentional destination and valid production credentials. `just store-sync` combines them.
+Publication requires the user's explicit request, the selected edition's signing identity, and a verified destination. `just store-build` builds the complete signed snapshot without publishing; `just store-publish` publishes a previously built snapshot; `just store-sync` builds, publishes, and replaces `store/bootstrap-index.cbor.zst` with the signed Index. The latter updates remote Store objects and can fail on target removals. Review package/target counts, warnings, destination, and diff against the published Index before overriding that safeguard; only an explicitly approved sync uses `AXE_STORE_ALLOW_TARGET_REMOVAL=1 just store-sync`.
 
-Before production publication:
-
-```bash
-just store-smoke
-just store-nix-smoke
-```
-
-A package, channel, or target removal requires the CLI's `--allow-target-removal` flag. Treat the flag as a reviewed exception, not a retry mechanism.
+After the authorized sync, commit the generated `store/bootstrap.json`, the signed snapshot, and the updated `docs/store.md` inventory together. Run `just store-smoke` and `just store-nix-smoke` with the matching snapshot. Release of the `axe`, `axe-relay`, and `vzik` binaries is a separate `docs/release.md` workflow.

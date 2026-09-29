@@ -1,6 +1,6 @@
 ---
 name: axe-store
-description: Maintain the AXE Store package inventory and release metadata. Use when adding, updating, removing, building, or publishing AXE Store tools; changing Nix package sources; or adding and removing OS and architecture targets.
+description: Maintain AXE Store packages, generated bootstrap inventory, target availability, signed snapshots, and publication. Use when adding, updating, removing, building, or publishing Store tools or changing their Nix sources and supported targets.
 ---
 
 # AXE Store maintenance
@@ -22,12 +22,18 @@ Keep the root `flake.nix` and `flake.lock` as the entry point and pin set for th
 5. Make every new `.nix` file visible to the Git-backed flake source before evaluation. `git add --intent-to-add <file>` keeps its content unstaged while preventing a misleading “file not found” evaluation failure.
 6. Build every declared target separately with a focused package build. A successful aggregate AXE Store build may still report a target as `unsupported`; inspect both the target count and every warning. Do not rebuild the full Index to validate one package.
 7. Regenerate and verify `store/bootstrap.json` with `just store-bootstrap` and `just check-store-bootstrap`.
-8. Update the `On-demand` rows in the supported-software table in `README.md` after every package addition, removal, rename, or synopsis change. Keep each description to one short sentence.
-9. Exercise the changed package through `axe-store build`, not only through `nix build`. This validates executable format, architecture, portability, packaging, signatures, and manifest metadata.
-10. Run `just store-nix-smoke` after package graph or target-handling changes. Run `just store-smoke` when AXE Store consumer or publication behavior is affected. Remove temporary producer outputs afterward.
-11. Remote builders are opt-in per checkout via the gitignored `nix/builders.conf` plus `keys/nix/id_ed25519` and `keys/nix/known_hosts` (layout in BOOTSTRAP.md §7; `just keyscan-nix-builders` rescans host keys from the conf). Without the conf, AXE Store containers build purely locally; never assume a remote builder exists, and never commit these files.
+8. Update the package inventory table in `docs/store.md` after additions, removals, renames, synopsis changes, or target changes. Keep the command, purpose, and targets consistent with generated bootstrap metadata.
+9. Exercise each changed target through `axe-store build`, not only `nix build`. Check warnings, target counts, executable format, portability, signed manifest, and native runtime behavior.
+10. Run `nix flake check --no-build .` after package graph changes. Run `just store-nix-smoke` and `just store-smoke` when their build inputs are consistent; see the signed-snapshot boundary below. Remove temporary producer outputs afterward.
+11. Remote builders are opt-in via the edition-local, gitignored `nix/builders.conf`, `keys/nix/id_ed25519`, and `keys/nix/known_hosts` (see BOOTSTRAP.md, “Remote builders”). Only `store-build-remote` and `store-sync-remote` opt in; ordinary Store recipes use local builders. Never commit these files.
 
 Never use an explicit `path:` flake reference for this checkout. It bypasses Git filtering and can copy ignored build output such as `target/` into `/nix/store`. Use `.#…`, an ordinary filesystem path, or let `axe-store` construct the reference.
+
+## Signed snapshot boundary
+
+`store/bootstrap.json` describes the current Nix inventory; `store/bootstrap-index.cbor.zst` is a signed snapshot of a complete Store build. The `axe` build verifies the snapshot against bootstrap metadata and trusted public keys. After an inventory change, a retained old snapshot can make `just check`, `just smoke`, `just store-nix-smoke`, or an `axe` build fail even when the changed package builds correctly. A focused `axe-store build --package ... --target ...` proves only that target; it does not update the full bootstrap snapshot.
+
+Do not hand-edit, delete, or replace a tracked signed snapshot to make checks pass. Regenerate it through the authorized full Store sync (`just store-sync` on the trusted publisher), which **publishes Store objects**, then review and commit the updated public snapshot with the inventory. If publication is not requested or publisher credentials are unavailable, complete focused builds and checks that do not compile `axe`; report the snapshot-dependent checks as pending rather than claim a full green gate. See [references/package-recipes.md](references/package-recipes.md) for the verification and publication routes.
 
 ## Targets and portability
 
@@ -42,7 +48,6 @@ Do not infer a target from an upstream filename. Download or build it, inspect t
 For Linux single binaries, prefer static outputs. Select them through `staticSetFor` or `packageSetFor` so `aarch64-linux` uses the repository's cross-musl set; verify that ELF has neither `INTERP` nor `NEEDED`. Do not equate a successful Nix build with static linkage.
 
 For CGO-free Go tools, `goDarwin` cross-builds `aarch64-darwin` on the Linux builder. Other Darwin outputs are acceptable only when the exact derivation is available from a configured binary cache or a Darwin remote builder. Test the explicit Darwin flake output before adding the target; evaluation alone does not prove build availability.
-
 
 ## Adding and updating packages
 
@@ -68,6 +73,6 @@ Read [references/package-recipes.md](references/package-recipes.md) for helper e
 
 Remove obsolete definitions cleanly; do not leave aliases, empty categories, compatibility attributes, or stale bootstrap entries. Regenerate bootstrap after removal.
 
-Publication deliberately rejects removal of an already published package, channel, or target. Confirm that every removal listed by the rejected publication is intended, then pass `--allow-target-removal` only to that explicit publish or sync operation. Never add this flag to default recipes.
+Publication deliberately rejects removal of an already published package, channel, or target. Confirm that every removal listed by the rejected publication is intended; use `AXE_STORE_ALLOW_TARGET_REMOVAL=1 just store-sync` only for an explicitly approved sync. Never add this override to default recipes.
 
-Do not publish unless the user explicitly requests publication and the configured credentials, signing key, and destination are known.
+Do not publish unless the user explicitly requests publication and the configured credentials, signing key, and destination are known. AXE binary releases are a separate workflow in `docs/release.md`; `just store-sync` does not release `axe`, `axe-relay`, or `vzik`.
