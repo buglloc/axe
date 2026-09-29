@@ -2,6 +2,23 @@
 title = "Changelog"
 +++
 
+## [v0.2.0](https://github.com/buglloc/axe/releases/tag/v0.2.0) — 2026-09-29
+
+### Highlights
+
+- The SSH server accepts user certificates signed by ECDSA CAs using NIST P-256, P-384, or P-521 keys. Plain public keys remain rejected. (`1342f9b194ce0fc7c7b578386f5f16ca79b17a9b`)
+- `axe-relay` server startup now requires `--config FILE`. Its listener addresses, ports, certificate paths, and token-file path come from that JSON configuration; `--token FILE` can override the configured token file. (`18442077bb9627218ed7a963f6d6721a11d180aa`)
+
+### Changes
+
+- New guides cover AXE architecture and custom editions; the relay guide documents file-backed server configuration and service setup. (`52b1fea340bb6fb0f9adc8fb119fa7453726c01f`)
+- The bootstrap guide has been shortened and points to the component guides for build and publication details. (`9f8b3eebd738530bfdfb77c3cfcd2ffb0052ab85`)
+- The AXE Store skill documentation distinguishes single-package checks from signed-snapshot verification and publication. (`6fbea0d14f566a946b9afafb40d4a62c1f146110`)
+
+### Fixes
+
+The supplied evidence does not establish a separate user-visible bug fix in this release.
+
 ## [v0.1.2](https://github.com/buglloc/axe/releases/tag/v0.1.2) — 2026-09-29
 
 ### Highlights
