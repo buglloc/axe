@@ -6,16 +6,16 @@ Run that executable as an interactive [Brush](https://github.com/reubeno/brush) 
 
 ## Quick start
 
-Build the OSS edition on Linux x86_64:
+Download the Linux x86_64 release binary and run it:
 
 ```bash
-nix develop .#default
-just build
-./dist/axe-x86_64-unknown-linux-musl --version
-AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl --list
+curl -fL https://storage.yandexcloud.net/axe-store/axe/releases/v0.1.2/x86_64-linux/axe -o axe
+chmod +x axe
+./axe --version
+./axe --list
 ```
 
-`just build` creates missing development keys and writes `dist/axe-x86_64-unknown-linux-musl`. `AXE_STORE_MODE=off` makes the first run independent of Store network and cache state.
+Verify the download against the SHA-256 in [Downloads](#downloads) before using it. For other platforms, choose the corresponding binary below.
 
 ## Downloads
 
@@ -35,13 +35,15 @@ Release [v0.1.2](https://github.com/buglloc/axe/releases/tag/v0.1.2). Verify the
 
 ## Using AXE
 
-Run AXE as a shell, call a bundled applet, or inspect the command inventory:
+Run the downloaded binary as a shell, call a bundled applet, or inspect the command inventory:
 
 ```bash
-AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl -c 'ps'
-AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl jq -- -n '{ok: true}'
-AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl commands
+./axe -c 'ps'
+./axe jq -- -n '{ok: true}'
+./axe commands
 ```
+
+`jq` is an on-demand Store command; it requires access to the configured Store or a cached copy.
 
 Inside the shell, aliases/functions and builtins take precedence over bundled applets, then AXE Store, then the host `PATH` under defined failure conditions. See [Commands](docs/commands.md) for invocation, resolution, and exit statuses.
 
@@ -59,7 +61,15 @@ The root flake exposes `packages.<system>.axe` and `default` for targets listed 
 
 ## Building from source
 
-Enter `nix develop .#default` and run `just build` as shown above. For other targets use `just build-linux-arm64`, `just build-darwin-arm64`, or `just build-all`. See [BOOTSTRAP.md](BOOTSTRAP.md) for building an edition with your own inputs, identities, or Store.
+For the OSS edition on Linux x86_64:
+
+```bash
+nix develop .#default
+just build
+./dist/axe-x86_64-unknown-linux-musl --version
+```
+
+`just build` creates missing development keys and writes `dist/axe-x86_64-unknown-linux-musl`. For other targets use `just build-linux-arm64`, `just build-darwin-arm64`, or `just build-all`. See [BOOTSTRAP.md](BOOTSTRAP.md) for building an edition with your own inputs, identities, or Store.
 
 ## Documentation
 
