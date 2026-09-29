@@ -1,6 +1,6 @@
 # Local AXE releases
 
-Publish AXE binaries and the GitHub Release from a trusted local OSS publisher, outside PR and release CI. A separate GitHub Actions workflow deploys the website. Operators install binaries on remote machines. For Store inventory, keys, and publisher setup, see [BOOTSTRAP.md](../BOOTSTRAP.md#axe-store-from-scratch).
+Publish AXE binaries and the GitHub Release from a trusted local OSS publisher, outside PR and release CI. A separate GitHub Actions workflow deploys the website. Operators install binaries on remote machines. For Store identities and publisher setup, see [BOOTSTRAP.md](../BOOTSTRAP.md).
 
 ## Inputs and trust
 

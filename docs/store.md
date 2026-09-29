@@ -77,4 +77,4 @@ The `nuclei` package includes pinned `nuclei-templates`; no separate template do
 
 ## Adding a package
 
-Package definitions live in [`store/nix/packages/`](../store/nix/packages/). After changing them, regenerate `store/bootstrap.json` with `just store-bootstrap` and check it with `just check-store-bootstrap`. See [`BOOTSTRAP.md`](../BOOTSTRAP.md#axe-store-from-scratch) for signing, building, and publishing packages.
+Package definitions live in [`store/nix/packages/`](../store/nix/packages/). After changing them, regenerate `store/bootstrap.json` with `just store-bootstrap` and check it with `just check-store-bootstrap`. See [BOOTSTRAP.md](../BOOTSTRAP.md) for identities and Store access and [Local releases](release.md) for the signed snapshot required by release builds.

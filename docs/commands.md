@@ -1,12 +1,12 @@
 # Commands and command resolution
 
-From the repository root, the executable reports its own exact command inventory (use the path from your build). These examples disable Store so they work offline; after configuring a signed Store, omit `AXE_STORE_MODE=off` to include on-demand commands:
+Run these commands with an installed `axe` binary. The inventory reflects its bundled applets and configured Store; there is no need to disable Store to list commands or run bundled applets:
 
 ```bash
-AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl --list
-AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl commands
-AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl commands ps
-AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl doctor --json
+axe --list
+axe commands
+axe commands ps
+axe doctor --json
 ```
 
 `commands` returns a versioned JSON inventory. `availability` is `local`, `on_demand`, or `blocked`; `local_path` is the published applet path, if one exists. Use the shell's `type`, `command`, and `command -v` builtins to inspect aliases, functions, and builtins.
@@ -23,23 +23,17 @@ Bundled applets take precedence over AXE Store and `PATH`. If Store delivery fai
 
 For an asynchronous command, `$!` holds the child PID. When Brush runs a list in the current process, there is no separate PID. Instead, AXE puts a `%N` job specification in `$!`; `wait` accepts it. The in-process job ends with the current shell.
 
-After building, an applet can be called by name through AXE, explicitly via `--applet`, or through a symlink:
+Call a bundled applet by name, explicitly with `--applet`, or from an AXE shell:
 
 ```bash
-AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl jq -- -n '{ok: true}'
-AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl --applet jq -- -n '{ok: true}'
-ln -s "$(pwd)/dist/axe-x86_64-unknown-linux-musl" /tmp/jq
-AXE_STORE_MODE=off /tmp/jq -n '{ok: true}'
+axe jq -- -n '{ok: true}'
+axe --applet jq -- -n '{ok: true}'
+axe -c 'jq -n "{ok: true}"; vzik capabilities'
 ```
 
-Inside Brush, no `axe` prefix is needed. AXE-managed shells and SSH exec sessions export `AXE=true` even when the best-effort `PATH` bridge is unavailable. Use `doctor --json` for version and runtime capabilities.
+A symlink named after a bundled applet also dispatches it using the link name as `argv[0]`; for example, a link named `jq` to the installed `axe` binary runs the bundled `jq`. Inside Brush, no `axe` prefix is needed. AXE-managed shells and SSH exec sessions export `AXE=true` even when the best-effort `PATH` bridge is unavailable. Use `doctor --json` for version and runtime capabilities.
 
-```bash
-AXE_STORE_MODE=off ./dist/axe-x86_64-unknown-linux-musl --no-config --norc --noprofile \
-  -c 'jq -n "{ok: true}"; vzik capabilities'
-```
-
-[Runtime survivability](runtime-survivability.md) covers self-exec backend ordering, the `PATH` bridge, behavior after unlinking, and controlled degradation. AXE does not place temporary `PATH` bridges or self-exec relays on arbitrary writable mounts. It tries `$XDG_CACHE_HOME/axe` (or the platform cache), then `$XDG_RUNTIME_DIR/axe` and `$TMPDIR/axe-<uid>`. If `AXE_WORK_DIR` is set, AXE requires that root and does not fall back automatically. AXE Store uses a separate storage-root order; see the [Store documentation](store.md).
+The applet PATH bridge is best-effort; bundled commands still resolve without it. [Runtime survivability](runtime-survivability.md) explains child execution, the bridge, and behavior when the executable is unlinked. AXE Store uses separate storage roots; see [AXE Store](store.md).
 
 ## Bundled commands
 

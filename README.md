@@ -43,7 +43,7 @@ Run the downloaded binary as a shell, call a bundled applet, or inspect the comm
 ./axe commands
 ```
 
-`jq` is an on-demand Store command; it requires access to the configured Store or a cached copy.
+`jq` is bundled; on-demand tools such as `rg` require access to the configured Store or a cached copy.
 
 Inside the shell, aliases/functions and builtins take precedence over bundled applets, then AXE Store, then the host `PATH` under defined failure conditions. See [Commands](docs/commands.md) for invocation, resolution, and exit statuses.
 
@@ -66,10 +66,11 @@ For the OSS edition on Linux x86_64:
 ```bash
 nix develop .#default
 just build
-./dist/axe-x86_64-unknown-linux-musl --version
+install -Dm755 dist/axe-x86_64-unknown-linux-musl "$HOME/.local/bin/axe"
+"$HOME/.local/bin/axe" --version
 ```
 
-`just build` creates missing development keys and writes `dist/axe-x86_64-unknown-linux-musl`. For other targets use `just build-linux-arm64`, `just build-darwin-arm64`, or `just build-all`. See [BOOTSTRAP.md](BOOTSTRAP.md) for building an edition with your own inputs, identities, or Store.
+`just build` creates missing development keys and writes the Linux x86_64 artifact under `dist/`. Install it as `axe` to use the commands in this guide. For other targets use `just build-linux-arm64`, `just build-darwin-arm64`, or `just build-all`. See [Custom editions](docs/editions.md) for a build with your own identity and Store trust; [BOOTSTRAP.md](BOOTSTRAP.md) covers production identities and publishing.
 
 ## Documentation
 
