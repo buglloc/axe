@@ -70,6 +70,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `tshark` | Analyze packet captures from the CLI | `aarch64-linux`, `x86_64-linux` |
 | `unshare` | Run a program in new Linux namespaces | `aarch64-linux`, `x86_64-linux` |
 | `xh` | Interactive-friendly HTTP client | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `yc` | Manage Yandex Cloud resources | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `yq` | Process YAML, JSON, and XML | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 
 The `nuclei` package includes pinned `nuclei-templates`; no separate template download is needed on first run.

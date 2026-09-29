@@ -1,6 +1,7 @@
 {
   mkNixpkgsBinary,
   mkNixpkgsPackage,
+  mkUpstreamBinaries,
   pkgsFor,
   buildPkgs,
   axeOpenSslCaBundle,
@@ -679,6 +680,28 @@ in {
           patches = (old.patches or []) ++ [../patches/dnsx-disable-automatic-update-check.patch];
         })
       );
+  };
+
+  yc = mkUpstreamBinaries {
+    name = "yc";
+    version = "1.25.0";
+    synopsis = "Manage Yandex Cloud resources";
+    sources = {
+      x86_64-linux = {
+        url = "https://storage.yandexcloud.net/yandexcloud-yc/release/1.25.0/linux/amd64/yc";
+        hash = "sha256-7lnoJM4gILuuAMA/do65obg6bqqMsaIW4sgsmMBqWLg=";
+      };
+      aarch64-linux = {
+        url = "https://storage.yandexcloud.net/yandexcloud-yc/release/1.25.0/linux/arm64/yc";
+        hash = "sha256-2z6qThMXOoN15EaheESrq/xHD49/F5Q401U8oRDwW+k=";
+        buildSystem = "x86_64-linux";
+      };
+      aarch64-darwin = {
+        url = "https://storage.yandexcloud.net/yandexcloud-yc/release/1.25.0/darwin/arm64/yc";
+        hash = "sha256-1hwZh8b9FnYjhryJ/XrFUBm1F4SJVLERwLfCSVJvfZI=";
+        buildSystem = "x86_64-linux";
+      };
+    };
   };
 
   masscan = mkNixpkgsBinary {
