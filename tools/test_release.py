@@ -25,41 +25,38 @@ class DownloadTableTests(unittest.TestCase):
         source = "# AXE\n\n## Downloads\n\nNo verified release.\n\n## What's inside\n\nUseful tools.\n"
         assets = {}
         records = {}
-        for target, name in release.TARGETS.items():
-            digest = hashlib.sha256(target.encode()).digest()
-            assets[name] = digest.hex()
-            records[target] = {
-                "version": "0.2.0",
-                "url": f"https://example.org/axe/releases/v0.2.0/{target}/axe",
-                "hash": "sha256-" + base64.b64encode(digest).decode(),
-            }
-
-        for name in release.RELAY:
-            assets[name] = hashlib.sha256(name.encode()).hexdigest()
+        for binary in release.BINARIES:
+            records[binary] = {}
+            for target in release.TARGETS:
+                name = release.asset_name(binary, target)
+                digest = hashlib.sha256(name.encode()).digest()
+                assets[name] = digest.hex()
+                records[binary][target] = {
+                    "version": "0.2.0",
+                    "url": f"https://example.org/axe/releases/v0.2.0/{target}/{binary}",
+                    "stable_url": f"https://example.org/axe/stable/{target}/{binary}",
+                    "hash": "sha256-" + base64.b64encode(digest).decode(),
+                }
 
         result = release.render_downloads(source, "v0.2.0", records, assets)
-        for target, name in release.TARGETS.items():
-            self.assertIn(f"/v0.2.0/{target}/axe", result)
-            self.assertIn(f"/v0.2.0/{name}", result)
-            self.assertIn(assets[name], result)
-
-        for name in release.RELAY:
-            self.assertIn(f"/v0.2.0/{name}", result)
-            self.assertIn(assets[name], result)
+        for binary in release.BINARIES:
+            for target in release.TARGETS:
+                name = release.asset_name(binary, target)
+                self.assertIn(f"/releases/v0.2.0/{target}/{binary}", result)
+                self.assertIn(f"/v0.2.0/{name}", result)
+                self.assertIn(assets[name], result)
 
         self.assertIn("## What's inside\n\nUseful tools.", result)
         self.assertEqual(result, release.render_downloads(result, "v0.2.0", records, assets))
 
-        original_hash = records["x86_64-linux"]["hash"]
-        records["x86_64-linux"]["hash"] = "sha256-" + base64.b64encode(bytes(32)).decode()
-
+        original_hash = records["vzik"]["x86_64-linux"]["hash"]
+        records["vzik"]["x86_64-linux"]["hash"] = "sha256-" + base64.b64encode(bytes(32)).decode()
         with self.assertRaisesRegex(release.ReleaseError, "does not match GitHub asset"):
             release.render_downloads(source, "v0.2.0", records, assets)
 
-        records["x86_64-linux"]["hash"] = original_hash
-        records["x86_64-linux"]["url"] = records["x86_64-linux"]["url"].replace("/v0.2.0/", "/v0.1.0/")
-
-        with self.assertRaisesRegex(release.ReleaseError, "unexpected immutable release URL"):
+        records["vzik"]["x86_64-linux"]["hash"] = original_hash
+        records["axe-relay"]["aarch64-linux"]["url"] = records["axe-relay"]["aarch64-linux"]["url"].replace("/v0.2.0/", "/v0.1.0/")
+        with self.assertRaisesRegex(release.ReleaseError, "unexpected release URL"):
             release.render_downloads(source, "v0.2.0", records, assets)
 
 

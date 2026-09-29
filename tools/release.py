@@ -20,15 +20,20 @@ from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = {
-    "x86_64-linux": "axe-x86_64-unknown-linux-musl",
-    "aarch64-linux": "axe-aarch64-unknown-linux-musl",
-    "aarch64-darwin": "axe-aarch64-apple-darwin",
+    "x86_64-linux": "x86_64-unknown-linux-musl",
+    "aarch64-linux": "aarch64-unknown-linux-musl",
+    "aarch64-darwin": "aarch64-apple-darwin",
 }
-RELAY = (
-    "axe-relay-x86_64-unknown-linux-musl",
-    "axe-relay-aarch64-unknown-linux-musl",
-    "axe-relay-aarch64-apple-darwin",
-)
+BINARIES = ("axe", "axe-relay", "vzik")
+
+
+def asset_name(binary: str, target: str) -> str:
+    return f"{binary}-{TARGETS[target]}"
+
+
+def metadata_name(binary: str) -> str:
+    return f"{binary}-releases.json"
+
 VERSION = re.compile(r"\d+\.\d+\.\d+\Z")
 
 
@@ -210,45 +215,53 @@ def prepare(bump: str) -> None:
 
 def release_cli(edition: Path, stage: Path, phase: str, directory: Path | None) -> None:
     producer = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() / "debug" / "axe-store"
-    command = [str(producer), "--config", str(edition / "config" / "store.json"), "release", "--input", str(stage), "--metadata", str(stage / "axe-releases.json"), f"--{phase}-only"]
-    for target in TARGETS:
-        command.extend(("--target", target))
-    if directory is not None:
-        command.extend(("--backend", "directory", "--directory", str(directory)))
-    run(*command, cwd=edition)
+    for binary in BINARIES:
+        command = [str(producer), "--config", str(edition / "config" / "store.json"), "release",
+                   "--binary", binary, "--input", str(stage), "--metadata", str(stage / metadata_name(binary)),
+                   f"--{phase}-only"]
+        for target in TARGETS:
+            command.extend(("--target", target))
+        if directory is not None:
+            command.extend(("--backend", "directory", "--directory", str(directory)))
+        run(*command, cwd=edition)
+
+
+def release_records(stage: Path) -> dict:
+    records = {binary: json.loads((stage / metadata_name(binary)).read_text()) for binary in BINARIES}
+    if any(set(items) != set(TARGETS) for items in records.values()):
+        raise ReleaseError("release metadata does not contain all binaries and targets")
+    return records
 
 
 def verify_public_objects(stage: Path, *, stable: bool = False) -> None:
-    records = json.loads((stage / "axe-releases.json").read_text())
-    if set(records) != set(TARGETS):
-        raise ReleaseError("release metadata does not contain all targets")
+    for binary, items in release_records(stage).items():
+        for target, record in items.items():
+            name = asset_name(binary, target)
+            expected = sha256(stage / name)
+            url = record["stable_url"] if stable else record["url"]
+            if not url.startswith("https://"):
+                raise ReleaseError(f"release URL is not HTTPS: {name}")
+            digest = hashlib.sha256()
 
-    for target, record in records.items():
-        expected = sha256(stage / TARGETS[target])
-        url = record["stable_url"] if stable else record["url"]
-        if not url.startswith("https://"):
-            raise ReleaseError(f"release URL is not HTTPS: {target}")
-        digest = hashlib.sha256()
+            with urlopen(url, timeout=60) as response:
+                if response.status != 200 or response.geturl() != url:
+                    raise ReleaseError(f"release object unreadable at expected URL: {url}")
+                remaining = (stage / name).stat().st_size
+                while remaining:
+                    block = response.read(min(1024 * 1024, remaining))
+                    if not block:
+                        raise ReleaseError(f"truncated release object: {name}")
+                    digest.update(block)
+                    remaining -= len(block)
+                if response.read(1):
+                    raise ReleaseError(f"oversized release object: {name}")
 
-        with urlopen(url, timeout=60) as response:
-            if response.status != 200 or response.geturl() != url:
-                raise ReleaseError(f"release object unreadable at expected URL: {url}")
-            remaining = (stage / TARGETS[target]).stat().st_size
-            while remaining:
-                block = response.read(min(1024 * 1024, remaining))
-                if not block:
-                    raise ReleaseError(f"truncated release object: {target}")
-                digest.update(block)
-                remaining -= len(block)
-            if response.read(1):
-                raise ReleaseError(f"oversized release object: {target}")
-
-        if digest.hexdigest() != expected:
-            raise ReleaseError(f"public release object differs from staged asset: {target}")
+            if digest.hexdigest() != expected:
+                raise ReleaseError(f"public release object differs from staged asset: {name}")
 
 
 def render_downloads(readme: str, tag: str, records: dict, assets: dict) -> str:
-    if set(records) != set(TARGETS):
+    if set(records) != set(BINARIES) or any(set(items) != set(TARGETS) for items in records.values()):
         raise ReleaseError("cannot update README from incomplete release metadata")
     github = f"https://github.com/buglloc/axe/releases/download/{tag}"
 
@@ -261,21 +274,21 @@ def render_downloads(readme: str, tag: str, records: dict, assets: dict) -> str:
         "| --- | --- | --- |",
     ]
 
-    for target, name in TARGETS.items():
-        record = records[target]
-        if (
-            record["version"] != tag[1:]
-            or not record["url"].startswith("https://")
-            or f"/releases/{tag}/{target}/axe" not in record["url"]
-        ):
-            raise ReleaseError(f"unexpected immutable release URL or version for {target}")
-        digest = base64.b64decode(record["hash"].removeprefix("sha256-"), validate=True).hex()
-        if record["hash"] != "sha256-" + base64.b64encode(bytes.fromhex(assets[name])).decode() or digest != assets[name]:
-            raise ReleaseError(f"metadata hash does not match GitHub asset: {target}")
-        lines.append(f"| axe {target} | [GitHub]({github}/{name}) · [S3]({record['url']}) | `{digest}` |")
-
-    for target, name in zip(TARGETS, RELAY, strict=True):
-        lines.append(f"| axe-relay {target} | [GitHub]({github}/{name}) | `{assets[name]}` |")
+    for binary in BINARIES:
+        for target in TARGETS:
+            name = asset_name(binary, target)
+            record = records[binary][target]
+            if (
+                record["version"] != tag[1:]
+                or not record["url"].startswith("https://")
+                or not record["url"].endswith(f"/releases/{tag}/{target}/{binary}")
+                or not record["stable_url"].endswith(f"/stable/{target}/{binary}")
+            ):
+                raise ReleaseError(f"unexpected release URL or version for {name}")
+            digest = base64.b64decode(record["hash"].removeprefix("sha256-"), validate=True).hex()
+            if record["hash"] != "sha256-" + base64.b64encode(bytes.fromhex(assets[name])).decode() or digest != assets[name]:
+                raise ReleaseError(f"metadata hash does not match GitHub asset: {name}")
+            lines.append(f"| {binary} {target} | [GitHub]({github}/{name}) · [S3]({record['url']}) | `{digest}` |")
     section = "\n".join(lines) + "\n\n"
 
     marker = "## Downloads\n"
@@ -334,6 +347,9 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
             or manifest["notes"] != hashlib.sha256(notes.encode()).hexdigest()
         ):
             raise ReleaseError("staged release inputs changed; do not reuse or move an existing tag")
+        expected_assets = {asset_name(binary, target) for binary in BINARIES for target in TARGETS}
+        if not expected_assets.issubset(manifest["assets"]):
+            raise ReleaseError("staged release does not contain every binary and target")
         for name, digest in manifest["assets"].items():
             if sha256(stage / name) != digest:
                 raise ReleaseError(f"staged release asset changed: {name}")
@@ -348,6 +364,7 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
         ("just", "smoke"),
         ("just", "build-all"),
         ("just", "build-relay-all"),
+        ("just", "build-vzik-all"),
         ("cargo", "build", "--locked", "-p", "axe-store"),
     )
     for command in checks:
@@ -355,7 +372,7 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
 
     if sha256(index) != snapshot:
         raise ReleaseError("Store bootstrap changed during build")
-    native = out / TARGETS["x86_64-linux"]
+    native = out / asset_name("axe", "x86_64-linux")
     output = run(str(native), "--version", capture=True)
     if f"axe {version}+{commit[:12]} (edition oss;" not in output:
         raise ReleaseError(f"built binary has wrong version, source commit or edition: {output}")
@@ -364,14 +381,14 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
     with tempfile.TemporaryDirectory(prefix=".release-stage-", dir=stage.parent) as temporary:
         pending = Path(temporary)
         assets = {}
-        for name in (*TARGETS.values(), *RELAY):
+        for name in (asset_name(binary, target) for binary in BINARIES for target in TARGETS):
             source = out / name
             if not source.is_file():
                 raise ReleaseError(f"missing built asset: {source}")
             shutil.copy2(source, pending / name)
             assets[name] = sha256(pending / name)
 
-        run("just", "_web-inventory", str(pending / TARGETS["x86_64-linux"]), str(pending / "registry.json"))
+        run("just", "_web-inventory", str(pending / asset_name("axe", "x86_64-linux")), str(pending / "registry.json"))
         assets["registry.json"] = sha256(pending / "registry.json")
 
         atomic_write(pending / "notes.md", notes)
@@ -441,7 +458,7 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
         raise ReleaseError("GitHub release body differs from reviewed notes")
 
     release_cli(edition, stage, "immutable", None)
-    records = json.loads((stage / "axe-releases.json").read_text())
+    records = release_records(stage)
     assets = json.loads((stage / "manifest.json").read_text())["assets"]
     baseline = subprocess.run(("git", "show", "HEAD:README.md"), cwd=ROOT, check=True, capture_output=True, text=True).stdout
     readme = render_downloads(baseline, tag, records, assets)
@@ -464,9 +481,9 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
     verify_public_objects(stage, stable=True)
 
     data = (stage / "axe-releases.json").read_text()
-    records = json.loads(data)
-    if set(records) != set(TARGETS) or any(item["version"] != version for item in records.values()):
-        raise ReleaseError("release metadata missing a target or has mismatched versions")
+    records = release_records(stage)
+    if any(item["version"] != version for items in records.values() for item in items.values()):
+        raise ReleaseError("release metadata has mismatched versions")
 
     atomic_write(edition / "nix" / "axe-releases.json", data)
     changelog = ROOT / "web" / "content" / "changelog.md"

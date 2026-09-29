@@ -133,6 +133,18 @@ build-relay-darwin-arm64:
 
 build-relay-all: build-relay-linux-amd64 build-relay-linux-arm64 build-relay-darwin-arm64
 
+build-vzik-linux-amd64:
+    just _build-rust vzik x86_64-unknown-linux-musl
+
+build-vzik-linux-arm64:
+    just _build-rust vzik aarch64-unknown-linux-musl
+
+build-vzik-darwin-arm64:
+    just _build-rust vzik aarch64-apple-darwin
+
+build-vzik-all: build-vzik-linux-amd64 build-vzik-linux-arm64 build-vzik-darwin-arm64
+
+
 
 
 # Local release preparation never publishes or creates a tag. Review and commit its output.

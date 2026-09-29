@@ -106,6 +106,8 @@ struct ReleaseArgs {
     input: PathBuf,
     #[arg(long, default_value = "nix/axe-releases.json")]
     metadata: PathBuf,
+    #[arg(long, value_enum, default_value = "axe")]
+    binary: ReleaseBinary,
     #[arg(long)]
     target: Vec<Target>,
     #[arg(long, value_enum, default_value = "s3")]
@@ -134,6 +136,23 @@ struct SyncArgs {
 enum BackendArg {
     S3,
     Directory,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ReleaseBinary {
+    Axe,
+    AxeRelay,
+    Vzik,
+}
+
+impl ReleaseBinary {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Axe => "axe",
+            Self::AxeRelay => "axe-relay",
+            Self::Vzik => "vzik",
+        }
+    }
 }
 
 impl From<BackendArg> for Backend {
@@ -216,6 +235,7 @@ fn run(cli: Cli) -> Result<(), String> {
             let published = release(&ReleaseOptions {
                 workspace: &workspace,
                 input: &args.input,
+                binary: args.binary.as_str(),
                 metadata: &args.metadata,
                 targets,
                 backend: args.backend.into(),
@@ -229,7 +249,10 @@ fn run(cli: Cli) -> Result<(), String> {
                     ReleasePhase::All
                 },
             })?;
-            println!("published {published} Axe release artifacts");
+            println!(
+                "published {published} {} release artifacts",
+                args.binary.as_str()
+            );
         }
         Command::Sync(args) => {
             run_build(&workspace, &args.build)?;
