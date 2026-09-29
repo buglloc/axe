@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,9 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use vzik::environment::Failure;
 
-use sha2::{Digest, Sha256};
-
-static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
+static NEXT_LINK: AtomicU64 = AtomicU64::new(0);
 static BRIDGE_OBSERVATION: OnceLock<Result<BridgeState, Failure>> = OnceLock::new();
 
 #[derive(Clone, Debug)]
@@ -22,8 +22,7 @@ pub(crate) enum BridgeState {
     Disabled,
 }
 
-const LOCK_STALE_AFTER: Duration = Duration::from_secs(120);
-const MAX_GENERATIONS: usize = 2;
+const BRIDGE_DIRECTORY_NAME: &str = ".axe-bridge";
 
 pub(crate) fn install(
     names: &[String],
@@ -31,11 +30,10 @@ pub(crate) fn install(
     runtime_root: Result<&Path, Failure>,
 ) -> io::Result<Option<PathBuf>> {
     let reusable = executable.and_then(reusable_bridge);
-    let result = install_impl(names, executable, runtime_root);
+    let reused = reusable.is_some();
+    let result = install_impl(names, executable, runtime_root, reusable);
     let observation = match &result {
-        Ok(Some(path)) if reusable.as_deref() == Some(path) => {
-            Ok(BridgeState::Reused(path.clone()))
-        }
+        Ok(Some(path)) if reused => Ok(BridgeState::Reused(path.clone())),
         Ok(Some(path)) => Ok(BridgeState::Published(path.clone())),
         Ok(None) => Ok(BridgeState::Disabled),
         Err(error) => Err(Failure::from_io("install AXE PATH bridge", error)),
@@ -52,18 +50,18 @@ fn install_impl(
     names: &[String],
     executable: Option<&Path>,
     runtime_root: Result<&Path, Failure>,
+    reusable: Option<PathBuf>,
 ) -> io::Result<Option<PathBuf>> {
-    let reusable = executable.and_then(reusable_bridge);
     clear_environment()?;
 
     let Some(executable) = executable else {
         return Ok(None);
     };
-    validate_names(names)?;
     if let Some(bin) = reusable {
         prepend_path(&bin)?;
         return Ok(Some(bin));
     }
+    validate_names(names)?;
 
     let root = runtime_root.map_err(|failure| {
         io::Error::other(format!("{}: {}", failure.operation, failure.message))
@@ -71,13 +69,9 @@ fn install_impl(
     install_at_root(root, names, executable).map(Some)
 }
 
-/// Publish a fresh bridge generation for a long-lived server process and
-/// prepend it to `PATH` for the server's children.
-///
-/// Unlike [`install`] this never reuses an existing generation: the
-/// `executable` is expected to reference the live server process (for example
-/// `/proc/<pid>/exe`), so every server start must republish under its own
-/// process reference.
+/// Publish the server's executable path and prepend its bridge to `PATH`.
+/// A new server must replace a previous `/proc/<pid>/exe` target even if both
+/// processes run the same executable image.
 pub(crate) fn publish_server_bridge(
     root: &Path,
     names: &[String],
@@ -85,25 +79,24 @@ pub(crate) fn publish_server_bridge(
 ) -> io::Result<PathBuf> {
     clear_environment()?;
     validate_names(names)?;
-    let base = root.join(format!(".axe-{}", registry_pin(names)));
+    let base = root.join(BRIDGE_DIRECTORY_NAME);
     ensure_private_directory(&base)?;
     let _lock = acquire_lock(&base.join(".lock"))?;
-    let bin = publish_generation(&base, names, executable)?;
+    let bin = publish_bridge(&base, names, executable)?;
     prepend_path(&bin)?;
     Ok(bin)
 }
 
 fn install_at_root(root: &Path, names: &[String], executable: &Path) -> io::Result<PathBuf> {
-    let base = root.join(format!(".axe-{}", registry_pin(names)));
+    let base = root.join(BRIDGE_DIRECTORY_NAME);
     ensure_private_directory(&base)?;
     let _lock = acquire_lock(&base.join(".lock"))?;
 
-    if let Some(bin) = valid_current_bin(&base, names, executable)? {
-        prepend_path(&bin)?;
-        return Ok(bin);
-    }
-
-    let bin = publish_generation(&base, names, executable)?;
+    let bin = if bridge_matches(&base, names, executable)? {
+        base.join("bin")
+    } else {
+        publish_bridge(&base, names, executable)?
+    };
     prepend_path(&bin)?;
     Ok(bin)
 }
@@ -111,9 +104,9 @@ fn install_at_root(root: &Path, names: &[String], executable: &Path) -> io::Resu
 /// Reuse a bridge published by a trusted parent process (the sshd applet or an
 /// outer shell) that exported `AXE_APPLET_DIR`.
 ///
-/// A generation is written atomically with a single symlink target, so
-/// confirming that its `axe` entry resolves to the running executable is
-/// enough to trust the whole directory without revalidating every entry.
+/// The private bridge contains one `axe` symlink and applet links to it.
+/// Checking `axe` against the running image allows trusted children to reuse
+/// a bridge without touching the filesystem.
 fn reusable_bridge(executable: &Path) -> Option<PathBuf> {
     let directory = std::env::var_os("AXE_APPLET_DIR");
     reusable_bridge_from(directory.as_deref(), executable)
@@ -122,6 +115,9 @@ fn reusable_bridge(executable: &Path) -> Option<PathBuf> {
 fn reusable_bridge_from(directory: Option<&OsStr>, executable: &Path) -> Option<PathBuf> {
     let directory = directory.filter(|directory| !directory.is_empty())?;
     let bin = PathBuf::from(directory);
+    if bin.file_name()? != "bin" || bin.parent()?.file_name()? != BRIDGE_DIRECTORY_NAME {
+        return None;
+    }
     let metadata = fs::symlink_metadata(&bin).ok()?;
     if !metadata.is_dir() {
         return None;
@@ -140,25 +136,6 @@ pub(crate) fn same_inode(left: &Path, right: &Path) -> bool {
         (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
         (Err(_), _) | (_, Err(_)) => false,
     }
-}
-
-fn registry_pin(names: &[String]) -> String {
-    use std::fmt::Write as _;
-
-    let mut hash = Sha256::new();
-    for name in names {
-        hash.update((name.len() as u64).to_le_bytes());
-        hash.update(name.as_bytes());
-    }
-    let digest = hash.finalize();
-    // 16 hex characters (64 bits) keep registry pins collision-free for any
-    // realistic set of coexisting builds; a collision only causes generations
-    // of two registries to republish over each other, never a wrong exec.
-    let mut encoded = String::with_capacity(16);
-    for byte in &digest[..8] {
-        write!(encoded, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    encoded
 }
 
 fn validate_names(names: &[String]) -> io::Result<()> {
@@ -212,21 +189,24 @@ pub(crate) fn ensure_private_directory(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn acquire_lock(path: &Path) -> io::Result<LockGuard> {
+fn acquire_lock(path: &Path) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)?;
     for _ in 0..200 {
-        match OpenOptions::new().write(true).create_new(true).open(path) {
-            Ok(file) => {
-                file.sync_all()?;
-                return Ok(LockGuard(path.to_owned()));
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                if lock_stale(path) {
-                    let _ = fs::remove_file(path);
-                } else {
-                    thread::sleep(Duration::from_millis(10));
-                }
-            }
-            Err(error) => return Err(error),
+        // SAFETY: file owns a live descriptor and flock does not access Rust memory.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(file);
+        }
+        let error = io::Error::last_os_error();
+        match error.kind() {
+            io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(10)),
+            io::ErrorKind::Interrupted => continue,
+            _ => return Err(error),
         }
     }
     Err(io::Error::new(
@@ -235,52 +215,9 @@ fn acquire_lock(path: &Path) -> io::Result<LockGuard> {
     ))
 }
 
-fn lock_stale(path: &Path) -> bool {
-    fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .and_then(|modified| {
-            SystemTime::now()
-                .duration_since(modified)
-                .map_err(io::Error::other)
-        })
-        .is_ok_and(|age| age > LOCK_STALE_AFTER)
-}
-
-fn valid_current_bin(
-    base: &Path,
-    names: &[String],
-    executable: &Path,
-) -> io::Result<Option<PathBuf>> {
-    let target = match fs::read_link(base.join("current")) {
-        Ok(target) => target,
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
-            ) =>
-        {
-            return Ok(None);
-        }
-        Err(error) => return Err(error),
-    };
-    let mut components = target.components();
-    if components.next() != Some(Component::Normal(OsStr::new("generations")))
-        || !matches!(components.next(), Some(Component::Normal(_)))
-        || components.next().is_some()
-    {
-        return Ok(None);
-    }
-
-    let bin = base.join(target).join("bin");
-    if generation_matches(&bin, names, executable)? {
-        Ok(Some(base.join("current/bin")))
-    } else {
-        Ok(None)
-    }
-}
-
-fn generation_matches(bin: &Path, names: &[String], executable: &Path) -> io::Result<bool> {
-    let metadata = match fs::symlink_metadata(bin) {
+fn bridge_matches(base: &Path, names: &[String], executable: &Path) -> io::Result<bool> {
+    let bin = base.join("bin");
+    let metadata = match fs::symlink_metadata(&bin) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error),
@@ -289,114 +226,88 @@ fn generation_matches(bin: &Path, names: &[String], executable: &Path) -> io::Re
         return Ok(false);
     }
 
+    let axe = bin.join("axe");
+    let target = match fs::read_link(&axe) {
+        Ok(target) => target,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    if !same_inode(&target, executable) {
+        return Ok(false);
+    }
+
     let mut expected = HashSet::with_capacity(names.len() + 1);
     expected.insert("axe");
     expected.extend(names.iter().map(String::as_str));
-    // One generation publishes every entry with the same symlink target; that
-    // target is validated by inode so `/proc/<pid>/exe` references published
-    // by a server are recognized while the process is alive.
-    let mut target: Option<PathBuf> = None;
-    for entry in fs::read_dir(bin)? {
+    for entry in fs::read_dir(&bin)? {
         let entry = entry?;
         let file_name = entry.file_name();
         let Some(name) = file_name.to_str() else {
             return Ok(false);
         };
-        if !expected.remove(name) {
+        if !expected.remove(name)
+            || !entry.file_type()?.is_symlink()
+            || (name != "axe" && fs::read_link(entry.path())? != axe)
+        {
             return Ok(false);
-        }
-        let metadata = fs::symlink_metadata(entry.path())?;
-        if !metadata.file_type().is_symlink() {
-            return Ok(false);
-        }
-        let link = fs::read_link(entry.path())?;
-        match &target {
-            None => {
-                if !same_inode(&link, executable) {
-                    return Ok(false);
-                }
-                target = Some(link);
-            }
-            Some(target) if *target != link => return Ok(false),
-            _ => {}
         }
     }
     Ok(expected.is_empty())
 }
 
-fn publish_generation(base: &Path, names: &[String], executable: &Path) -> io::Result<PathBuf> {
-    use std::os::unix::fs::{PermissionsExt as _, symlink};
+fn publish_bridge(base: &Path, names: &[String], executable: &Path) -> io::Result<PathBuf> {
+    let bin = base.join("bin");
+    ensure_private_directory(&bin)?;
+    let axe = bin.join("axe");
+    let expected: HashSet<&str> = names.iter().map(String::as_str).collect();
 
-    let generations = base.join("generations");
-    ensure_private_directory(&generations)?;
-
-    let suffix = generation_suffix();
-    let staging = generations.join(format!(".tmp-{suffix}"));
-    let generation_name = format!("g-{suffix}");
-    let generation = generations.join(&generation_name);
-    fs::create_dir(&staging)?;
-    let result = (|| {
-        fs::set_permissions(&staging, fs::Permissions::from_mode(0o700))?;
-        let bin = staging.join("bin");
-        fs::create_dir(&bin)?;
-        fs::set_permissions(&bin, fs::Permissions::from_mode(0o700))?;
-
-        symlink(executable, bin.join("axe"))?;
-        for name in names {
-            if name != "axe" {
-                symlink(executable, bin.join(name))?;
+    for name in names {
+        if name == "axe" {
+            continue;
+        }
+        let path = bin.join(name);
+        if fs::read_link(&path).ok().as_deref() != Some(axe.as_path()) {
+            if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_dir()) {
+                fs::remove_dir_all(&path)?;
             }
+            publish_link(&axe, &path)?;
         }
-
-        sync_directory(&bin)?;
-        sync_directory(&staging)?;
-        fs::rename(&staging, &generation)?;
-        sync_directory(&generations)?;
-
-        let current = base.join("current");
-        if fs::symlink_metadata(&current).is_ok_and(|metadata| metadata.is_dir()) {
-            fs::remove_dir_all(&current)?;
-        }
-        let target = Path::new("generations").join(&generation_name);
-        let next = base.join(format!(".current-{suffix}"));
-        symlink(target, &next)?;
-        fs::rename(&next, &current)?;
-        sync_directory(base)?;
-        prune_generations(&generations, &generation_name)?;
-        Ok(base.join("current/bin"))
-    })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&staging);
     }
-    result
-}
-
-fn prune_generations(generations: &Path, current: &str) -> io::Result<()> {
-    let mut obsolete = Vec::new();
-    for entry in fs::read_dir(generations)? {
+    if fs::read_link(&axe).ok().as_deref() != Some(executable) {
+        if fs::symlink_metadata(&axe).is_ok_and(|metadata| metadata.is_dir()) {
+            fs::remove_dir_all(&axe)?;
+        }
+        publish_link(executable, &axe)?;
+    }
+    for entry in fs::read_dir(&bin)? {
         let entry = entry?;
         let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if name.starts_with(".tmp-") {
+        if name != "axe" && !name.to_str().is_some_and(|name| expected.contains(name)) {
             remove_path(&entry.path())?;
-            continue;
         }
-        if !name.starts_with("g-") || name == current {
-            continue;
-        }
-        let modified = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .unwrap_or(UNIX_EPOCH);
-        obsolete.push((modified, entry.path()));
     }
-    obsolete.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.0));
-    for (_, path) in obsolete.into_iter().skip(MAX_GENERATIONS.saturating_sub(1)) {
-        remove_path(&path)?;
+    sync_directory(&bin)?;
+    Ok(bin)
+}
+
+fn publish_link(target: &Path, path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let parent = path.parent().expect("bridge link has parent");
+    let next = parent.join(format!(".axe-link-{}", link_suffix()));
+    symlink(target, &next)?;
+    let result = fs::rename(&next, path);
+    if result.is_err() {
+        let _ = fs::remove_file(&next);
     }
-    sync_directory(generations)
+    result
 }
 
 fn remove_path(path: &Path) -> io::Result<()> {
@@ -408,8 +319,8 @@ fn remove_path(path: &Path) -> io::Result<()> {
     }
 }
 
-fn generation_suffix() -> String {
-    let nonce = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
+fn link_suffix() -> String {
+    let nonce = NEXT_LINK.fetch_add(1, Ordering::Relaxed);
     let time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
@@ -468,14 +379,6 @@ fn path_with_front(bin: &Path, current: Option<&OsStr>) -> io::Result<OsString> 
     std::env::join_paths(paths).map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
 
-struct LockGuard(PathBuf);
-
-impl Drop for LockGuard {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,35 +401,34 @@ mod tests {
     }
 
     #[test]
-    fn proc_exe_generation_is_reused_by_inode() {
+    fn proc_exe_bridge_is_reused_by_inode() {
         let root = scratch("proc-reuse");
-        let base = root.join(".axe-test");
+        let base = root.join(BRIDGE_DIRECTORY_NAME);
 
         ensure_private_directory(&base).expect("create bridge base");
-        let bin = publish_generation(&base, &names(), Path::new("/proc/self/exe"))
-            .expect("publish /proc/self/exe generation");
+        let bin = publish_bridge(&base, &names(), Path::new("/proc/self/exe"))
+            .expect("publish /proc/self/exe bridge");
         assert_eq!(
             fs::read_link(bin.join("axe")).expect("read axe symlink"),
             Path::new("/proc/self/exe")
         );
 
-        // A shell resolving its own canonical executable reuses the server
-        // generation because both reference the same inode.
+        // A shell resolving its canonical executable can reuse a live server
+        // target because both references point to the same inode.
         let shell_executable = std::env::current_exe()
             .expect("locate test executable")
             .canonicalize()
             .expect("canonicalize test executable");
-        let reused = valid_current_bin(&base, &names(), &shell_executable)
-            .expect("validate current generation");
-        assert_eq!(reused, Some(base.join("current/bin")));
+        assert!(
+            bridge_matches(&base, &names(), &shell_executable).expect("validate server bridge")
+        );
 
-        // A different binary must not reuse the generation.
+        // A different binary cannot reuse the bridge.
         let foreign = root.join("foreign");
         fs::write(&foreign, b"not the same executable").expect("write foreign file");
-        assert_eq!(
-            valid_current_bin(&base, &names(), &foreign)
-                .expect("validate against foreign executable"),
-            None
+        assert!(
+            !bridge_matches(&base, &names(), &foreign)
+                .expect("validate against foreign executable")
         );
 
         fs::remove_dir_all(&root).expect("clean scratch directory");
@@ -535,19 +437,17 @@ mod tests {
     #[test]
     fn dangling_proc_reference_fails_validation() {
         let root = scratch("dangling");
-        let base = root.join(".axe-test");
+        let base = root.join(BRIDGE_DIRECTORY_NAME);
         ensure_private_directory(&base).expect("create bridge base");
         let shell_executable = std::env::current_exe()
             .expect("locate test executable")
             .canonicalize()
             .expect("canonicalize test executable");
 
-        publish_generation(&base, &names(), Path::new("/proc/99999999/exe"))
-            .expect("publish generation for a dead process");
-        assert_eq!(
-            valid_current_bin(&base, &names(), &shell_executable)
-                .expect("validate dangling generation"),
-            None
+        publish_bridge(&base, &names(), Path::new("/proc/99999999/exe"))
+            .expect("publish bridge for a dead process");
+        assert!(
+            !bridge_matches(&base, &names(), &shell_executable).expect("validate dangling bridge")
         );
 
         fs::remove_dir_all(&root).expect("clean scratch directory");
@@ -556,10 +456,10 @@ mod tests {
     #[test]
     fn marker_reuse_requires_running_executable() {
         let root = scratch("marker");
-        let base = root.join(".axe-test");
+        let base = root.join(BRIDGE_DIRECTORY_NAME);
         ensure_private_directory(&base).expect("create bridge base");
-        let bin = publish_generation(&base, &names(), Path::new("/proc/self/exe"))
-            .expect("publish generation");
+        let bin =
+            publish_bridge(&base, &names(), Path::new("/proc/self/exe")).expect("publish bridge");
 
         let marker = bin.clone().into_os_string();
         let shell_executable = std::env::current_exe()
@@ -575,21 +475,29 @@ mod tests {
         fs::write(&foreign, b"not the same executable").expect("write foreign file");
         assert_eq!(reusable_bridge_from(Some(&marker), &foreign), None);
 
+        let legacy = root.join(".axe-0123456789abcdef");
+        ensure_private_directory(&legacy).expect("create old bridge base");
+        let old_bin = publish_bridge(&legacy, &names(), Path::new("/proc/self/exe"))
+            .expect("publish old bridge");
+        assert_eq!(
+            reusable_bridge_from(Some(old_bin.as_os_str()), &shell_executable),
+            None
+        );
+
         fs::remove_dir_all(&root).expect("clean scratch directory");
     }
 
     #[test]
     fn canonical_filesystem_target_is_published_verbatim() {
         let root = scratch("filesystem-target");
-        let base = root.join(".axe-test");
+        let base = root.join(BRIDGE_DIRECTORY_NAME);
         let executable = std::env::current_exe()
             .expect("locate test executable")
             .canonicalize()
             .expect("canonicalize test executable");
 
         ensure_private_directory(&base).expect("create bridge base");
-        let bin = publish_generation(&base, &names(), &executable)
-            .expect("publish filesystem generation");
+        let bin = publish_bridge(&base, &names(), &executable).expect("publish filesystem bridge");
 
         assert_eq!(
             fs::read_link(bin.join("axe")).expect("read axe symlink"),
@@ -599,35 +507,143 @@ mod tests {
     }
 
     #[test]
-    fn publication_bounds_generation_retention() {
-        let root = scratch("generation-retention");
-        let base = root.join(".axe-test");
+    fn republishing_switches_the_executable_and_removes_stale_applets() {
+        use std::os::unix::fs::{MetadataExt as _, symlink};
+
+        let root = scratch("republish");
+        let base = root.join(BRIDGE_DIRECTORY_NAME);
+        let original = std::env::current_exe().expect("locate test executable");
+        ensure_private_directory(&base).expect("create bridge base");
+        let bin = publish_bridge(&base, &names(), &original).expect("publish first bridge");
+        let applet = bin.join("ls");
+        assert_eq!(
+            fs::read_link(&applet).expect("read applet link"),
+            bin.join("axe")
+        );
+
+        let abandoned = bin.join(".axe-link-abandoned");
+        symlink(&original, &abandoned).expect("create interrupted publication");
+        let replacement = root.join("replacement");
+        fs::write(&replacement, b"replacement executable").expect("write replacement image");
+        let new_names = vec![String::from("ls"), String::from("cat")];
+        publish_bridge(&base, &new_names, &replacement).expect("replace bridge");
+
+        assert_eq!(
+            fs::metadata(&applet).expect("resolve applet").ino(),
+            fs::metadata(&replacement).expect("read replacement").ino()
+        );
+        assert!(!bin.join("grep").exists(), "obsolete applet survived");
+        assert!(bin.join("cat").exists(), "new applet was not published");
+        assert!(!abandoned.exists(), "abandoned link survived");
+        assert!(bridge_matches(&base, &new_names, &replacement).expect("validate replacement"));
+        fs::remove_dir_all(root).expect("clean scratch directory");
+    }
+
+    #[test]
+    fn failed_publish_preserves_existing_path_commands() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let root = scratch("failed-publish");
+        let base = root.join(BRIDGE_DIRECTORY_NAME);
+        let executable = std::env::current_exe().expect("locate test executable");
+        ensure_private_directory(&base).expect("create bridge base");
+        let bin = publish_bridge(&base, &names(), &executable).expect("publish first bridge");
+        let invalid_name = "x".repeat(4096);
+        let replacement = vec![String::from("ls"), String::from("cat"), invalid_name];
+
+        assert!(
+            publish_bridge(&base, &replacement, &executable).is_err(),
+            "overlong applet name unexpectedly published"
+        );
+        let old_command = fs::metadata(bin.join("grep")).expect("existing command remains usable");
+        let original = fs::metadata(&executable).expect("read executable");
+        assert_eq!(
+            (old_command.dev(), old_command.ino()),
+            (original.dev(), original.ino())
+        );
+        fs::remove_dir_all(root).expect("clean scratch directory");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stale_timestamp_cannot_steal_an_active_bridge_lock() {
+        let root = scratch("active-lock");
+        let base = root.join(BRIDGE_DIRECTORY_NAME);
+        let executable = std::env::current_exe().expect("locate test executable");
+        ensure_private_directory(&base).expect("create bridge base");
+        publish_bridge(&base, &names(), &executable).expect("publish first bridge");
+        let lock_path = base.join(".lock");
+        let first = acquire_lock(&lock_path).expect("lock published bridge");
+        let old_time = SystemTime::now() - Duration::from_secs(3600);
+        File::open(&lock_path)
+            .expect("open active lock")
+            .set_times(fs::FileTimes::new().set_modified(old_time))
+            .expect("age active lock");
+
+        let replacement = vec![String::from("ls"), String::from("cat")];
+        let error = install_at_root(&root, &replacement, &executable)
+            .expect_err("second publisher must not acquire active lock");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(bridge_matches(&base, &names(), &executable).expect("verify original commands"));
+        drop(first);
+        install_at_root(&root, &replacement, &executable)
+            .expect("released lock permits next publisher");
+        assert!(bridge_matches(&base, &replacement, &executable).expect("verify replacement"));
+        fs::remove_dir_all(root).expect("clean scratch directory");
+    }
+
+    #[test]
+    fn concurrent_publishers_leave_one_complete_inventory() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let root = scratch("concurrent-publishers");
+        let base = root.join(BRIDGE_DIRECTORY_NAME);
         let executable = std::env::current_exe()
             .expect("locate test executable")
             .canonicalize()
             .expect("canonicalize test executable");
-
         ensure_private_directory(&base).expect("create bridge base");
-        for _ in 0..5 {
-            publish_generation(&base, &names(), &executable).expect("publish generation");
-        }
-        let generations = base.join("generations");
-        fs::create_dir(generations.join(".tmp-abandoned")).expect("create abandoned staging");
-        publish_generation(&base, &names(), &executable).expect("publish after abandoned staging");
-        let retained = fs::read_dir(&generations)
-            .expect("read generations")
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().starts_with("g-"))
-            .count();
 
-        assert_eq!(retained, MAX_GENERATIONS);
-        assert!(!generations.join(".tmp-abandoned").exists());
+        let barrier = std::sync::Barrier::new(2);
+        thread::scope(|scope| {
+            for extra in ["grep", "cat"] {
+                let base = &base;
+                let executable = &executable;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    let names = vec![String::from("ls"), extra.to_owned()];
+                    barrier.wait();
+                    let _lock = acquire_lock(&base.join(".lock")).expect("lock bridge");
+                    if !bridge_matches(base, &names, executable).expect("validate bridge") {
+                        publish_bridge(base, &names, executable).expect("publish bridge");
+                    }
+                });
+            }
+        });
+
+        let bin = base.join("bin");
+        let mut entries = fs::read_dir(&bin)
+            .expect("read bridge")
+            .map(|entry| {
+                entry
+                    .expect("read bridge entry")
+                    .file_name()
+                    .into_string()
+                    .expect("UTF-8 applet name")
+            })
+            .collect::<Vec<_>>();
+        entries.sort();
         assert!(
-            valid_current_bin(&base, &names(), &executable)
-                .expect("validate retained generation")
-                .is_some()
+            entries == ["axe", "cat", "ls"] || entries == ["axe", "grep", "ls"],
+            "bridge contains a partial inventory: {entries:?}"
         );
-        fs::remove_dir_all(&root).expect("clean scratch directory");
+        let applet = fs::metadata(bin.join("ls")).expect("resolve applet");
+        let executable = fs::metadata(&executable).expect("read executable");
+        assert_eq!(
+            (applet.dev(), applet.ino()),
+            (executable.dev(), executable.ino())
+        );
+        fs::remove_dir_all(root).expect("clean scratch directory");
     }
 
     #[test]

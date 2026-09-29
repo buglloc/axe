@@ -1284,7 +1284,7 @@ fn applet_path_bridge_is_inherited_and_repairs_stale_state() {
             PathBuf::from(std::env::var_os("AXE_APPLET_DIR").expect("AXE_APPLET_DIR is published"));
         let target =
             fs::read_link(applet_dir.join("commands")).expect("read live applet bridge target");
-        assert_eq!(target, shell);
+        assert_eq!(target, applet_dir.join("axe"));
         let target_metadata = fs::metadata(target).expect("applet bridge target resolves");
         assert_eq!(
             (target_metadata.dev(), target_metadata.ino()),
@@ -1330,18 +1330,12 @@ fn applet_path_bridge_is_inherited_and_repairs_stale_state() {
         String::from_utf8_lossy(&first.stderr)
     );
 
-    let bridge = fs::read_dir(scratch.path())
-        .expect("read work directory")
-        .map(|entry| entry.expect("read work directory entry").path())
-        .find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(".axe-"))
-                && path.is_dir()
-        })
-        .expect("find generated applet bridge");
-    let generation = fs::read_link(bridge.join("current")).expect("read current generation");
-    let applet = bridge.join(generation).join("bin/commands");
+    let bridge = scratch.path().join(".axe-bridge");
+    assert!(
+        bridge.is_dir(),
+        "AXE did not publish the shared applet bridge"
+    );
+    let applet = bridge.join("bin/commands");
     fs::remove_file(&applet).expect("remove generated applet link");
     symlink("/nonexistent", &applet).expect("corrupt generated applet link");
 
@@ -1351,14 +1345,17 @@ fn applet_path_bridge_is_inherited_and_repairs_stale_state() {
         "stderr: {}",
         String::from_utf8_lossy(&second.stderr)
     );
-    let generation = fs::read_link(bridge.join("current")).expect("read repaired generation");
-    let target = fs::read_link(bridge.join(generation).join("bin/commands"))
-        .expect("read repaired applet link");
+    let target = fs::read_link(bridge.join("bin/commands")).expect("read repaired applet link");
+    let axe_link = bridge
+        .canonicalize()
+        .expect("canonicalize bridge")
+        .join("bin/axe");
+    assert_eq!(target, axe_link);
     assert_eq!(
-        target,
-        PathBuf::from(env!("CARGO_BIN_EXE_axe"))
-            .canonicalize()
-            .expect("canonicalize AXE executable")
+        fs::metadata(target).expect("resolve repaired applet").ino(),
+        fs::metadata(env!("CARGO_BIN_EXE_axe"))
+            .expect("read AXE executable")
+            .ino()
     );
 }
 
@@ -1589,11 +1586,15 @@ fn no_proc_uses_filesystem_reexec_and_cleans_unusable_bridge() {
             assert!(shell.exists(), "published shell path must exist");
             assert_eq!(paths.first(), Some(&bridge));
             assert_eq!(paths.iter().filter(|path| *path == &bridge).count(), 1);
-            for name in ["axe", "sort", "xargs"] {
-                let target =
-                    fs::read_link(bridge.join(name)).expect("read filesystem bridge symlink");
-                assert_eq!(target, shell);
-                assert!(!target.starts_with("/proc"));
+            let target =
+                fs::read_link(bridge.join("axe")).expect("read filesystem bridge executable");
+            assert_eq!(target, shell);
+            assert!(!target.starts_with("/proc"));
+            for name in ["sort", "xargs"] {
+                assert_eq!(
+                    fs::read_link(bridge.join(name)).expect("read applet link"),
+                    bridge.join("axe")
+                );
             }
         }
         return;
@@ -1855,19 +1856,9 @@ fn no_proc_uses_filesystem_reexec_and_cleans_unusable_bridge() {
             "stdout: {}",
             String::from_utf8_lossy(&sshd.stdout)
         );
-        let bridge = fs::read_dir(&ssh_work)
-            .expect("read SSH work directory")
-            .map(|entry| entry.expect("read SSH bridge entry").path())
-            .find(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with(".axe-"))
-                    && path.is_dir()
-                    && fs::symlink_metadata(path.join("current/bin/axe")).is_ok()
-            })
-            .expect("find SSH applet bridge");
-        let target = fs::read_link(bridge.join("current/bin/axe"))
-            .expect("read SSH filesystem bridge target");
+        let bridge = ssh_work.join(".axe-bridge/bin");
+        assert!(bridge.is_dir(), "SSH applet bridge was not published");
+        let target = fs::read_link(bridge.join("axe")).expect("read SSH filesystem bridge target");
         assert!(target.exists(), "SSH bridge target must exist");
         assert_ne!(target, axe);
         assert!(
@@ -2401,8 +2392,8 @@ fn sshd_starts_without_writable_storage() {
         .expect("read restored workdir")
         .filter_map(|entry| {
             let entry = entry.expect("read workdir entry");
-            let valid_bridge = entry.file_name().to_string_lossy().starts_with(".axe-")
-                && entry.path().join("current/bin").is_dir();
+            let valid_bridge =
+                entry.file_name() == ".axe-bridge" && entry.path().join("bin").is_dir();
             (!valid_bridge).then(|| entry.path().display().to_string())
         })
         .collect();
@@ -2491,16 +2482,9 @@ fn sshd_publishes_selected_path_bridge_reused_by_shells() {
         thread::sleep(Duration::from_millis(10));
     }
 
-    let base = fs::read_dir(scratch.path())
-        .expect("read sshd workdir")
-        .filter_map(|entry| entry.ok())
-        .find(|entry| {
-            entry.file_name().to_string_lossy().starts_with(".axe-")
-                && entry.file_name() != ".axe-store"
-        })
-        .expect("sshd published an applet bridge")
-        .path();
-    let bin = base.join("current/bin");
+    let base = scratch.path().join(".axe-bridge");
+    assert!(base.is_dir(), "sshd did not publish the applet bridge");
+    let bin = base.join("bin");
     assert_eq!(
         fs::read_link(bin.join("axe")).expect("read bridge axe symlink"),
         PathBuf::from(env!("CARGO_BIN_EXE_axe"))
@@ -2517,15 +2501,7 @@ fn sshd_publishes_selected_path_bridge_reused_by_shells() {
         "disabled Store initialized SSH storage"
     );
 
-    let count_generations = || {
-        fs::read_dir(base.join("generations"))
-            .expect("read bridge generations")
-            .count()
-    };
-    assert_eq!(count_generations(), 1, "sshd published one generation");
-
-    // A shell started with the bridge marker must reuse it: PATH is prepended
-    // and no second generation is published.
+    // A shell started with the bridge marker reuses it and prepends its path.
     let output = Command::new(env!("CARGO_BIN_EXE_axe"))
         .env_clear()
         .env("HOME", scratch.path())
@@ -2550,11 +2526,6 @@ fn sshd_publishes_selected_path_bridge_reused_by_shells() {
     assert!(
         path.starts_with(&*bin_string),
         "PATH {path} does not start with {bin_string}"
-    );
-    assert_eq!(
-        count_generations(),
-        1,
-        "shell with marker must not republish the bridge"
     );
 
     // BusyBox-style dispatch with a bare argv[0] resolves through the bridge

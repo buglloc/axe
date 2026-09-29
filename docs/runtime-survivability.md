@@ -7,6 +7,10 @@ AXE has two execution paths:
 
 Entry dispatch runs without access to the executable. Most bundled applets launched from Brush use the applet shim to start a child AXE process. The native `doctor` callback runs in the shell process and reads a snapshot of live shell state. Builtins, aliases, and functions remain available when self-exec is unavailable.
 
+The PATH bridge uses `<runtime-root>/.axe-bridge/bin`. Applet links resolve through one `bin/axe` symlink; replacing that symlink atomically changes the executable for all applets. A lock serializes publishers and reconciles added or removed command names, but inventory changes are not atomic as a group. Sessions sharing a runtime root also share the bridge: the last publisher determines what later path-based launches see. Use separate `AXE_WORK_DIR` roots when sessions must keep separate bridges. Previously generated `.axe-<hash>` directories are not used by new sessions and can be removed after older AXE processes have exited.
+
+The `.axe-bridge/.lock` file persists. The kernel releases its lock when a publisher exits; removing the file while AXE runs can admit simultaneous publishers. AXE adds new applet links before removing obsolete ones, so a failed addition leaves existing commands available.
+
 When starting a new process, AXE preserves:
 
 - the applet's original `argv[0]`;

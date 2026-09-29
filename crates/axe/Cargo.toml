@@ -37,7 +37,6 @@ sed-rs = { version = "2.0.0" }
 similar.workspace = true
 tar.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 serde.workspace = true
 uucore = { version = "=0.12.0" }
 uu_chgrp = { version = "=0.12.0" }
