@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -15,6 +15,57 @@ impl Drop for Relay {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+struct TestDirectory(PathBuf);
+
+impl TestDirectory {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!("axe-relay-monitor-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&path).expect("create isolated test directory");
+        Self(path)
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn write_config(
+    dir: &TestDirectory,
+    api: u16,
+    tcp: u16,
+    quic: u16,
+    public: u16,
+    token_file: &Path,
+) -> PathBuf {
+    let keys = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../keys/relay");
+    let config = dir.path("relay.json");
+    std::fs::write(
+        &config,
+        serde_json::to_vec(&serde_json::json!({
+            "http": format!("127.0.0.1:{api}"),
+            "tcp_control": format!("127.0.0.1:{tcp}"),
+            "quic_control": format!("127.0.0.1:{quic}"),
+            "public_bind": "127.0.0.1",
+            "public_host": "relay.example.test",
+            "min_port": public,
+            "max_port": public,
+            "token_file": token_file,
+            "quic_key": keys.join("quic_server_key.pem"),
+            "quic_server_cert": keys.join("quic_server_cert.pem"),
+            "quic_client_cert": keys.join("quic_client_cert.pem"),
+        }))
+        .unwrap(),
+    )
+    .expect("write relay config");
+    config
 }
 
 fn available_tcp_port() -> u16 {
@@ -96,7 +147,7 @@ fn await_status(api: u16, count: usize) -> Value {
 
 #[test]
 fn monitoring_tracks_real_tcp_registration_and_disconnect() {
-    let keys = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../keys/relay");
+    let dir = TestDirectory::new();
     let api = available_tcp_port();
     let tcp = available_tcp_port();
     let public = available_tcp_port();
@@ -106,31 +157,11 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
         .unwrap()
         .port();
     let token = "0123456789abcdef0123456789abcdef";
+    let token_file = dir.path("token");
+    std::fs::write(&token_file, token).expect("write token without final newline");
+    let config = write_config(&dir, api, tcp, quic, public, &token_file);
     let child = Command::new(env!("CARGO_BIN_EXE_axe-relay"))
-        .args([
-            "--http",
-            &format!("127.0.0.1:{api}"),
-            "--tcp-control",
-            &format!("127.0.0.1:{tcp}"),
-            "--quic-control",
-            &format!("127.0.0.1:{quic}"),
-            "--public-bind",
-            "127.0.0.1",
-            "--public-host",
-            "relay.example.test",
-            "--min-port",
-            &public.to_string(),
-            "--max-port",
-            &public.to_string(),
-            "--token",
-            token,
-            "--quic-key",
-            &keys.join("quic_server_key.pem").to_string_lossy(),
-            "--quic-server-cert",
-            &keys.join("quic_server_cert.pem").to_string_lossy(),
-            "--quic-client-cert",
-            &keys.join("quic_client_cert.pem").to_string_lossy(),
-        ])
+        .args(["--config", config.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -386,6 +417,106 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
         relay.0.wait().unwrap().success(),
         "relay should exit cleanly on SIGTERM"
     );
+}
+
+#[test]
+fn token_file_override_authenticates_tcp_registration_with_crlf() {
+    let dir = TestDirectory::new();
+    let api = available_tcp_port();
+    let tcp = available_tcp_port();
+    let public = available_tcp_port();
+    let quic = UdpSocket::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let config_token_file = dir.path("configured-token");
+    std::fs::write(&config_token_file, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+    let override_file = dir.path("override-token");
+    let token = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    std::fs::write(&override_file, format!("{token}\r\n")).unwrap();
+    let config = write_config(&dir, api, tcp, quic, public, &config_token_file);
+    let relay = Command::new(env!("CARGO_BIN_EXE_axe-relay"))
+        .arg("--config")
+        .arg(&config)
+        .arg("--token")
+        .arg(&override_file)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start relay with overridden token file");
+    let _relay = Relay(relay);
+    await_status(api, 0);
+
+    let mut control = TcpStream::connect(("127.0.0.1", tcp)).unwrap();
+    control
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut frame = Vec::new();
+    ciborium::into_writer(
+        &serde_json::json!({"version": 2, "token": token, "client_id": "overridden"}),
+        &mut frame,
+    )
+    .unwrap();
+    control
+        .write_all(&(frame.len() as u32).to_be_bytes())
+        .unwrap();
+    control.write_all(&frame).unwrap();
+    let mut length = [0u8; 4];
+    control.read_exact(&mut length).unwrap();
+    let mut body = vec![0; u32::from_be_bytes(length) as usize];
+    control.read_exact(&mut body).unwrap();
+    let response: Value = ciborium::from_reader(body.as_slice()).unwrap();
+    assert_eq!(response["status"], "accepted");
+    assert_eq!(
+        response["public_address"],
+        format!("relay.example.test:{public}")
+    );
+    assert_eq!(
+        await_status(api, 1)["clients"][0]["client_id"],
+        "overridden"
+    );
+}
+
+#[test]
+fn config_rejects_invalid_token_files_and_unknown_fields() {
+    let dir = TestDirectory::new();
+    let token_file = dir.path("token");
+    std::fs::write(&token_file, "short-token").unwrap();
+    let config = write_config(&dir, 7000, 6999, 11000, 3000, &token_file);
+    let relay = env!("CARGO_BIN_EXE_axe-relay");
+
+    let missing_token = dir.path("missing-token");
+    let output = Command::new(relay)
+        .arg("--config")
+        .arg(&config)
+        .arg("--token")
+        .arg(&missing_token)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&missing_token.display().to_string()));
+
+    let output = Command::new(relay)
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains(&token_file.display().to_string()), "{error}");
+    assert!(!error.contains("short-token"), "{error}");
+
+    let mut document: Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    document["unexpected"] = Value::Bool(true);
+    std::fs::write(&config, serde_json::to_vec(&document).unwrap()).unwrap();
+    let output = Command::new(relay)
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected"));
 }
 
 #[test]

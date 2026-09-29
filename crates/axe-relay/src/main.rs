@@ -2,9 +2,10 @@ mod http;
 mod monitor;
 mod server;
 
-use std::io::{self, Write};
+use std::fs::File;
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -27,28 +28,26 @@ struct Options {
     api: String,
     #[arg(long, env = "AXE_RELAY_API_TOKEN", global = true)]
     api_token: Option<String>,
-    #[arg(long, default_value = "[::]:6999")]
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
+    #[arg(long, value_name = "FILE")]
+    token: Option<PathBuf>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServerConfig {
     tcp_control: String,
-    #[arg(long, default_value = "[::]:11000")]
     quic_control: String,
-    #[arg(long, env = "AXE_RELAY_QUIC_KEY", value_name = "FILE")]
-    quic_key: Option<PathBuf>,
-    #[arg(long, env = "AXE_RELAY_QUIC_SERVER_CERT_FILE", value_name = "FILE")]
-    quic_server_cert: Option<PathBuf>,
-    #[arg(long, env = "AXE_RELAY_QUIC_CLIENT_CERT_FILE", value_name = "FILE")]
-    quic_client_cert: Option<PathBuf>,
-    #[arg(long, default_value = "0.0.0.0")]
+    quic_key: PathBuf,
+    quic_server_cert: PathBuf,
+    quic_client_cert: PathBuf,
     public_bind: IpAddr,
-    #[arg(long)]
-    public_host: Option<String>,
-    #[arg(long, default_value_t = 3000)]
+    public_host: String,
     min_port: u16,
-    #[arg(long, default_value_t = 4000)]
     max_port: u16,
-    #[arg(long, env = "AXE_RELAY_TOKEN")]
-    token: Option<String>,
-    #[arg(long, default_value = "127.0.0.1:7000")]
     http: SocketAddr,
+    token_file: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -353,68 +352,85 @@ fn wait_for(
     }
 }
 
+fn read_token(path: &Path) -> Result<String, String> {
+    const MAX_TOKEN_BYTES: u64 = 4096;
+    let file =
+        File::open(path).map_err(|error| format!("open token file {}: {error}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_TOKEN_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read token file {}: {error}", path.display()))?;
+    if bytes.len() as u64 > MAX_TOKEN_BYTES {
+        return Err(format!(
+            "token file {} exceeds {MAX_TOKEN_BYTES} bytes",
+            path.display()
+        ));
+    }
+    if bytes.ends_with(b"\r\n") {
+        bytes.truncate(bytes.len() - 2);
+    } else if bytes.ends_with(b"\n") || bytes.ends_with(b"\r") {
+        bytes.pop();
+    }
+    if bytes.len() < 32 {
+        return Err(format!(
+            "token file {} must contain at least 32 bytes",
+            path.display()
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| format!("token file {} must contain UTF-8 text", path.display()))
+}
+
 fn start(options: Options) -> Result<(), String> {
-    if !options.http.ip().is_loopback() {
+    let config_path = options.config.ok_or("server requires --config FILE")?;
+    let config_file = File::open(&config_path)
+        .map_err(|error| format!("open relay config {}: {error}", config_path.display()))?;
+    let config: ServerConfig = serde_json::from_reader(config_file)
+        .map_err(|error| format!("parse relay config {}: {error}", config_path.display()))?;
+
+    if !config.http.ip().is_loopback() {
         return Err("dashboard/API must bind to a loopback address; use an authenticated reverse proxy for remote access".into());
     }
-    if options.min_port == 0 || options.min_port > options.max_port {
+    if config.min_port == 0 || config.min_port > config.max_port {
         return Err("invalid public port range".into());
     }
 
-    let token = options
-        .token
-        .ok_or("set AXE_RELAY_TOKEN or --token (at least 32 bytes)")?;
-    if token.len() < 32 {
-        return Err("relay token must contain at least 32 bytes".into());
-    }
-
-    let public_host = options
-        .public_host
-        .ok_or("set --public-host to the address or DNS name reachable by SSH users")?;
-    let public_host = match public_host.parse::<std::net::IpAddr>() {
+    let token = read_token(options.token.as_deref().unwrap_or(&config.token_file))?;
+    let public_host = match config.public_host.parse::<std::net::IpAddr>() {
         Ok(address) => address.to_string(),
-        Err(_) => match url::Host::parse(&public_host) {
+        Err(_) => match url::Host::parse(&config.public_host) {
             Ok(url::Host::Domain(domain)) => domain,
             Ok(url::Host::Ipv6(address)) => address.to_string(),
             _ => {
-                return Err(
-                    "--public-host must be an IP address or DNS name without a port".into(),
-                );
+                return Err("public_host must be an IP address or DNS name without a port".into());
             }
         },
     };
 
     let server_options = server::ServerOptions {
-        tcp_control: options.tcp_control,
-        quic_control: options.quic_control,
-        quic_key: options
-            .quic_key
-            .ok_or("set AXE_RELAY_QUIC_KEY or --quic-key")?,
-        quic_server_cert: options
-            .quic_server_cert
-            .ok_or("set AXE_RELAY_QUIC_SERVER_CERT_FILE or --quic-server-cert")?,
-        quic_client_cert: options
-            .quic_client_cert
-            .ok_or("set AXE_RELAY_QUIC_CLIENT_CERT_FILE or --quic-client-cert")?,
-        public_bind: options.public_bind,
+        tcp_control: config.tcp_control,
+        quic_control: config.quic_control,
+        quic_key: config.quic_key,
+        quic_server_cert: config.quic_server_cert,
+        quic_client_cert: config.quic_client_cert,
+        public_bind: config.public_bind,
         public_host,
-        min_port: options.min_port,
-        max_port: options.max_port,
+        min_port: config.min_port,
+        max_port: config.max_port,
         token,
     };
-
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| format!("create runtime: {error}"))?;
 
     runtime.block_on(async move {
-        let listener = tokio::net::TcpListener::bind(options.http).await
-            .map_err(|error| format!("bind dashboard {}: {error}", options.http))?;
+        let listener = tokio::net::TcpListener::bind(config.http).await
+            .map_err(|error| format!("bind dashboard {}: {error}", config.http))?;
         let monitor = Arc::new(Monitor::new());
         let dashboard = axum::serve(listener, http::router(Arc::clone(&monitor)))
             .with_graceful_shutdown(async { let _ = shutdown_signal().await; });
-        println!("relay: dashboard/API http://{}", options.http);
+        println!("relay: dashboard/API http://{}", config.http);
         tokio::select! {
             result = server::run(server_options, monitor, shutdown_signal()) => result.map_err(|error| error.to_string()),
             result = dashboard => result.map_err(|error| format!("dashboard: {error}")),

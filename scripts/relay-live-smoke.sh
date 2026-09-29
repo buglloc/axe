@@ -9,7 +9,7 @@ axe=$1
 relay=$2
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 keys="${AXE_EDITION_ROOT:-$root}/keys/relay"
-scratch=$(mktemp -d)
+scratch=$(umask 077; mktemp -d)
 relay_pid=
 sshd_pid=
 daemon_pid=
@@ -22,8 +22,10 @@ cleanup() {
     if [[ -n "$sshd_pid" ]]; then kill "$sshd_pid" 2>/dev/null || :; wait "$sshd_pid" 2>/dev/null || :; fi
     if [[ -n "$relay_pid" ]]; then kill "$relay_pid" 2>/dev/null || :; wait "$relay_pid" 2>/dev/null || :; fi
     if ((result != 0)); then
-        echo 'relay logs:' >&2
-        cat "$scratch/relay.log" >&2
+        if [[ -f "$scratch/relay.log" ]]; then
+            echo 'relay logs:' >&2
+            cat "$scratch/relay.log" >&2
+        fi
         for log in "$scratch"/sshd-*.log; do
             if [[ -f "$log" ]]; then echo "$log:" >&2; cat "$log" >&2; fi
         done
@@ -89,16 +91,29 @@ PY
 )
 read -r api_port tcp_port quic_port ssh_port public_port <<< "$ports"
 token=0123456789abcdef0123456789abcdef
-AXE_RELAY_TOKEN="$token" "$relay" \
-    --http "127.0.0.1:$api_port" \
-    --tcp-control "127.0.0.1:$tcp_port" \
-    --quic-control "127.0.0.1:$quic_port" \
-    --public-bind 127.0.0.1 --public-host 127.0.0.1 \
-    --min-port "$public_port" --max-port "$public_port" \
-    --quic-key "$keys/quic_server_key.pem" \
-    --quic-server-cert "$keys/quic_server_cert.pem" \
-    --quic-client-cert "$keys/quic_client_cert.pem" \
-    >"$scratch/relay.log" 2>&1 &
+printf '%s' "$token" >"$scratch/token"
+python3 - "$scratch/config.json" "$scratch/token" "$keys" "$api_port" "$tcp_port" "$quic_port" "$public_port" <<'PY'
+import json
+import pathlib
+import sys
+
+config_path, token_file, keys, api_port, tcp_port, quic_port, public_port = sys.argv[1:]
+config = {
+    "tcp_control": f"127.0.0.1:{tcp_port}",
+    "quic_control": f"127.0.0.1:{quic_port}",
+    "quic_key": str(pathlib.Path(keys) / "quic_server_key.pem"),
+    "quic_server_cert": str(pathlib.Path(keys) / "quic_server_cert.pem"),
+    "quic_client_cert": str(pathlib.Path(keys) / "quic_client_cert.pem"),
+    "public_bind": "127.0.0.1",
+    "public_host": "127.0.0.1",
+    "min_port": int(public_port),
+    "max_port": int(public_port),
+    "http": f"127.0.0.1:{api_port}",
+    "token_file": token_file,
+}
+pathlib.Path(config_path).write_text(json.dumps(config) + "\n")
+PY
+"$relay" --config "$scratch/config.json" >"$scratch/relay.log" 2>&1 &
 relay_pid=$!
 api="http://127.0.0.1:$api_port"
 ready=0
