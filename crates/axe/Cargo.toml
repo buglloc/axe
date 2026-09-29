@@ -124,7 +124,7 @@ testcontainers = "0.28"
 [build-dependencies]
 axe-artifact.workspace = true
 ed25519-dalek.workspace = true
-ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["std"] }
+ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["std", "ecdsa"] }
 serde.workspace = true
 serde_json.workspace = true
 rustls-pemfile.workspace = true

@@ -2133,6 +2133,7 @@ mod tests {
             store_mode,
             "axe-user",
             Arc::from([String::from("axe-user")]),
+            None,
         )
         .await
     }
@@ -2144,6 +2145,7 @@ mod tests {
         store_mode: crate::registry::StoreMode,
         principal: &str,
         principals: Arc<[String]>,
+        keys: Option<(PrivateKey, PrivateKey)>,
     ) -> (
         russh::client::Handle<TestClient>,
         tokio::sync::mpsc::UnboundedReceiver<ForwardedChannel>,
@@ -2151,10 +2153,11 @@ mod tests {
     ) {
         use std::time::{SystemTime, UNIX_EPOCH};
 
-        let ca_key = PrivateKey::from_openssh(crate::embedded::INPUTS.ssh_host_key)
-            .expect("parse test CA key");
-        let user_key = PrivateKey::from_openssh(crate::embedded::INPUTS.ssh_host_key)
-            .expect("parse test user key");
+        let (ca_key, user_key) = keys.unwrap_or_else(|| {
+            let key = PrivateKey::from_openssh(crate::embedded::INPUTS.ssh_host_key)
+                .expect("parse test SSH key");
+            (key.clone(), key)
+        });
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock is after epoch")
@@ -2230,6 +2233,15 @@ mod tests {
         )
         .await
         .expect("connect SSH client");
+        let plain = client
+            .authenticate_publickey(
+                principal,
+                russh::keys::PrivateKeyWithHashAlg::new(Arc::new(user_key.clone()), None),
+            )
+            .await
+            .expect("try plain SSH public key");
+        assert!(!plain.success(), "plain SSH public key authenticated");
+
         let auth = client
             .authenticate_openssh_cert(principal, Arc::new(user_key), certificate)
             .await
@@ -2254,10 +2266,39 @@ mod tests {
             crate::registry::StoreMode::Auto,
             PRINCIPAL,
             principals,
+            None,
         )
         .await;
 
         close_test_connection(client, server).await;
+    }
+
+    #[tokio::test]
+    async fn ecdsa_user_certificates_authenticate() {
+        let mut rng = russh::keys::key::safe_rng();
+        for curve in [
+            ssh_key::EcdsaCurve::NistP256,
+            ssh_key::EcdsaCurve::NistP384,
+            ssh_key::EcdsaCurve::NistP521,
+        ] {
+            let algorithm = ssh_key::Algorithm::Ecdsa { curve };
+            let ca_key =
+                PrivateKey::random(&mut rng, algorithm.clone()).expect("generate ECDSA CA");
+            let user_key =
+                PrivateKey::random(&mut rng, algorithm).expect("generate ECDSA user key");
+            let (client, _, server) = test_connection_as(
+                PathBuf::from("."),
+                None,
+                None,
+                crate::registry::StoreMode::Off,
+                "axe-user",
+                Arc::from([String::from("axe-user")]),
+                Some((ca_key, user_key)),
+            )
+            .await;
+
+            close_test_connection(client, server).await;
+        }
     }
 
     async fn close_test_connection(
