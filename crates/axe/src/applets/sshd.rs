@@ -1424,6 +1424,10 @@ impl SshServer {
         {
             let mut channels = self.channels.lock().await;
             let state = channels.entry(channel).or_default();
+            // russh also queues every data packet for this Channel before calling
+            // Handler::data. The shell reads through the handler, so leaving the
+            // unused receiver alive would block the connection once its queue fills.
+            drop(state.unclaimed.take());
             state.input = Some(Arc::new(Mutex::new(spawned.input)));
             state.child = Some(cancel);
             #[cfg(unix)]
@@ -2383,6 +2387,65 @@ mod tests {
 
         close_test_connection(client, server).await;
         std::fs::remove_dir_all(directory).expect("remove PTY test directory");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pty_shell_keeps_accepting_input_past_channel_buffer() {
+        let directory = std::env::temp_dir().join(format!("axe-sshd-input-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir(&directory).expect("create PTY input test directory");
+        let source = directory.join("input-fixture.c");
+        let executable = directory.join("input-fixture");
+        std::fs::write(
+            &source,
+            b"#include <stdio.h>\n#include <termios.h>\n#include <unistd.h>\nint main(void) {\n struct termios mode;\n if (tcgetattr(0, &mode) < 0) return 2;\n cfmakeraw(&mode);\n if (tcsetattr(0, TCSANOW, &mode) < 0) return 3;\n for (int i = 0; i < 128; i++) {\n  char ch;\n  if (read(0, &ch, 1) != 1 || ch != 'x') return 4;\n }\n puts(\"INPUT_OK\");\n return 0;\n}\n",
+        )
+        .expect("write PTY input fixture source");
+        let compiled = std::process::Command::new("cc")
+            .arg("-Os")
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .status()
+            .expect("compile PTY input fixture");
+        assert!(compiled.success(), "compile PTY input fixture");
+
+        let (client, _, server) = test_connection(directory.clone(), None, Some(executable)).await;
+        let mut channel = client
+            .channel_open_session()
+            .await
+            .expect("open PTY session channel");
+        channel
+            .request_pty(true, "xterm", 80, 24, 0, 0, &[])
+            .await
+            .expect("request PTY");
+        channel.request_shell(true).await.expect("start PTY shell");
+
+        let output = tokio::time::timeout(Duration::from_secs(5), async {
+            for _ in 0..128 {
+                channel.data(&b"x"[..]).await.expect("send one keystroke");
+            }
+
+            let mut output = Vec::new();
+            loop {
+                match channel.wait().await {
+                    Some(russh::ChannelMsg::Data { data }) => output.extend_from_slice(&data),
+                    Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                        assert_eq!(exit_status, 0);
+                        return output;
+                    }
+                    Some(_) => {}
+                    None => panic!("PTY session closed without exit status"),
+                }
+            }
+        })
+        .await
+        .expect("PTY shell stopped consuming keystrokes");
+        assert!(output.ends_with(b"INPUT_OK\n"), "PTY output: {output:?}");
+
+        close_test_connection(client, server).await;
+        std::fs::remove_dir_all(directory).expect("remove PTY input test directory");
     }
 
     #[cfg(unix)]
