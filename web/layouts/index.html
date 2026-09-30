@@ -274,7 +274,7 @@
     <div class="download-copy">
       <p class="kicker"><span>08</span> Downloads and builds</p>
       <h2 id="download-title">Get AXE before you need it.</h2>
-      <p>Download an OSS binary for your target from GitHub Releases. You can also build from source.</p>
+      <p>Download the current OSS binary from S3. Other targets are listed in GitHub Releases; you can also build from source.</p>
       <div class="target-links" aria-label="AXE releases and source">
         <a href="https://github.com/buglloc/axe/releases/latest">Latest release →</a>
         <a href="https://github.com/buglloc/axe/blob/main/README.md#downloads">Binaries and SHA-256 →</a>
@@ -283,11 +283,11 @@
       </div>
     </div>
     <div class="install-block">
-      <div class="install-block__bar"><span>build.sh</span><button type="button" data-copy-target="install-command">copy</button></div>
-      <pre id="install-command"><code>nix develop .#default
-just build-linux-amd64
-./dist/axe-x86_64-unknown-linux-musl --version</code></pre>
-      <p><span class="status"><i></i> edition: oss</span> verify the downloaded binary against SHA256SUMS before installing</p>
+      <div class="install-block__bar"><span>download.sh</span><button type="button" data-copy-target="install-command">copy</button></div>
+      <pre id="install-command"><code>curl -fL -o axe https://storage.yandexcloud.net/axe-store/axe/stable/x86_64-linux/axe
+chmod +x axe
+./axe --version</code></pre>
+      <p><span class="status"><i></i> edition: oss</span> x86_64 Linux download from S3 stable</p>
     </div>
   </section>
 </main>
