@@ -2,6 +2,17 @@
 title = "Changelog"
 +++
 
+## [v0.2.1](https://github.com/buglloc/axe/releases/tag/v0.2.1) — 2026-09-30
+
+### Highlights
+
+- AXE now uses a shared `.axe-bridge/bin` directory for bundled commands instead of publishing separate bridge generations. Applet links point to the bridge’s `axe` link. (`81d8c80e4cc2c1ba599c6628665822585c76c075`)
+
+### Fixes
+
+- Bridge publication now uses a file lock rather than deleting a lock based on its age, so an old timestamp cannot let another publisher take an active lock. (`81d8c80e4cc2c1ba599c6628665822585c76c075`)
+- When republishing, AXE updates the executable link and removes applet links no longer in the bundled inventory. (`81d8c80e4cc2c1ba599c6628665822585c76c075`)
+
 ## [v0.2.0](https://github.com/buglloc/axe/releases/tag/v0.2.0) — 2026-09-29
 
 ### Highlights
