@@ -2,6 +2,18 @@
 title = "Changelog"
 +++
 
+## [v0.3.0](https://github.com/buglloc/axe/releases/tag/v0.3.0) — 2026-10-04
+
+### Highlights
+
+- Added `gori` 0.7.1 to AXE Store for Linux x86_64 and ARM64. It provides a terminal HTTP intercepting proxy and web application testing tools (`a65ecedb33206b46c9687380086cb07f9f29b4cc`).
+- Added `interactsh-client` 1.3.1 to AXE Store for Linux x86_64, Linux ARM64, and macOS ARM64. It generates out-of-band testing payloads and collects interactions (`1b65c0e8678b8dad1f487cd5647ef6486781110e`).
+
+### Changes
+
+- The Store build of `gori` disables automatic startup update checks by default; users can opt in through its settings (`a65ecedb33206b46c9687380086cb07f9f29b4cc`).
+- The Store build of `interactsh-client` removes the startup version check (`1b65c0e8678b8dad1f487cd5647ef6486781110e`).
+
 ## [v0.2.2](https://github.com/buglloc/axe/releases/tag/v0.2.2) — 2026-10-01
 
 ### Highlights
