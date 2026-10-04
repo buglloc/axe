@@ -224,6 +224,16 @@ in {
     packageFor = gobusterPackageFor;
   };
 
+  gori = mkNixpkgsBinary {
+    name = "gori";
+    synopsis = "Intercept HTTP traffic and test web applications from the terminal";
+    systems = linuxSystems;
+    packageFor = target: targetPkgs:
+      buildPkgs.callPackage ./gori/default.nix {
+        packageSet = packageSetFor target targetPkgs;
+      };
+  };
+
   interactsh-client = mkNixpkgsBinary {
     name = "interactsh-client";
     synopsis = "Generate out-of-band testing payloads and collect interactions";

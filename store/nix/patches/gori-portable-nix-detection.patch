@@ -1,0 +1,15 @@
+diff --git a/src/gori/update/channel.cr b/src/gori/update/channel.cr
+--- a/src/gori/update/channel.cr
++++ b/src/gori/update/channel.cr
+@@ -89,7 +89,10 @@ module Gori::Update
+   NIX_STORE_SEGMENT = /(?:\A|\/)nix\/store\/[0-9a-df-np-sv-z]{32}-/
+ 
+   def self.nix_path?(path : String) : Bool
+-    path.starts_with?("/nix/store/") || NIX_STORE_SEGMENT.matches?(path.scrub)
++    # Keep the detection prefix out of runtime dependency scans, without allocating.
++    default_store = path.starts_with?("/nix/") && path.bytesize >= 11 &&
++                    path.to_slice[5, 6] == "store/".to_slice
++    default_store || NIX_STORE_SEGMENT.matches?(path.scrub)
+   end
+ 
+   # Paths where distro packages typically install the CLI (not /usr/local).

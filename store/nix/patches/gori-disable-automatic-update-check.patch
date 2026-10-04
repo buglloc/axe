@@ -1,0 +1,19 @@
+diff --git a/src/gori/settings/update.cr b/src/gori/settings/update.cr
+--- a/src/gori/settings/update.cr
++++ b/src/gori/settings/update.cr
+@@ -8,12 +8,12 @@ require "json"
+ # once per new release (the read-once marker). This is the ONLY automatic outbound
+ # call gori makes; `gori update` stays the explicit install path.
+ module Gori::Settings
+-  # check_enabled: opt-out for egress-sensitive users (default on — the maintainer
+-  #   asked for the notice). Gating it off skips the probe entirely.
++  # check_enabled: opt-in startup version check. Gating it off skips the probe
++  #   entirely.
+   # notified_version: the latest version we've already surfaced — the read-once marker.
+   # latest_seen / checked_at: a once-a-day cache (unix seconds) so we don't re-probe
+   #   GitHub on every launch; only refreshed on a successful live fetch.
+-  DEFAULT_UPDATE_CHECK_ENABLED = true
++  DEFAULT_UPDATE_CHECK_ENABLED = false
+ 
+   class_property? update_check_enabled : Bool = DEFAULT_UPDATE_CHECK_ENABLED
+   class_property update_notified_version : String = ""

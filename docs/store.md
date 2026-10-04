@@ -35,6 +35,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `getcap` | Display Linux file capabilities | `aarch64-linux`, `x86_64-linux` |
 | `getpcaps` | Display Linux process capabilities | `aarch64-linux`, `x86_64-linux` |
 | `gobuster` | Enumerate web paths, DNS names, and virtual hosts | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `gori` | Intercept HTTP traffic and test web applications from the terminal | `aarch64-linux`, `x86_64-linux` |
 | `grpcurl` | Call and inspect gRPC services | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `httpx` | Probe HTTP services and discover live targets | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `interactsh-client` | Generate out-of-band testing payloads and collect interactions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
@@ -77,6 +78,8 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 The `nuclei` package includes pinned `nuclei-templates`; no separate template download is needed on first run.
 
 The `interactsh-client` package removes automatic version checks and their machine-information telemetry. Explicit authentication, ASN lookups, and manual updates remain opt-in.
+
+The `gori` package disables startup update checks by default. Set `update.check_enabled` to `true` in its settings file to enable them.
 
 ## Adding a package
 
