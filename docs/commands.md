@@ -58,3 +58,5 @@ The applet PATH bridge is best-effort; bundled commands still resolve without it
 | Evidence | `vzik` | Bounded host/container evidence in JSONL |
 
 Linux-only commands are not registered in Darwin builds. For the bundled HTTP applet, see [HTTP requests](http.md).
+
+The bundled `ip` renders tunnel link addresses as IPv4 or IPv6 addresses, matching iproute2 in text and JSON output. Ethernet and other hardware addresses use colon-separated hexadecimal bytes.

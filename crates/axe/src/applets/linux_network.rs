@@ -6,7 +6,7 @@ use futures_util::TryStreamExt;
 use netlink_packet_route::AddressFamily;
 use netlink_packet_route::address::{AddressAttribute, AddressFlags, AddressMessage};
 use netlink_packet_route::link::{
-    LinkAttribute, LinkFlags, LinkInfo as LinkInfoAttribute, LinkMessage, Prop,
+    LinkAttribute, LinkFlags, LinkInfo as LinkInfoAttribute, LinkLayerType, LinkMessage, Prop,
 };
 use netlink_packet_route::neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourMessage};
 use netlink_packet_route::route::{RouteAddress, RouteAttribute, RouteMessage};
@@ -1295,9 +1295,15 @@ fn link_info(link: &LinkMessage) -> LinkInfo {
             LinkAttribute::OperState(value) => info.state = value.to_string().to_uppercase(),
             LinkAttribute::Mode(value) => info.mode = value.to_string(),
             LinkAttribute::Group(value) => info.group = *value,
-            LinkAttribute::Address(value) => info.address = Some(mac(value)),
-            LinkAttribute::Broadcast(value) => info.broadcast = Some(mac(value)),
-            LinkAttribute::PermAddress(value) => info.permanent_address = Some(mac(value)),
+            LinkAttribute::Address(value) => {
+                info.address = Some(link_address(value, link.header.link_layer_type))
+            }
+            LinkAttribute::Broadcast(value) => {
+                info.broadcast = Some(link_address(value, link.header.link_layer_type))
+            }
+            LinkAttribute::PermAddress(value) => {
+                info.permanent_address = Some(link_address(value, link.header.link_layer_type))
+            }
             LinkAttribute::PropList(values) => {
                 info.alternate_names
                     .extend(values.iter().filter_map(|value| match value {
@@ -1531,6 +1537,22 @@ fn route_ip(address: &RouteAddress) -> Option<IpAddr> {
     }
 }
 
+fn link_address(bytes: &[u8], link_type: LinkLayerType) -> String {
+    match (link_type, bytes) {
+        (LinkLayerType::Tunnel | LinkLayerType::Sit | LinkLayerType::Ipgre, [a, b, c, d]) => {
+            Ipv4Addr::new(*a, *b, *c, *d).to_string()
+        }
+        (LinkLayerType::Tunnel6 | LinkLayerType::Ip6gre, bytes) => {
+            if let Ok(octets) = <[u8; 16]>::try_from(bytes) {
+                Ipv6Addr::from(octets).to_string()
+            } else {
+                mac(bytes)
+            }
+        }
+        _ => mac(bytes),
+    }
+}
+
 fn mac(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -1577,6 +1599,44 @@ fn prefix_mask_v4(prefix: u8) -> Ipv4Addr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_json_formats_addresses_by_link_type_and_length() {
+        let ipv6 = "2001:db8::1".parse::<Ipv6Addr>().unwrap().octets();
+        for (link_type, bytes, expected) in [
+            (LinkLayerType::Tunnel6, vec![0; 16], "::"),
+            (LinkLayerType::Tunnel6, ipv6.to_vec(), "2001:db8::1"),
+            (LinkLayerType::Ip6gre, ipv6.to_vec(), "2001:db8::1"),
+            (LinkLayerType::Tunnel, vec![192, 0, 2, 1], "192.0.2.1"),
+            (LinkLayerType::Sit, vec![192, 0, 2, 1], "192.0.2.1"),
+            (LinkLayerType::Ipgre, vec![192, 0, 2, 1], "192.0.2.1"),
+            (
+                LinkLayerType::Ether,
+                vec![0, 1, 2, 3, 4, 5],
+                "00:01:02:03:04:05",
+            ),
+            (LinkLayerType::Loopback, vec![0; 6], "00:00:00:00:00:00"),
+            (LinkLayerType::Tunnel6, vec![0; 4], "00:00:00:00"),
+            (LinkLayerType::Tunnel, vec![0; 6], "00:00:00:00:00:00"),
+            (
+                LinkLayerType::Ether,
+                vec![0; 16],
+                "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00",
+            ),
+        ] {
+            let mut link = LinkMessage::default();
+            link.header.link_layer_type = link_type;
+            link.attributes = vec![
+                LinkAttribute::Address(bytes.clone()),
+                LinkAttribute::Broadcast(bytes.clone()),
+                LinkAttribute::PermAddress(bytes),
+            ];
+            let json = link_json(&link);
+            for field in ["address", "broadcast", "permaddr"] {
+                assert_eq!(json[field], expected, "{link_type:?} {field}");
+            }
+        }
+    }
 
     #[test]
     fn ipcalc_rejects_non_contiguous_masks() {
