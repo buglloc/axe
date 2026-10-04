@@ -93,6 +93,23 @@
         '';
     });
 
+  interactshClientPackageFor = target: targetPkgs:
+    (
+      if target == "aarch64-darwin"
+      then
+        goDarwin {
+          package = "interactsh";
+          subPackage = "./cmd/interactsh-client";
+          binary = "interactsh-client";
+        }
+      else (packageSetFor target targetPkgs).interactsh
+    ).overrideAttrs
+    (old: {
+      pname = "interactsh-client";
+      subPackages = ["cmd/interactsh-client"];
+      patches = (old.patches or []) ++ [../patches/interactsh-client-disable-update-check.patch];
+    });
+
   nucleiTemplates = buildPkgs.nuclei-templates.overrideAttrs (old: {
     installPhase =
       (old.installPhase or "")
@@ -205,6 +222,13 @@ in {
     synopsis = "Enumerate web paths, DNS names, and virtual hosts";
     systems = portableSystems;
     packageFor = gobusterPackageFor;
+  };
+
+  interactsh-client = mkNixpkgsBinary {
+    name = "interactsh-client";
+    synopsis = "Generate out-of-band testing payloads and collect interactions";
+    systems = portableSystems;
+    packageFor = interactshClientPackageFor;
   };
 
   nuclei = mkNixpkgsPackage {

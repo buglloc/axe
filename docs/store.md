@@ -37,6 +37,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `gobuster` | Enumerate web paths, DNS names, and virtual hosts | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `grpcurl` | Call and inspect gRPC services | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `httpx` | Probe HTTP services and discover live targets | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `interactsh-client` | Generate out-of-band testing payloads and collect interactions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `jq` | Process JSON | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `kubectl` | Manage Kubernetes clusters | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `lsns` | Show Linux namespaces and processes | `aarch64-linux`, `x86_64-linux` |
@@ -74,6 +75,8 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `yq` | Process YAML, JSON, and XML | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 
 The `nuclei` package includes pinned `nuclei-templates`; no separate template download is needed on first run.
+
+The `interactsh-client` package removes automatic version checks and their machine-information telemetry. Explicit authentication, ASN lookups, and manual updates remain opt-in.
 
 ## Adding a package
 

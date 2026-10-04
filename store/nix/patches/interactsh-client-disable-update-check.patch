@@ -1,0 +1,29 @@
+diff --git a/cmd/interactsh-client/main.go b/cmd/interactsh-client/main.go
+--- a/cmd/interactsh-client/main.go
++++ b/cmd/interactsh-client/main.go
+@@ -24,7 +24,6 @@ import (
+ 	"github.com/projectdiscovery/utils/env"
+ 	fileutil "github.com/projectdiscovery/utils/file"
+ 	folderutil "github.com/projectdiscovery/utils/folder"
+-	updateutils "github.com/projectdiscovery/utils/update"
+ )
+ 
+ var (
+@@ -122,17 +121,6 @@ func main() {
+ 		os.Exit(0)
+ 	}
+ 
+-	if !cliOptions.DisableUpdateCheck {
+-		latestVersion, err := updateutils.GetToolVersionCallback("interactsh-client", options.Version)()
+-		if err != nil {
+-			if cliOptions.Verbose {
+-				gologger.Error().Msgf("interactsh version check failed: %v", err.Error())
+-			}
+-		} else {
+-			gologger.Info().Msgf("Current interactsh version %v %v", options.Version, updateutils.GetVersionDescription(options.Version, latestVersion))
+-		}
+-	}
+-
+ 	if fileutil.FileExists(cliOptions.Config) {
+ 		if err := flagSet.MergeConfigFile(cliOptions.Config); err != nil {
+ 			gologger.Fatal().Msgf("Could not read config: %s\n", err)
