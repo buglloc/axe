@@ -256,6 +256,26 @@ impl PsCompatibility {
 
         false
     }
+
+    fn selects(&self, process: &PsProcess, effective_uid: u32, current_tty: i64) -> bool {
+        if !self.bsd_personality {
+            return process.tty != 0 && process.pid != process.session;
+        }
+        let selected = if self.standard_all {
+            true
+        } else if self.terminal_only {
+            current_tty != 0 && process.tty == current_tty
+        } else if self.show_all && self.include_no_tty {
+            true
+        } else if self.show_all {
+            process.tty != 0
+        } else if self.include_no_tty {
+            process.euid == effective_uid
+        } else {
+            process.euid == effective_uid && process.tty == current_tty
+        };
+        selected && (!self.running_only || process.state == b'R')
+    }
 }
 
 fn is_bsd_option_cluster(arg: &[u8]) -> bool {
@@ -278,25 +298,7 @@ fn selected_ps_pids(options: &PsCompatibility) -> String {
         .flatten()
         .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
         .filter_map(read_ps_process)
-        .filter(|process| {
-            if !options.bsd_personality {
-                return process.tty != 0 && process.pid != process.session;
-            }
-            let selected = if options.standard_all {
-                true
-            } else if options.terminal_only {
-                current_tty != 0 && process.tty == current_tty
-            } else if options.show_all && options.include_no_tty {
-                process.tty != 0 || process.euid == effective_uid
-            } else if options.show_all {
-                process.tty != 0
-            } else if options.include_no_tty {
-                process.euid == effective_uid
-            } else {
-                process.euid == effective_uid && process.tty == current_tty
-            };
-            selected && (!options.running_only || process.state == b'R')
-        })
+        .filter(|process| options.selects(process, effective_uid, current_tty))
         .map(|process| process.pid)
         .collect::<Vec<_>>();
     pids.sort_unstable();
@@ -426,5 +428,44 @@ fn parse_and_run<A: Parser>(args: Vec<OsString>, run: fn(A) -> ExitCode) -> i32 
         3
     } else {
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bsd_ps_selects_processes_by_user_and_terminal() {
+        for (flags, expected) in [
+            ("a", [false, true, false, true]),
+            ("x", [true, true, false, false]),
+            ("ax", [true, true, true, true]),
+            ("aux", [true, true, true, true]),
+            ("auxww", [true, true, true, true]),
+        ] {
+            let mut options = PsCompatibility {
+                bsd_personality: true,
+                ..Default::default()
+            };
+            options.observe_bsd_options(flags.as_bytes());
+            for ((euid, tty), selected) in [(1000, 0), (1000, 42), (0, 0), (0, 42)]
+                .into_iter()
+                .zip(expected)
+            {
+                let process = PsProcess {
+                    pid: 123,
+                    euid,
+                    state: b'S',
+                    session: 123,
+                    tty,
+                };
+                assert_eq!(
+                    options.selects(&process, 1000, 42),
+                    selected,
+                    "ps {flags}: euid={euid}, tty={tty}"
+                );
+            }
+        }
     }
 }

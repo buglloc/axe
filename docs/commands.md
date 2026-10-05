@@ -60,3 +60,5 @@ The applet PATH bridge is best-effort; bundled commands still resolve without it
 Linux-only commands are not registered in Darwin builds. For the bundled HTTP applet, see [HTTP requests](http.md).
 
 The bundled `ip` renders tunnel link addresses as IPv4 or IPv6 addresses, matching iproute2 in text and JSON output. Ethernet and other hardware addresses use colon-separated hexadecimal bytes.
+
+The bundled `ps` accepts BSD option clusters such as `aux` and `auxww`. `a` selects processes with a terminal, `x` selects the current user's processes including those without a terminal, and `ax` or `aux` selects all processes visible through `/proc`, including other users' processes without a terminal.
