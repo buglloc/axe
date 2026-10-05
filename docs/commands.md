@@ -43,7 +43,7 @@ The applet PATH bridge is best-effort; bundled commands still resolve without it
 | --- | --- | --- |
 | Shell | Brush builtins | Shell state, jobs, history, completion, and POSIX/Bash-style control flow |
 | Coreutils | `uutils/coreutils`, including `hostname` and its `dnsdomainname` alias | Basic file, text, process, and environment operations |
-| Process | `free`, `hugetop`, `pgrep`, `pidof`, `pidwait`, `pkill`, `pmap`, `ps`, `pwdx`, `skill`, `slabtop`, `snice`, `sysctl`, `tload`, `top`, `vmstat`, `w`, `watch` | Linux processes and system state |
+| Process | `free`, `hugetop`, `killall`, `pgrep`, `pidof`, `pidwait`, `pkill`, `pmap`, `ps`, `pwdx`, `skill`, `slabtop`, `snice`, `sysctl`, `tload`, `top`, `vmstat`, `w`, `watch` | Linux processes and system state |
 | System | `dmesg`, `hexdump`, `last`, `mountpoint` | Kernel log, hex dumps, login history, and mount points |
 | Text | `awk`, `grep`, `egrep`, `fgrep`, `rgrep`, `sed`, `find`, `xargs`, `diff`, `cmp`, `diff3` | Search, transform, and compare data |
 | Data | `jq` | JSON queries and transformations |
@@ -62,3 +62,9 @@ Linux-only commands are not registered in Darwin builds. For the bundled HTTP ap
 The bundled `ip` renders tunnel link addresses as IPv4 or IPv6 addresses, matching iproute2 in text and JSON output. Ethernet and other hardware addresses use colon-separated hexadecimal bytes.
 
 The bundled `ps` accepts BSD option clusters such as `aux` and `auxww`. `a` selects processes with a terminal, `x` selects the current user's processes including those without a terminal, and `ax` or `aux` selects all processes visible through `/proc`, including other users' processes without a terminal.
+
+`ps -a` selects terminal-attached processes other than session leaders. `T` selects the caller's terminal; `r` restricts the selected set to running or uninterruptible processes. `-U` filters real UIDs, while `-u` and `--user` filter effective UIDs; user names, numeric IDs, and comma- or whitespace-separated lists are accepted. Explicit `-p` lists replace broad selections such as `-e` or `ax`, but combine with UID lists and `T`.
+
+`ps -f` prints `UID PID PPID C STIME TTY TIME CMD`, with effective-user names and `TIME` in `HH:MM:SS` form. A selection with no matching processes prints its headers and exits with status 1. Custom `-o` headers disappear only when every selected field has an empty label, such as `-o pid=,args=`. AXE carries its `ps` fixes in the vendored `procutils-ps` backend.
+
+`killall` sends a signal to every process with an exact Linux kernel command name (`comm`, limited to 15 bytes), not a command-line substring or regular expression. The default signal is `TERM`. Supported options are `-s SIGNAL`, `-SIGNAL`, `-NUM`, `-I` for case-insensitive names, `-u USER` for a real-UID filter, `-l` to list signals, `-q`, and `-v`. No match or a failed signal delivery exits with status 1; invalid arguments exit with status 2. It does not support signal 0, full-length executable-name matching, process-group signaling, interactive confirmation, waiting, or the regex, age, namespace, and SELinux filters from psmisc `killall`.

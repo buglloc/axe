@@ -395,6 +395,7 @@ fn bundled_synopsis(name: &str) -> &'static str {
         "join" => "Join lines from files on a common field",
         "jq" => "Process and transform JSON data",
         "kill" => "Send signals to processes",
+        "killall" => "Send signals to processes with exact command names",
         "last" => "Show recent login sessions",
         "link" => "Create a hard link to a file",
         "ln" => "Create hard or symbolic links",
@@ -638,6 +639,7 @@ pub fn build(
         [
             ("free".into(), crate::applets::free as BundledFn),
             ("hugetop".into(), crate::applets::hugetop as BundledFn),
+            ("killall".into(), crate::applets::killall as BundledFn),
             ("pgrep".into(), crate::applets::pgrep as BundledFn),
             ("pidof".into(), crate::applets::pidof as BundledFn),
             ("pidwait".into(), crate::applets::pidwait as BundledFn),

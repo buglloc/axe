@@ -94,6 +94,7 @@ surge-ping.workspace = true
 procps-uucore = { package = "uucore", version = "=0.7.0" }
 procutils-free = { version = "=0.2.0" }
 procutils-hugetop = { version = "=0.2.0" }
+procutils-killall = { version = "=0.2.0" }
 procutils-pgrep = { version = "=0.2.0" }
 procutils-pkill = { version = "=0.2.0" }
 procutils-pmap = { version = "=0.2.0" }

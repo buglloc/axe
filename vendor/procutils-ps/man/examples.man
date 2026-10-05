@@ -1,0 +1,39 @@
+.\" AXE modifications: use bare BSD examples and distinguish user selectors.
+.TP
+.B ps
+Default: your processes attached to your terminal. Useful for
+"what's still running in this shell session?".
+.TP
+.B ps \-e
+Every process on the system, default columns.
+.TP
+.B ps \-ef
+Every process, full format. The most-typed \fBps\fR invocation in
+the wild.
+.TP
+.B ps aux
+BSD-style every-process listing with CPU, memory, and state
+columns.
+.TP
+.B ps \-p 1234
+Show only PID 1234, in default format.
+.TP
+.B ps \-p 1234,5678 \-f
+Several PIDs in full format.
+.TP
+.B ps \-U alice
+All processes with real user \fIalice\fR.
+.TP
+.B ps \-U alice,bob \-f
+Multiple real users in full format. UIDs as numbers also work
+(\fBps \-U 1000,1001\fR).
+.TP
+.B ps \-u alice
+All processes with effective user \fIalice\fR.
+.TP
+.B ps \-e \-o pid=,comm=
+Every process with only PID and command-name columns, without headers.
+.TP
+.B ps aux | grep firefox
+The classic find-this-process pipeline. \fBpgrep\fR(1) is usually a
+better fit.

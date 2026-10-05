@@ -88,6 +88,7 @@ brush-builtins = { path = "vendor/brush-builtins" }
 brush-parser = { git = "https://github.com/reubeno/brush", rev = "08db87a62345f11a4fc43bf385e318677f641089" }
 brush-interactive = { git = "https://github.com/reubeno/brush", rev = "08db87a62345f11a4fc43bf385e318677f641089" }
 brush-coreutils-builtins = { git = "https://github.com/reubeno/brush", rev = "08db87a62345f11a4fc43bf385e318677f641089" }
+procutils-ps = { path = "vendor/procutils-ps" }
 
 # brush-interactive depends on its upstream brush-core sibling by path; keep one patched copy.
 [patch."https://github.com/reubeno/brush"]

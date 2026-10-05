@@ -1,0 +1,262 @@
+.\" AXE modifications: document fixed format order and all-empty headers.
+.SS Default format
+.PP
+Columns: \fIPID\fR \fITTY\fR \fITIME\fR \fICMD\fR.
+.TP
+.B PID
+Process ID, from \fI/proc/[pid]/stat\fR field 1 (see
+\fBproc_pid_stat\fR(5)).
+.TP
+.B TTY
+Controlling terminal name (\fItty2\fR, \fIpts/0\fR, etc.) or
+\fB?\fR if the process has none.
+.TP
+.B TIME
+Total CPU time consumed by the process (utime + stime), formatted
+as \fIHH:MM:SS\fR.
+.TP
+.B CMD
+Short command name from \fI/proc/[pid]/stat\fR's \fIcomm\fR field
+(see \fBproc_pid_comm\fR(5)). Truncated by the kernel to 16 bytes.
+.SS Full format (\-f)
+.PP
+Columns: \fIUID\fR \fIPID\fR \fIPPID\fR \fIC\fR \fISTIME\fR
+\fITTY\fR \fITIME\fR \fICMD\fR. TIME is always \fIHH:MM:SS\fR;
+the last column contains the full command line.
+.TP
+.B UID
+Effective user name (or numeric UID if unresolvable).
+.TP
+.B PPID
+Parent process ID.
+.TP
+.B C
+Cumulative CPU usage of the process, as a small integer percentage.
+.TP
+.B STIME
+Start time of the process: \fIHH:MM\fR for same-day starts, a
+month-day abbreviation (e.g. \fIApr29\fR) for older starts.
+.TP
+.B CMD
+Full command line from \fI/proc/[pid]/cmdline\fR. Kernel threads,
+which have an empty cmdline, are shown bracketed (\fB[kthreadd]\fR).
+.SS BSD user format (u, aux)
+.PP
+Adds \fIUSER\fR, \fI%CPU\fR, \fI%MEM\fR, \fIVSZ\fR, \fIRSS\fR,
+\fISTAT\fR, \fISTART\fR.
+.TP
+.B USER
+Same as \fIUID\fR in the full format.
+.TP
+.B %CPU
+Percentage of one CPU's time the process has used since it started
+(cumulative, not interval).
+.TP
+.B %MEM
+Resident set size as a percentage of total physical memory.
+.TP
+.B VSZ
+Virtual memory size of the process in kibibytes.
+.TP
+.B RSS
+Resident set size in kibibytes — non-swapped physical memory in use.
+.TP
+.B STAT
+Multi-character process state. The first character is the kernel
+state (\fBR\fR running, \fBS\fR sleeping, \fBD\fR uninterruptible
+sleep, \fBT\fR stopped, \fBZ\fR zombie, \fBI\fR idle — see
+\fBproc_pid_stat\fR(5)) followed by zero or more modifier flags:
+.RS
+.IP \(bu 2
+\fB<\fR — high priority (negative nice value)
+.IP \(bu 2
+\fBN\fR — low priority (positive nice value)
+.IP \(bu 2
+\fBs\fR — session leader
+.IP \(bu 2
+\fBl\fR — multi-threaded process
+.IP \(bu 2
+\fB+\fR — foreground process group on its tty
+.RE
+.TP
+.B START
+Same format as \fISTIME\fR in \fB\-f\fR.
+.SS Custom format (\-o, \-\-format)
+.PP
+\fBps \-o COL[,COL...]\fR selects columns by name. Specs may also be
+space-separated within a quoted argument or split across multiple
+\fB\-o\fR flags; all are concatenated. Append \fB=LABEL\fR to a
+column to override its header (\fBpid=ID\fR), or just \fB=\fR to
+leave that column's header blank. The header row is suppressed only
+when every column has an empty header.
+.PP
+AIX/SVR4 single-character codes (\fB%p\fR, \fB%U\fR, ...) are also
+accepted and resolve to the same fields:
+.RS
+.TS
+tab(@);
+l l.
+%C@%cpu (alias \fIpcpu\fR)
+%G@\fIgroup\fR
+%P@\fIppid\fR
+%U@\fIuser\fR
+%a@\fIargs\fR
+%c@\fIcomm\fR
+%g@\fIrgroup\fR
+%n@\fInice\fR
+%p@\fIpid\fR
+%r@\fIpgid\fR
+%t@\fIetime\fR
+%u@\fIruser\fR
+%x@\fItime\fR (cputime)
+%y@\fItty\fR
+%z@\fIvsz\fR
+.TE
+.RE
+.PP
+Field names below are listed canonical-first; bracketed forms
+(\fB[alias]\fR) accept the same column under a different spelling.
+Lookup is case-insensitive.
+.SS Identifiers
+.TP
+.B pid \fR[\fItid\fR, \fIlwp\fR]
+Process ID. \fItid\fR/\fIlwp\fR currently alias \fIpid\fR; per-thread
+output is deferred.
+.TP
+.B ppid
+Parent process ID.
+.TP
+.B pgid \fR[\fIpgrp\fR]
+Process group ID.
+.TP
+.B sid \fR[\fIsess\fR]
+Session ID.
+.TP
+.B tpgid
+Foreground process group on the controlling terminal.
+.SS User and group
+.TP
+.B uid \fR[\fIeuid\fR]
+Effective user ID (numeric).
+.TP
+.B ruid, suid
+Real / saved user ID.
+.TP
+.B gid \fR[\fIegid\fR], \fBrgid\fR
+Effective / real group ID (numeric).
+.TP
+.B user \fR[\fIuname\fR, \fIeuser\fR], \fBruser\fR
+Effective / real user \fIname\fR (resolved via \fI/etc/passwd\fR;
+falls back to the numeric UID).
+.TP
+.B group \fR[\fIegroup\fR], \fBrgroup\fR
+Effective / real group name (resolved via \fI/etc/group\fR).
+.SS Command
+.TP
+.B comm \fR[\fIucmd\fR, \fIucomm\fR]
+Short command name from \fI/proc/[pid]/stat\fR (truncated to 16
+bytes by the kernel). Header: \fBCOMMAND\fR.
+.TP
+.B args \fR[\fIcmd\fR, \fIcommand\fR]
+Full command line from \fI/proc/[pid]/cmdline\fR; kernel threads
+are bracketed. Header: \fBCOMMAND\fR.
+.SS State and scheduling
+.TP
+.B state \fR[\fIs\fR]
+Single-letter process state. Header: \fBS\fR.
+.TP
+.B stat
+Multi-character state including modifier letters (see
+\fI\-aux\fR section above).
+.TP
+.B nice \fR[\fIni\fR]
+Nice value (\-20..19).
+.TP
+.B pri
+Kernel priority value.
+.TP
+.B psr \fR[\fIprocessor\fR]
+CPU index the process last ran on, or \fB?\fR if not reported.
+.TP
+.B nlwp \fR[\fIthcount\fR]
+Number of threads (kernel \fInum_threads\fR).
+.TP
+.B cls \fR[\fIclass\fR, \fIpolicy\fR]
+Scheduler class abbreviation: \fBTS\fR (SCHED_NORMAL),
+\fBFF\fR, \fBRR\fR, \fBB\fR, \fBISO\fR, \fBIDL\fR, \fBDLN\fR.
+\fB\-\fR if not reported, \fB?\fR for unrecognised values.
+.SS Memory
+.TP
+.B vsz \fR[\fIvsize\fR]
+Virtual memory size in KiB.
+.TP
+.B rss \fR[\fIrsz\fR]
+Resident set size in KiB.
+.TP
+.B %mem \fR[\fIpmem\fR]
+RSS as a percentage of total physical memory, one decimal.
+.SS CPU and time
+.TP
+.B %cpu \fR[\fIpcpu\fR]
+Cumulative CPU usage since process start, as a percentage of one
+CPU, one decimal.
+.TP
+.B c
+Same as \fI%cpu\fR but as a small integer (clamped to 99).
+.TP
+.B time \fR[\fIcputime\fR]
+Total CPU time consumed (utime + stime), \fIHH:MM:SS\fR.
+.TP
+.B cputimes \fR[\fItimes\fR]
+Same as \fItime\fR but printed as integer seconds.
+.TP
+.B bsdtime
+Same as \fItime\fR but printed as \fIMMM:SS\fR (no hour rollover).
+.TP
+.B etime
+Wall-clock elapsed time since process start: \fIMM:SS\fR,
+\fIHH:MM:SS\fR, or \fIDD\-HH:MM:SS\fR depending on magnitude.
+Header: \fBELAPSED\fR.
+.TP
+.B etimes
+Same as \fIetime\fR but printed as integer seconds.
+.TP
+.B start \fR[\fIstart_time\fR, \fIstime\fR, \fIbsdstart\fR]
+Process start time: \fIHH:MM\fR for same-day starts, a month-day
+abbreviation (\fIApr29\fR) otherwise.
+.TP
+.B lstart
+Full timestamp of process start: \fIDay Mon DD HH:MM:SS YYYY\fR
+(e.g. \fISat May 3 14:23:45 2026\fR). Header: \fBSTARTED\fR.
+.SS Other
+.TP
+.B tty \fR[\fItt\fR, \fItname\fR]
+Controlling terminal name; \fB?\fR for none.
+.TP
+.B fds
+Number of entries in \fI/proc/[pid]/fd\fR. \fB?\fR if the directory
+is unreadable for the calling user.
+.TP
+.B wchan
+Symbolic name of the kernel function the process is sleeping in;
+\fB\-\fR for runnable or unknown.
+.TP
+.B flags \fR[\fIf\fR]
+Process flag word from \fI/proc/[pid]/stat\fR, divided by 64
+(legacy procps convention). Header: \fBF\fR.
+.SS Signal masks
+.PP
+The four signal-mask fields print 16 hexadecimal characters of the
+corresponding bitmask from \fI/proc/[pid]/status\fR.
+.TP
+.B pending \fR[\fIsig\fR, \fIsig_pend\fR]
+Pending signals (\fISigPnd\fR).
+.TP
+.B blocked \fR[\fIsig_block\fR, \fIsigmask\fR]
+Blocked signals (\fISigBlk\fR).
+.TP
+.B ignored \fR[\fIsig_ignore\fR, \fIsigignore\fR]
+Ignored signals (\fISigIgn\fR).
+.TP
+.B caught \fR[\fIsig_catch\fR, \fIsigcatch\fR]
+Caught (handler-installed) signals (\fISigCgt\fR).

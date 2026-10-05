@@ -52,8 +52,8 @@ pub use jq::jq;
 pub use ping::{ping, ping6, traceroute, traceroute6};
 #[cfg(target_os = "linux")]
 pub use procutils::{
-    free, hugetop, pgrep, pidof, pidwait, pkill, pmap, ps, pwdx, skill, slabtop, snice, sysctl,
-    tload, top, vmstat, w, watch,
+    free, hugetop, killall, pgrep, pidof, pidwait, pkill, pmap, ps, pwdx, skill, slabtop, snice,
+    sysctl, tload, top, vmstat, w, watch,
 };
 pub use sshd::sshd;
 pub use strings::strings;

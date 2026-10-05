@@ -1,0 +1,62 @@
+.\" AXE modifications: document selector defaults, precedence, and limitations.
+.SS Three flag conventions, one tool
+.PP
+Historical \fBps\fR implementations grew three overlapping flag
+languages: System V / POSIX uses leading dashes (\fB\-e\fR), BSD
+uses no dashes at all (\fBaux\fR), and GNU adds long forms
+(\fB\-\-all\fR). The combinations users still type most often are
+\fBps \-ef\fR (Unix) and \fBps aux\fR (BSD); both are supported
+here. Many of the more obscure flags from upstream \fBps\fR are not
+yet implemented — see the limitations note below.
+.SS Default selection rule
+.PP
+Without a selection flag, Unix-style \fBps\fR selects processes with
+the caller's effective user ID and controlling terminal. When the
+caller has no terminal, matching processes without terminals are
+included.
+.PP
+Bare BSD options change the default to the caller's effective user's
+processes on any controlling terminal. \fBa\fR removes the user
+restriction, \fBx\fR includes your processes without terminals,
+and \fBax\fR selects all processes. \fBT\fR adds the caller's terminal
+without narrowing a broader selection; terminal number 0 also matches.
+.PP
+Explicit PID and user filters combine additively. PID lists replace
+the broad selections made by \fB\-e\fR, \fB\-A\fR, \fBa\fR, and
+\fBax\fR. Without a PID list, \fB\-e\fR / \fB\-A\fR continues to
+select all processes even when user filters are present. The active
+process filter \fBr\fR / \fB\-r\fR is applied after these selections.
+.PP
+The compatibility form \fB\-ax\fR is interpreted as BSD \fBax\fR.
+\fB\-au\fR without a user argument uses BSD \fBau\fR; with a user
+argument it retains Unix \fB\-a \-u USER\fR semantics.
+.SS %CPU is a lifetime average
+.PP
+The \fI%CPU\fR column under \fBaux\fR is the process's total CPU
+time divided by its wall-clock age (in percent of one CPU). A
+long-running process that briefly burned 100% then idled averages
+out to a low value, and the figure decays as wall-clock time
+elapses without further CPU use. This matches historical
+\fBps aux\fR semantics.
+.PP
+Only the process's own CPU time is counted (\fIutime\fR + \fIstime\fR
+from \fI/proc/[pid]/stat\fR); time consumed by exited children
+(\fIcutime\fR + \fIcstime\fR) is not folded in.
+.PP
+For a "what's eating CPU right now" view, prefer \fBtop\fR(1),
+which reports recent-interval percentages.
+.SS Limitations
+.PP
+This implementation is a deliberately small subset of upstream
+\fBps\fR. Notable absences:
+.IP \(bu 2
+No per-thread process listing. Fields \fItid\fR / \fIlwp\fR remain
+aliases of \fIpid\fR.
+.IP \(bu 2
+No process-group / parent-PID / TTY filters (\fB\-g\fR, \fB\-\-ppid\fR,
+\fB\-t\fR). Use \fBpgrep\fR(1) for richer selection.
+.IP \(bu 2
+No tree view (\fB\-\-forest\fR). Use \fBpstree\fR(1) for
+parent-child hierarchies.
+.IP \(bu 2
+No sort flag (\fB\-\-sort\fR). Pipe through \fBsort\fR(1) instead.

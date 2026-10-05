@@ -1,0 +1,41 @@
+.\" AXE modifications: describe the supported selectors and shared format path.
+\fBps\fR prints a snapshot of the current processes. With no flags
+it shows only the processes owned by the calling user and attached
+to the current controlling terminal — the same minimal behaviour
+that makes a bare \fBps\fR useful in a shell. Pass \fB\-e\fR or
+\fB\-A\fR to widen the selection to every process on the system.
+.PP
+\fBps\fR has historically supported three flag conventions on
+different Unixes — System V (POSIX, \fB\-e\fR), BSD (no leading
+dash, \fBaux\fR), and GNU long forms. \fBprocutils\fR's \fBps\fR
+implements a small but commonly-used subset of these:
+.IP \(bu 2
+\fB\-e\fR / \fB\-A\fR / \fB\-\-all\fR — select every process.
+.IP \(bu 2
+\fB\-f\fR — full-format listing with columns UID, PID, PPID, C,
+STIME, TTY, TIME, CMD. UID is the effective user name, TIME is
+HH:MM:SS, and CMD is the full command line.
+.IP \(bu 2
+\fBa\fR selects all processes with a controlling terminal.
+\fBx\fR selects all processes owned by your effective user, including
+those without a terminal. Together, \fBax\fR selects every process.
+\fBu\fR enables the user-oriented format; \fBaux\fR combines these.
+.IP \(bu 2
+\fBw\fR / \fBww\fR are accepted BSD width flags.
+\fBr\fR restricts the complete selection to active processes.
+\fBT\fR adds processes sharing the caller's controlling terminal.
+.IP \(bu 2
+\fB\-a\fR selects terminal processes except session leaders.
+\fB\-x\fR selects your effective user's processes across terminals.
+.IP \(bu 2
+\fB\-p\fR \fIPID\fR\fB,\fR\fIPID\fR\fB,\fR\fI...\fR — restrict
+output to specific PIDs.
+.IP \(bu 2
+\fB\-U\fR selects real user IDs. \fB\-u\fR / \fB\-\-user\fR selects
+effective user IDs. User lists accept names or numeric IDs separated
+by commas or spaces. An unknown user name is an error.
+.PP
+Custom output is available through \fB\-o\fR / \fB\-\-format\fR.
+See FIELD DESCRIPTIONS for field names, aliases, and header overrides.
+A selection with no processes prints any requested headers and exits
+with status 1.

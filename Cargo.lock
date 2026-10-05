@@ -485,6 +485,7 @@ dependencies = [
  "object",
  "procutils-free",
  "procutils-hugetop",
+ "procutils-killall",
  "procutils-pgrep",
  "procutils-pkill",
  "procutils-pmap",
@@ -5704,6 +5705,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "procutils-killall"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ac9742f23a19d13032f5df91c650437c0c44e30ad135a322dda9bfbf69c893f"
+dependencies = [
+ "clap",
+ "libc",
+ "procfs",
+ "procutils-common",
+ "regex",
+]
+
+[[package]]
 name = "procutils-pgrep"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5739,8 +5753,6 @@ dependencies = [
 [[package]]
 name = "procutils-ps"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce2e7992b99539d2715b1e690f7b0f6647f06edae0591b2ca845dceca00f6b3"
 dependencies = [
  "clap",
  "cols",

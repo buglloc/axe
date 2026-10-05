@@ -1,0 +1,30 @@
+[package]
+name = "procutils-ps"
+description = "Report a snapshot of the current processes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["procutils", "procps", "ps", "process", "linux"]
+categories = ["command-line-utilities", "os::linux-apis"]
+
+[[bin]]
+name = "ps"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+cols.workspace = true
+procfs.workspace = true
+procutils-common.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+procutils-testutil.workspace = true
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
