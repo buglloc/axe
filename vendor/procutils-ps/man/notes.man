@@ -45,6 +45,25 @@ from \fI/proc/[pid]/stat\fR); time consumed by exited children
 .PP
 For a "what's eating CPU right now" view, prefer \fBtop\fR(1),
 which reports recent-interval percentages.
+.SS Output width and command text
+.PP
+Output width comes from \fICOLUMNS\fR or the terminal. Redirected
+output without \fICOLUMNS\fR has no screen-width bound.
+\fBw\fR or \fB\-w\fR widens bounded output to at least 132 columns;
+two occurrences, including \fBww\fR, \fB\-ww\fR, or \fBw \-w\fR,
+remove the width bound.
+.PP
+\fB\-\-cols WIDTH\fR, \fB\-\-columns WIDTH\fR, and
+\fB\-\-width WIDTH\fR set an explicit width. The last explicit
+value wins, then the accumulated \fBw\fR options apply.
+Command fields are clipped by display columns without splitting UTF-8.
+Fixed fields and headers survive narrow widths. Column padding is
+dynamic rather than using procps's fixed minimum widths.
+.PP
+C and UTF-8 locales are supported. Command-line newlines become
+spaces; other control characters, including terminal escapes, become
+\fB?\fR. Legacy non-UTF-8 character sets are not emulated.
+Nominally unlimited output retains a 128 KiB buffer bound.
 .SS Limitations
 .PP
 This implementation is a deliberately small subset of upstream

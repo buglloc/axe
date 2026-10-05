@@ -15,6 +15,7 @@ pub(super) struct BsdOptions {
     pub user_format: bool,
     running: bool,
     current_tty: bool,
+    pub wide: u8,
 }
 
 fn is_bsd_option(byte: u8) -> bool {
@@ -33,8 +34,7 @@ pub(super) fn parse_bsd_options(value: &str) -> Result<BsdOptions, String> {
             b'u' => options.user_format = true,
             b'r' => options.running = true,
             b'T' => options.current_tty = true,
-            // Width policy is unchanged; accept both w and ww.
-            b'w' => (),
+            b'w' => options.wide = options.wide.saturating_add(1).min(2),
             _ => return Err(format!("unsupported BSD option: {}", char::from(byte))),
         }
     }
@@ -91,7 +91,14 @@ pub fn preprocess_argv(args: Vec<OsString>) -> Vec<OsString> {
         if bytes.starts_with(b"--") {
             value_next = matches!(
                 bytes,
-                b"--pid" | b"--user" | b"--ruser" | b"--format" | b"--bsd-options"
+                b"--pid"
+                    | b"--user"
+                    | b"--ruser"
+                    | b"--format"
+                    | b"--bsd-options"
+                    | b"--cols"
+                    | b"--columns"
+                    | b"--width"
             );
             output.push(arg);
             continue;

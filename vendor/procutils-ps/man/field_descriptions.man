@@ -31,7 +31,8 @@ Effective user name (or numeric UID if unresolvable).
 Parent process ID.
 .TP
 .B C
-Cumulative CPU usage of the process, as a small integer percentage.
+Cumulative CPU usage of the process, truncated to an integer
+percentage and capped at 99.
 .TP
 .B STIME
 Start time of the process: \fIHH:MM\fR for same-day starts, a
@@ -50,16 +51,20 @@ Same as \fIUID\fR in the full format.
 .TP
 .B %CPU
 Percentage of one CPU's time the process has used since it started
-(cumulative, not interval).
+(cumulative, not interval). Truncated to one decimal below 100%;
+larger values are printed as whole percentages without a CPU cap.
 .TP
 .B %MEM
-Resident set size as a percentage of total physical memory.
+Resident set size as a percentage of total physical memory, truncated
+to one decimal and capped at 99.9%.
 .TP
 .B VSZ
 Virtual memory size of the process in kibibytes.
 .TP
 .B RSS
-Resident set size in kibibytes — non-swapped physical memory in use.
+Resident set size in kibibytes from \fIVmRSS\fR in
+\fI/proc/[pid]/status\fR. Zero when the kernel omits that field,
+including zombies and kernel threads.
 .TP
 .B STAT
 Multi-character process state. The first character is the kernel
@@ -173,7 +178,9 @@ Multi-character state including modifier letters (see
 Nice value (\-20..19).
 .TP
 .B pri
-Kernel priority value.
+Procps priority: 39 minus the kernel priority from
+\fI/proc/[pid]/stat\fR. For normal scheduling this is 19 minus
+the nice value; larger numbers mean higher priority.
 .TP
 .B psr \fR[\fIprocessor\fR]
 CPU index the process last ran on, or \fB?\fR if not reported.
@@ -191,18 +198,22 @@ Scheduler class abbreviation: \fBTS\fR (SCHED_NORMAL),
 Virtual memory size in KiB.
 .TP
 .B rss \fR[\fIrsz\fR]
-Resident set size in KiB.
+Resident set size in KiB from \fIVmRSS\fR in
+\fI/proc/[pid]/status\fR, not the resident-page count in stat.
+Zero when \fIVmRSS\fR is absent.
 .TP
 .B %mem \fR[\fIpmem\fR]
-RSS as a percentage of total physical memory, one decimal.
+RSS as a percentage of total physical memory, truncated to one
+decimal and capped at 99.9%.
 .SS CPU and time
 .TP
 .B %cpu \fR[\fIpcpu\fR]
 Cumulative CPU usage since process start, as a percentage of one
-CPU, one decimal.
+CPU. Truncated to one decimal below 100%, or printed as a whole
+percentage at 100% and above. Multi-core usage is not capped.
 .TP
 .B c
-Same as \fI%cpu\fR but as a small integer (clamped to 99).
+Same as \fI%cpu\fR but truncated to an integer and clamped to 99.
 .TP
 .B time \fR[\fIcputime\fR]
 Total CPU time consumed (utime + stime), \fIHH:MM:SS\fR.
@@ -216,6 +227,8 @@ Same as \fItime\fR but printed as \fIMMM:SS\fR (no hour rollover).
 .B etime
 Wall-clock elapsed time since process start: \fIMM:SS\fR,
 \fIHH:MM:SS\fR, or \fIDD\-HH:MM:SS\fR depending on magnitude.
+Whole elapsed seconds are calculated after subtracting the process
+start ticks from the boot-clock snapshot ticks.
 Header: \fBELAPSED\fR.
 .TP
 .B etimes
@@ -242,8 +255,9 @@ Symbolic name of the kernel function the process is sleeping in;
 \fB\-\fR for runnable or unknown.
 .TP
 .B flags \fR[\fIf\fR]
-Process flag word from \fI/proc/[pid]/stat\fR, divided by 64
-(legacy procps convention). Header: \fBF\fR.
+The three legacy flag bits from \fI/proc/[pid]/stat\fR, printed as
+one octal digit: \fI(flags >> 6) & 7\fR. Other kernel flag bits
+do not contribute. Header: \fBF\fR.
 .SS Signal masks
 .PP
 The four signal-mask fields print 16 hexadecimal characters of the

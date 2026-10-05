@@ -13,9 +13,10 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 clap = { version = "4", features = ["derive", "wrap_help"] }
-cols = { version = "0.3.0", features = ["color", "regex", "derive"] }
+libc = "0.2"
 procfs = "0.18"
 procutils-common = "0.2.0"
+unicode-width = "0.2"
 
 [[bin]]
 name = "ps"

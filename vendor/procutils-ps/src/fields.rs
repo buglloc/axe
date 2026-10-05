@@ -11,8 +11,9 @@
 //! string for missing data.
 
 use crate::format_helpers::{
-    format_bsdtime, format_cputime, format_cputimes, format_elapsed, format_etimes, format_lstart,
-    format_start_compact, format_stat, tty_name,
+    format_bsdtime, format_cpu_percent, format_cputime, format_cputimes, format_elapsed,
+    format_etimes, format_lstart, format_percent_tenths, format_start_compact, format_stat,
+    tty_name,
 };
 use procfs::process::{Stat, Status};
 use procutils_common::uid::UidCache;
@@ -37,7 +38,6 @@ pub struct ProcessContext<'a> {
     pub uptime_secs: f64,
     pub tps: u64,
     pub total_mem_kb: u64,
-    pub page_size: u64,
 }
 
 impl ProcessContext<'_> {
@@ -46,25 +46,33 @@ impl ProcessContext<'_> {
         now_ticks.saturating_sub(self.stat.starttime)
     }
 
+    fn elapsed_secs(&self) -> u64 {
+        self.elapsed_ticks() / self.tps.max(1)
+    }
+
     fn cpu_pct(&self) -> f64 {
-        let total = self.stat.utime + self.stat.stime;
         let elapsed = self.elapsed_ticks();
         if elapsed > 0 {
-            (total as f64 / elapsed as f64) * 100.0
+            let total = self.stat.utime + self.stat.stime;
+            // libproc2 UTILIZATION multiplies ticks in single precision,
+            // then divides by the elapsed boot ticks in double precision.
+            f64::from(total as f32 * 100.0) / elapsed as f64
         } else {
             0.0
         }
     }
 
-    fn rss_bytes(&self) -> u64 {
-        self.stat.rss * self.page_size
+    fn rss_kb(&self) -> u64 {
+        // procfs Status::vmrss is already in KiB. Procps reports zero when
+        // status has no VmRSS (including zombies and kernel threads).
+        self.status.vmrss.unwrap_or(0)
     }
 
-    fn mem_pct(&self) -> f64 {
+    fn mem_tenths(&self) -> u64 {
         if self.total_mem_kb > 0 {
-            (self.rss_bytes() as f64 / 1024.0 / self.total_mem_kb as f64) * 100.0
+            ((u128::from(self.rss_kb()) * 1000 / u128::from(self.total_mem_kb)).min(999)) as u64
         } else {
-            0.0
+            0
         }
     }
 }
@@ -286,7 +294,7 @@ pub static FIELDS: &[Field] = &[
         aliases: &[],
         header: "PRI",
         align: Align::Right,
-        compute: |c| c.stat.priority.to_string(),
+        compute: |c| (39 - c.stat.priority).to_string(),
     },
     Field {
         name: "psr",
@@ -315,14 +323,14 @@ pub static FIELDS: &[Field] = &[
         aliases: &["rsz"],
         header: "RSS",
         align: Align::Right,
-        compute: |c| (c.rss_bytes() / 1024).to_string(),
+        compute: |c| c.rss_kb().to_string(),
     },
     Field {
         name: "%mem",
         aliases: &["pmem"],
         header: "%MEM",
         align: Align::Right,
-        compute: |c| format!("{:.1}", c.mem_pct()),
+        compute: |c| format_percent_tenths(c.mem_tenths()),
     },
     // ---- CPU --------------------------------------------------------
     Field {
@@ -330,14 +338,14 @@ pub static FIELDS: &[Field] = &[
         aliases: &["pcpu"],
         header: "%CPU",
         align: Align::Right,
-        compute: |c| format!("{:.1}", c.cpu_pct()),
+        compute: |c| format_cpu_percent(c.cpu_pct()),
     },
     Field {
         name: "c",
         aliases: &[],
         header: "C",
         align: Align::Right,
-        compute: |c| format!("{}", (c.cpu_pct() as u64).min(99)),
+        compute: |c| (c.cpu_pct() as u64).min(99).to_string(),
     },
     Field {
         name: "time",
@@ -365,20 +373,14 @@ pub static FIELDS: &[Field] = &[
         aliases: &[],
         header: "ELAPSED",
         align: Align::Right,
-        compute: |c| {
-            let elapsed_secs = c.uptime_secs as i64 - (c.stat.starttime / c.tps) as i64;
-            format_elapsed(elapsed_secs.max(0) as u64)
-        },
+        compute: |c| format_elapsed(c.elapsed_secs()),
     },
     Field {
         name: "etimes",
         aliases: &[],
         header: "ELAPSED",
         align: Align::Right,
-        compute: |c| {
-            let elapsed_secs = c.uptime_secs as i64 - (c.stat.starttime / c.tps) as i64;
-            format_etimes(elapsed_secs.max(0) as u64)
-        },
+        compute: |c| format_etimes(c.elapsed_secs()),
     },
     Field {
         name: "start",
@@ -419,8 +421,8 @@ pub static FIELDS: &[Field] = &[
         aliases: &["f"],
         header: "F",
         align: Align::Right,
-        // procps reports the flag word divided by 64 for legacy compat.
-        compute: |c| format!("{}", c.stat.flags >> 6),
+        // Unix98 flags are the three legacy flag bits, displayed in octal.
+        compute: |c| format!("{:o}", (c.stat.flags >> 6) & 7),
     },
     // ---- Scheduling class ------------------------------------------
     Field {

@@ -6,6 +6,22 @@
 
 use procfs::process::Stat;
 
+/// Format a percentage already truncated to tenths, without rounding.
+pub(super) fn format_percent_tenths(tenths: u64) -> String {
+    format!("{}.{}", tenths / 10, tenths % 10)
+}
+
+/// Procps `%cpu` truncates to tenths and omits the fraction above 99.9%.
+/// Unlike the `C` column, multi-core CPU usage is not capped.
+pub(super) fn format_cpu_percent(percent: f64) -> String {
+    let tenths = (percent * 10.0) as u64;
+    if tenths > 999 {
+        (tenths / 10).to_string()
+    } else {
+        format_percent_tenths(tenths)
+    }
+}
+
 pub fn tty_name(tty_nr: i32) -> String {
     if tty_nr == 0 {
         return "?".into();

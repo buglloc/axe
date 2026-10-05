@@ -1,7 +1,6 @@
 // AXE modifications: one selector and shared fixed/custom field output.
 
 use clap::Parser;
-use cols::{Column, Table};
 use procfs::{
     prelude::*,
     process::{self, Process},
@@ -12,12 +11,13 @@ use std::{collections::HashMap, process::ExitCode};
 mod fields;
 mod format;
 mod format_helpers;
+mod output;
 mod selection;
 
 pub use selection::preprocess_argv;
 
-use fields::{Align, ProcessContext};
-use format::{FieldSpec, parse_format_spec, suppress_headers};
+use fields::ProcessContext;
+use format::{FieldSpec, parse_format_spec};
 use selection::{BsdOptions, Selection};
 
 pub const MAN: ManContent = ManContent {
@@ -61,6 +61,19 @@ pub struct Args {
     #[arg(short)]
     r: bool,
 
+    /// Wide output. Use twice for unlimited width.
+    #[arg(short, action = clap::ArgAction::Count)]
+    w: u8,
+
+    /// Set the output width in columns.
+    #[arg(
+        long = "cols",
+        visible_aliases = ["columns", "width"],
+        value_name = "WIDTH",
+        allow_hyphen_values = true
+    )]
+    width: Vec<String>,
+
     /// Select by PID. Accepts comma- or space-separated lists.
     #[arg(short, long = "pid", value_name = "PID", allow_hyphen_values = true)]
     p: Vec<String>,
@@ -102,7 +115,7 @@ struct RunContext {
     total_mem: u64,
     uptime_secs: f64,
     tps: u64,
-    page_size: u64,
+    output_width: Option<usize>,
 }
 
 fn build_ctx(args: &Args) -> Result<RunContext, String> {
@@ -113,7 +126,15 @@ fn build_ctx(args: &Args) -> Result<RunContext, String> {
 
     let boot_time = procfs::KernelStats::current().map(|k| k.btime).unwrap_or(0);
     let total_mem = procfs::Meminfo::current().map(|m| m.mem_total).unwrap_or(1);
-    let uptime_secs = procfs::Uptime::current().map(|u| u.uptime).unwrap_or(1.0);
+    let mut boot_clock = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: CLOCK_BOOTTIME writes an initialized, correctly aligned timespec.
+    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut boot_clock) } != 0 {
+        return Err(format!("ps: {}", std::io::Error::last_os_error()));
+    }
+    let uptime_secs = boot_clock.tv_sec as f64 + boot_clock.tv_nsec as f64 * 1.0e-9;
 
     Ok(RunContext {
         selection,
@@ -121,7 +142,7 @@ fn build_ctx(args: &Args) -> Result<RunContext, String> {
         total_mem,
         uptime_secs,
         tps: procfs::ticks_per_second(),
-        page_size: procfs::page_size(),
+        output_width: output::width(args).map_err(|error| format!("ps: {error}"))?,
     })
 }
 
@@ -203,23 +224,6 @@ fn fixed_format(selection: &Selection, full: bool) -> Vec<FieldSpec> {
         .collect()
 }
 
-fn table_with_format(specs: &[FieldSpec]) -> Table {
-    let mut table = Table::new();
-    for spec in specs {
-        let header = spec.label.as_deref().unwrap_or(spec.field.header);
-        let mut col = Column::new(spec.field.name);
-        col.header_mut().data_set(header);
-        if matches!(spec.field.align, Align::Right) {
-            col = col.right(true);
-        }
-        table.add_column(col);
-    }
-    if suppress_headers(specs) {
-        table.headings_set(false);
-    }
-    table
-}
-
 fn run_with_format(ctx: &RunContext, specs: &[FieldSpec]) -> ExitCode {
     let all_procs = match process::all_processes() {
         Ok(iter) => iter,
@@ -232,7 +236,6 @@ fn run_with_format(ctx: &RunContext, specs: &[FieldSpec]) -> ExitCode {
     let mut uid_cache = procutils_common::uid::UidCache::new();
     let mut gid_cache: HashMap<u32, String> = HashMap::new();
 
-    let mut table = table_with_format(specs);
     let needs_cmdline = specs.iter().any(|spec| spec.field.name == "args");
 
     let mut rows: Vec<(i32, Vec<String>)> = Vec::new();
@@ -268,7 +271,6 @@ fn run_with_format(ctx: &RunContext, specs: &[FieldSpec]) -> ExitCode {
             uptime_secs: ctx.uptime_secs,
             tps: ctx.tps,
             total_mem_kb: ctx.total_mem / 1024,
-            page_size: ctx.page_size,
         };
         let cells: Vec<String> = specs.iter().map(|s| (s.field.compute)(&mut pctx)).collect();
         rows.push((stat.pid, cells));
@@ -276,15 +278,12 @@ fn run_with_format(ctx: &RunContext, specs: &[FieldSpec]) -> ExitCode {
 
     rows.sort_by_key(|(pid, _)| *pid);
 
-    for (_pid, cells) in &rows {
-        let line = table.new_line(None);
-        let line_mut = table.line_mut(line);
-        for (i, cell) in cells.iter().enumerate() {
-            line_mut.data_set(i, cell);
-        }
-    }
-
-    let _ = cols::print_table(&table, &mut std::io::stdout().lock());
+    let _ = output::write_table(
+        specs,
+        &rows,
+        ctx.output_width,
+        &mut std::io::stdout().lock(),
+    );
     if rows.is_empty() {
         ExitCode::FAILURE
     } else {
