@@ -17,7 +17,7 @@ use crate::format_helpers::{
 };
 use procfs::process::{Stat, Status};
 use procutils_common::uid::UidCache;
-use std::collections::HashMap;
+use std::{cell::OnceCell, collections::HashMap, io::Read, os::unix::fs::MetadataExt};
 
 /// Column alignment.
 #[derive(Copy, Clone)]
@@ -26,11 +26,24 @@ pub enum Align {
     Right,
 }
 
-/// Everything a `compute` function might need. Built once per process,
-/// reused across every requested field for that process.
+#[derive(Copy, Clone)]
+pub(super) enum RowKind {
+    Process,
+    Thread,
+    ProcessSummary,
+    ThreadDetail,
+}
+
+/// Raw process/task data and borrowed thread-group data for one row.
+/// Requested display fields and sort keys share the optional acquisition caches.
 pub struct ProcessContext<'a> {
     pub stat: &'a Stat,
     pub status: &'a Status,
+    pub group_stat: &'a Stat,
+    pub group_status: &'a Status,
+    pub(super) kind: RowKind,
+    pub(super) fds_cache: OnceCell<u64>,
+    pub(super) wchan_cache: OnceCell<String>,
     pub cmdline: &'a str,
     pub uid_cache: &'a mut UidCache,
     pub gid_cache: &'a mut HashMap<u32, String>,
@@ -41,7 +54,7 @@ pub struct ProcessContext<'a> {
 }
 
 impl ProcessContext<'_> {
-    fn elapsed_ticks(&self) -> u64 {
+    pub(super) fn elapsed_ticks(&self) -> u64 {
         let now_ticks = (self.uptime_secs * self.tps as f64) as u64;
         now_ticks.saturating_sub(self.stat.starttime)
     }
@@ -50,7 +63,7 @@ impl ProcessContext<'_> {
         self.elapsed_ticks() / self.tps.max(1)
     }
 
-    fn cpu_pct(&self) -> f64 {
+    pub(super) fn cpu_pct(&self) -> f64 {
         let elapsed = self.elapsed_ticks();
         if elapsed > 0 {
             let total = self.stat.utime + self.stat.stime;
@@ -62,10 +75,10 @@ impl ProcessContext<'_> {
         }
     }
 
-    fn rss_kb(&self) -> u64 {
+    pub(super) fn rss_kb(&self) -> u64 {
         // procfs Status::vmrss is already in KiB. Procps reports zero when
         // status has no VmRSS (including zombies and kernel threads).
-        self.status.vmrss.unwrap_or(0)
+        self.group_status.vmrss.unwrap_or(0)
     }
 
     fn mem_tenths(&self) -> u64 {
@@ -74,6 +87,74 @@ impl ProcessContext<'_> {
         } else {
             0
         }
+    }
+
+    pub(super) fn pending_signals(&self) -> u64 {
+        match self.kind {
+            RowKind::Process | RowKind::ProcessSummary => self.status.shdpnd,
+            RowKind::Thread | RowKind::ThreadDetail => self.status.sigpnd,
+        }
+    }
+
+    fn proc_path(&self, file: &str) -> String {
+        match self.kind {
+            RowKind::Process | RowKind::ProcessSummary => {
+                format!("/proc/{}/{file}", self.status.tgid)
+            }
+            RowKind::Thread | RowKind::ThreadDetail => {
+                format!("/proc/{}/task/{}/{file}", self.status.tgid, self.stat.pid)
+            }
+        }
+    }
+
+    pub(super) fn fds(&self) -> u64 {
+        *self.fds_cache.get_or_init(|| {
+            std::fs::metadata(self.proc_path("fd"))
+                .map(|metadata| metadata.size())
+                .unwrap_or(0)
+        })
+    }
+
+    pub(super) fn wchan(&self) -> &str {
+        self.wchan_cache.get_or_init(|| {
+            let Ok(file) = std::fs::File::open(self.proc_path("wchan")) else {
+                return "?".into();
+            };
+            let mut symbol = String::new();
+            if file.take(63).read_to_string(&mut symbol).is_err() {
+                return "?".into();
+            }
+            if symbol.is_empty() {
+                return "?".into();
+            }
+            if symbol == "0" {
+                return "-".into();
+            }
+            let normalized = symbol
+                .strip_prefix('.')
+                .unwrap_or(&symbol)
+                .trim_start_matches('_');
+            let prefix = symbol.len() - normalized.len();
+            symbol.drain(..prefix);
+            symbol
+        })
+    }
+
+    /// Cache names once per run; rendered and sorted fields borrow the same lookup.
+    pub(super) fn gid_name(&mut self, gid: u32) -> &str {
+        self.gid_cache.entry(gid).or_insert_with(|| {
+            std::fs::read_to_string("/etc/group")
+                .ok()
+                .and_then(|contents| {
+                    contents.lines().find_map(|line| {
+                        let mut fields = line.split(':');
+                        let name = fields.next()?;
+                        fields.next()?;
+                        (fields.next()?.parse::<u32>().ok()? == gid).then(|| name.to_string())
+                    })
+                })
+                .unwrap_or_else(|| gid.to_string())
+        })
     }
 }
 
@@ -87,6 +168,53 @@ pub struct Field {
     pub header: &'static str,
     pub align: Align,
     pub compute: fn(&mut ProcessContext) -> String,
+}
+
+impl Field {
+    pub(super) fn render(&self, context: &mut ProcessContext<'_>) -> String {
+        // procps output.c's PO/TO applicability applies only when m/-m
+        // displays both summaries and tasks. Flat task modes print all fields.
+        let process_only = matches!(
+            self.name,
+            "pid"
+                | "tgid"
+                | "ppid"
+                | "pgid"
+                | "sid"
+                | "tpgid"
+                | "comm"
+                | "args"
+                | "nlwp"
+                | "vsz"
+                | "rss"
+                | "%mem"
+                | "tty"
+                | "fds"
+        );
+        let thread_only = matches!(
+            self.name,
+            "tid"
+                | "lwp"
+                | "spid"
+                | "state"
+                | "stat"
+                | "nice"
+                | "pri"
+                | "psr"
+                | "wchan"
+                | "cls"
+                | "blocked"
+                | "ignored"
+                | "caught"
+        );
+        if matches!(context.kind, RowKind::ProcessSummary) && thread_only
+            || matches!(context.kind, RowKind::ThreadDetail) && process_only
+        {
+            "-".into()
+        } else {
+            (self.compute)(context)
+        }
+    }
 }
 
 /// Resolve a user-supplied column name to a registry entry. Match is
@@ -149,8 +277,36 @@ pub static FIELDS: &[Field] = &[
     // ---- Identifiers ------------------------------------------------
     Field {
         name: "pid",
-        aliases: &["tid", "lwp"],
+        aliases: &[],
         header: "PID",
+        align: Align::Right,
+        compute: |c| c.status.tgid.to_string(),
+    },
+    Field {
+        name: "tgid",
+        aliases: &[],
+        header: "TGID",
+        align: Align::Right,
+        compute: |c| c.status.tgid.to_string(),
+    },
+    Field {
+        name: "tid",
+        aliases: &[],
+        header: "TID",
+        align: Align::Right,
+        compute: |c| c.stat.pid.to_string(),
+    },
+    Field {
+        name: "lwp",
+        aliases: &[],
+        header: "LWP",
+        align: Align::Right,
+        compute: |c| c.stat.pid.to_string(),
+    },
+    Field {
+        name: "spid",
+        aliases: &[],
+        header: "SPID",
         align: Align::Right,
         compute: |c| c.stat.pid.to_string(),
     },
@@ -237,14 +393,14 @@ pub static FIELDS: &[Field] = &[
         aliases: &["egroup"],
         header: "GROUP",
         align: Align::Left,
-        compute: |c| gid_name(c, c.status.egid),
+        compute: |c| c.gid_name(c.status.egid).to_string(),
     },
     Field {
         name: "rgroup",
         aliases: &[],
         header: "RGROUP",
         align: Align::Left,
-        compute: |c| gid_name(c, c.status.rgid),
+        compute: |c| c.gid_name(c.status.rgid).to_string(),
     },
     // ---- Command ----------------------------------------------------
     Field {
@@ -280,7 +436,7 @@ pub static FIELDS: &[Field] = &[
         aliases: &[],
         header: "STAT",
         align: Align::Left,
-        compute: |c| format_stat(c.stat.state, c.stat),
+        compute: |c| format_stat(c.stat.state, c.stat, c.status.tgid),
     },
     Field {
         name: "nice",
@@ -308,7 +464,7 @@ pub static FIELDS: &[Field] = &[
         aliases: &["thcount"],
         header: "NLWP",
         align: Align::Right,
-        compute: |c| c.stat.num_threads.to_string(),
+        compute: |c| c.group_stat.num_threads.to_string(),
     },
     // ---- Memory -----------------------------------------------------
     Field {
@@ -316,7 +472,7 @@ pub static FIELDS: &[Field] = &[
         aliases: &["vsize"],
         header: "VSZ",
         align: Align::Right,
-        compute: |c| (c.stat.vsize / 1024).to_string(),
+        compute: |c| (c.group_stat.vsize / 1024).to_string(),
     },
     Field {
         name: "rss",
@@ -410,11 +566,7 @@ pub static FIELDS: &[Field] = &[
         aliases: &[],
         header: "WCHAN",
         align: Align::Left,
-        compute: |c| {
-            std::fs::read_to_string(format!("/proc/{}/wchan", c.stat.pid))
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| "-".into())
-        },
+        compute: |c| c.wchan().to_string(),
     },
     Field {
         name: "flags",
@@ -438,11 +590,7 @@ pub static FIELDS: &[Field] = &[
         aliases: &[],
         header: "FDS",
         align: Align::Right,
-        compute: |c| {
-            std::fs::read_dir(format!("/proc/{}/fd", c.stat.pid))
-                .map(|d| d.count().to_string())
-                .unwrap_or_else(|_| "?".into())
-        },
+        compute: |c| c.fds().to_string(),
     },
     // ---- Signal masks (16-char hex, like procps) -------------------
     Field {
@@ -450,7 +598,7 @@ pub static FIELDS: &[Field] = &[
         aliases: &["sig", "sig_pend"],
         header: "PENDING",
         align: Align::Left,
-        compute: |c| format!("{:016x}", c.status.sigpnd),
+        compute: |c| format!("{:016x}", c.pending_signals()),
     },
     Field {
         name: "blocked",
@@ -489,54 +637,5 @@ fn sched_class_str(policy: Option<u32>) -> &'static str {
         Some(5) => "IDL",
         Some(6) => "DLN",
         Some(_) => "?",
-    }
-}
-
-/// Resolve a GID to a group name via `/etc/group`, caching results in
-/// the per-run map. Falls back to the numeric value if the group
-/// doesn't exist.
-fn gid_name(c: &mut ProcessContext, gid: u32) -> String {
-    if let Some(name) = c.gid_cache.get(&gid) {
-        return name.clone();
-    }
-    let resolved = std::fs::read_to_string("/etc/group")
-        .ok()
-        .and_then(|contents| {
-            for line in contents.lines() {
-                let fields: Vec<&str> = line.split(':').collect();
-                if fields.len() >= 3
-                    && let Ok(file_gid) = fields[2].parse::<u32>()
-                    && file_gid == gid
-                {
-                    return Some(fields[0].to_string());
-                }
-            }
-            None
-        })
-        .unwrap_or_else(|| gid.to_string());
-    c.gid_cache.insert(gid, resolved.clone());
-    resolved
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lookup_canonical_and_aliases() {
-        assert_eq!(lookup("pid").map(|f| f.name), Some("pid"));
-        assert_eq!(lookup("PID").map(|f| f.name), Some("pid"));
-        // `tid` is an alias of `pid` here (no thread-table support yet).
-        assert_eq!(lookup("tid").map(|f| f.name), Some("pid"));
-        assert_eq!(lookup("ucmd").map(|f| f.name), Some("comm"));
-        assert_eq!(lookup("cmd").map(|f| f.name), Some("args"));
-        assert!(lookup("nosuchfield").is_none());
-    }
-
-    #[test]
-    fn pid_and_args_are_distinct_fields() {
-        let pid = lookup("pid").unwrap();
-        let args = lookup("args").unwrap();
-        assert!(!std::ptr::eq(pid, args));
     }
 }

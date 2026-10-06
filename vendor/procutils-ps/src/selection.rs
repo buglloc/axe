@@ -16,10 +16,15 @@ pub(super) struct BsdOptions {
     running: bool,
     current_tty: bool,
     pub wide: u8,
+    pub threads: bool,
+    pub mixed_threads: bool,
 }
 
 fn is_bsd_option(byte: u8) -> bool {
-    matches!(byte, b'a' | b'x' | b'u' | b'w' | b'r' | b'T')
+    matches!(
+        byte,
+        b'a' | b'x' | b'u' | b'w' | b'r' | b'T' | b'H' | b'm' | b'k'
+    )
 }
 
 pub(super) fn parse_bsd_options(value: &str) -> Result<BsdOptions, String> {
@@ -35,6 +40,9 @@ pub(super) fn parse_bsd_options(value: &str) -> Result<BsdOptions, String> {
             b'r' => options.running = true,
             b'T' => options.current_tty = true,
             b'w' => options.wide = options.wide.saturating_add(1).min(2),
+            b'H' => options.threads = true,
+            b'm' => options.mixed_threads = true,
+            b'k' => {}
             _ => return Err(format!("unsupported BSD option: {}", char::from(byte))),
         }
     }
@@ -50,7 +58,7 @@ fn bsd_argument(options: &[u8]) -> OsString {
 
 fn short_takes_next_value(options: &[u8]) -> bool {
     for (index, byte) in options.iter().enumerate() {
-        if matches!(*byte, b'p' | b'o' | b'U' | b'u') {
+        if matches!(*byte, b'p' | b'o' | b'U' | b'u' | b'k') {
             return index + 1 == options.len();
         }
     }
@@ -84,6 +92,19 @@ pub fn preprocess_argv(args: Vec<OsString>) -> Vec<OsString> {
             output.push(arg);
             continue;
         }
+        if !bytes.starts_with(b"-")
+            && let Some(index) = bytes.iter().position(|&byte| byte == b'k')
+            && bytes[..index].iter().copied().all(is_bsd_option)
+        {
+            output.push(bsd_argument(&bytes[..=index]));
+            output.push(OsString::from("--sort"));
+            if index + 1 == bytes.len() {
+                value_next = true;
+            } else {
+                output.push(OsString::from_vec(bytes[index + 1..].to_vec()));
+            }
+            continue;
+        }
         if !bytes.is_empty() && bytes.iter().copied().all(is_bsd_option) {
             output.push(bsd_argument(bytes));
             continue;
@@ -95,6 +116,7 @@ pub fn preprocess_argv(args: Vec<OsString>) -> Vec<OsString> {
                     | b"--user"
                     | b"--ruser"
                     | b"--format"
+                    | b"--sort"
                     | b"--bsd-options"
                     | b"--cols"
                     | b"--columns"
@@ -206,6 +228,8 @@ impl Selection {
             bsd_options.user_format |= options.user_format;
             bsd_options.running |= options.running;
             bsd_options.current_tty |= options.current_tty;
+            bsd_options.threads |= options.threads;
+            bsd_options.mixed_threads |= options.mixed_threads;
         }
         Ok(Self {
             all: args.all || args.e,
@@ -224,6 +248,12 @@ impl Selection {
     }
 
     pub fn includes(&self, stat: &Stat, status: &Status) -> bool {
+        self.selects(stat, status) && (!self.running_only || matches!(stat.state, 'R' | 'D'))
+    }
+
+    /// Group selection without the activity restriction. Flat thread modes
+    /// apply activity to each task; mixed mode applies it to the summary.
+    pub fn selects(&self, stat: &Stat, status: &Status) -> bool {
         let uid_selected =
             self.real_uids.contains(&status.ruid) || self.effective_uids.contains(&status.euid);
         let has_uids = !self.real_uids.is_empty() || !self.effective_uids.is_empty();
@@ -233,11 +263,11 @@ impl Selection {
         // Explicit PIDs replace broad selection, but PID and UID lists are
         // additive. In contrast, -e/-A with only UID filters still selects all.
         let selected = if !self.pids.is_empty() {
-            self.pids.contains(&stat.pid) || uid_selected || tty_selected
+            self.pids.contains(&status.tgid) || uid_selected || tty_selected
         } else if self.all {
             true
         } else {
-            let unix_selected = (self.unix_a && stat.tty_nr != 0 && stat.pid != stat.session)
+            let unix_selected = (self.unix_a && stat.tty_nr != 0 && status.tgid != stat.session)
                 || (self.unix_x && own);
             let bsd_selected = match (self.bsd_options.a, self.bsd_options.x) {
                 (true, true) => true,
@@ -260,8 +290,6 @@ impl Selection {
             uid_selected || unix_selected || bsd_selected || tty_selected || default_selected
         };
 
-        // Apply the activity restriction to the complete selection, including
-        // explicit PIDs and users. procps treats R and D as active states.
-        selected && (!self.running_only || matches!(stat.state, 'R' | 'D'))
+        selected
     }
 }

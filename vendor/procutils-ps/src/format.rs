@@ -166,12 +166,6 @@ mod tests {
     }
 
     #[test]
-    fn aliases_resolve_to_canonical() {
-        let s = parse_format_spec(&["tid,ucmd,cmd".into()]).unwrap();
-        assert_eq!(names(&s), ["pid", "comm", "args"]);
-    }
-
-    #[test]
     fn unknown_column_errors() {
         let err = match parse_format_spec(&["pid,nosuchfield".into()]) {
             Err(e) => e,

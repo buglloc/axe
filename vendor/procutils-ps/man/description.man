@@ -34,6 +34,14 @@ output to specific PIDs.
 \fB\-U\fR selects real user IDs. \fB\-u\fR / \fB\-\-user\fR selects
 effective user IDs. User lists accept names or numeric IDs separated
 by commas or spaces. An unknown user name is an error.
+.IP \(bu 2
+\fB\-L\fR / \fB\-T\fR — list threads with LWP / SPID columns.
+BSD \fBH\fR lists threads in the BSD format.
+.IP \(bu 2
+\fB\-m\fR / BSD \fBm\fR — list each process summary followed by its threads.
+.IP \(bu 2
+\fB\-\-sort=KEY,\-KEY,...\fR / BSD \fBk\fR — sort by raw field values
+using ascending or descending keys.
 .PP
 Custom output is available through \fB\-o\fR / \fB\-\-format\fR.
 See FIELD DESCRIPTIONS for field names, aliases, and header overrides.

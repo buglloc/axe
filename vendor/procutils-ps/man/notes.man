@@ -64,18 +64,47 @@ C and UTF-8 locales are supported. Command-line newlines become
 spaces; other control characters, including terminal escapes, become
 \fB?\fR. Legacy non-UTF-8 character sets are not emulated.
 Nominally unlimited output retains a 128 KiB buffer bound.
+.SS Thread snapshots
+.PP
+\fB\-L\fR, \fB\-T\fR and BSD \fBH\fR list actual tasks, including
+the main thread. PID/TGID remains the process ID; TID/LWP/SPID is
+the task ID. Task CPU time, state, name and scheduling come from
+\fI/proc/[pid]/task/[tid]/stat\fR. Memory and NLWP belong to the process.
+\fB\-p\fR selects process IDs, not nonleader task IDs.
+.PP
+\fB\-m\fR and BSD \fBm\fR print each process summary followed by
+its tasks. Inapplicable fields contain \fB\-\fR. Summary CPU time
+is the true process aggregate. Running-only selection applies to
+individual tasks in flat modes and to processes in mixed mode.
+Tasks that disappear or cannot be read are skipped.
+.SS Sorting
+.PP
+\fB\-\-sort=KEY,\-KEY,...\fR and BSD \fBk\fR accept multiple
+case-sensitive keys. A leading \fB+\fR or no sign sorts ascending;
+\fB\-\fR sorts descending. Invalid, missing or repeated sort options
+exit with status 1.
+.PP
+Keys use raw values before display rounding, clipping or mixed-row
+masking. Numeric IDs sort numerically; user and group names sort as
+text. \fIcomm\fR sorts task names; \fIargs\fR, \fIcmd\fR and
+\fIcommand\fR sort full command lines. \fIpri\fR sorts kernel priority,
+\fI%mem\fR sorts RSS, and \fI%cpu\fR sorts lifetime utilization.
+Equal keys retain PID/TID order.
+.PP
+Flat thread modes sort all tasks together. Mixed mode sorts process
+groups and their tasks separately, retaining each summary first.
+Sorting preserves every readable task. This avoids task loss in
+procps-ng 4.0.6's sorted \fB\-L\fR/\fB\-m\fR output; mixed running-only
+selection also terminates when only a worker is active.
+\fIvsize\fR sorts actual stat bytes and \fIvsz\fR sorts status VmSize,
+rather than copying the local procps-ng 4.0.6's PID-order vsize result.
 .SS Limitations
 .PP
 This implementation is a deliberately small subset of upstream
 \fBps\fR. Notable absences:
-.IP \(bu 2
-No per-thread process listing. Fields \fItid\fR / \fIlwp\fR remain
-aliases of \fIpid\fR.
 .IP \(bu 2
 No process-group / parent-PID / TTY filters (\fB\-g\fR, \fB\-\-ppid\fR,
 \fB\-t\fR). Use \fBpgrep\fR(1) for richer selection.
 .IP \(bu 2
 No tree view (\fB\-\-forest\fR). Use \fBpstree\fR(1) for
 parent-child hierarchies.
-.IP \(bu 2
-No sort flag (\fB\-\-sort\fR). Pipe through \fBsort\fR(1) instead.

@@ -1,7 +1,7 @@
 //! Width policy and plain-text rendering shared by every ps output format.
 
 use crate::{
-    Args,
+    Args, Row,
     fields::Align,
     format::{FieldSpec, suppress_headers},
 };
@@ -99,7 +99,7 @@ fn fd_width(fd: i32) -> Option<usize> {
     (result == 0 && size.ws_col > 0 && size.ws_row > 0).then_some(size.ws_col as usize)
 }
 
-fn utf8_locale() -> bool {
+pub(super) fn utf8_locale() -> bool {
     let name = ["LC_ALL", "LC_CTYPE", "LANG"]
         .into_iter()
         .filter_map(env::var_os)
@@ -179,7 +179,7 @@ fn text_width(text: &str, command_line: bool, utf8: bool, limit: usize) -> usize
     width
 }
 
-fn write_text(
+pub(super) fn write_text(
     out: &mut impl Write,
     text: &str,
     command_line: bool,
@@ -223,9 +223,9 @@ fn write_spaces(out: &mut impl Write, mut count: usize) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn write_table(
+pub(super) fn write_table<'a>(
     specs: &[FieldSpec],
-    rows: &[(i32, Vec<String>)],
+    rows: impl Clone + Iterator<Item = &'a Row>,
     width: Option<usize>,
     out: &mut impl Write,
 ) -> io::Result<()> {
@@ -242,8 +242,8 @@ pub(super) fn write_table(
             )
         })
         .collect();
-    for (_, cells) in rows {
-        for (index, (spec, cell)) in specs.iter().zip(cells).enumerate() {
+    for row in rows.clone() {
+        for (index, (spec, cell)) in specs.iter().zip(&row.cells).enumerate() {
             let cell_width = text_width(cell, spec.field.name == "args", utf8, OUTPUT_LIMIT - 1);
             widths[index] = widths[index].max(cell_width);
         }
@@ -308,11 +308,11 @@ pub(super) fn write_table(
             out,
         )?;
     }
-    for (_, cells) in rows {
+    for row in rows {
         write_row(
             specs,
             &widths,
-            cells.iter().map(String::as_str),
+            row.cells.iter().map(String::as_str),
             utf8,
             false,
             out,

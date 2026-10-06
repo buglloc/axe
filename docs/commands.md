@@ -67,6 +67,19 @@ The bundled `ps` accepts BSD option clusters such as `aux` and `auxww`. `a` sele
 
 `ps -f` prints `UID PID PPID C STIME TTY TIME CMD`, with effective-user names and `TIME` in `HH:MM:SS` form. A selection with no matching processes prints its headers and exits with status 1. Custom `-o` headers disappear only when every selected field has an empty label, such as `-o pid=,args=`. AXE carries its `ps` fixes in the vendored `procutils-ps` backend.
 
+`ps -L`, `-T`, and BSD `H` (including `axH` and `auxH`) list actual Linux tasks. `PID` and `TGID` identify the process; `TID`, `LWP`, and `SPID` identify the task, including the main thread. CPU time, state, command name, and nice value come from that task's `/proc/PID/task/TID/stat`; memory and `NLWP` belong to the process. `-L` adds `LWP` to fixed formats, and `-T` adds `SPID`. `-m` or BSD `m` prints each process summary before its tasks, with `-` for fields that do not apply to that row. `-p` accepts process IDs, not nonleader task IDs. With `r`, flat thread modes select active tasks; mixed mode selects active processes.
+
+`ps --sort=KEY,-KEY,...` and BSD `k` sort by multiple keys, with `+` or no prefix for ascending order and `-` for descending order. Numeric keys use raw values, not rounded or masked output: `%cpu` uses lifetime utilization, `%mem` uses RSS, and `pri` uses kernel priority rather than the displayed `39 - priority`. User/group names sort as text; UID/GID fields sort numerically. `comm` sorts task names; `args`, `cmd`, and `command` sort full command lines. Keys are case-sensitive; invalid, missing, or repeated sort options exit with status 1. Equal keys retain PID/TID order. Flat thread modes sort all tasks together; mixed mode sorts process groups and then their tasks, keeping summaries first.
+
+```console
+axe ps -eL
+axe ps -L -p "$PID" -o pid,tid,pcpu,stat,comm --sort=-pcpu
+axe ps aux --sort=-rss,pid
+axe ps axk-rss,pid
+```
+
+AXE keeps all task rows when sorting and reports aggregate process CPU in mixed summaries. It terminates mixed running-only selection even when only a worker is active. These differ from task loss, leader-only summary CPU, and a hang observed in procps-ng 4.0.6. `vsize` sorts actual stat bytes, whereas `vsz` sorts status `VmSize`; the local procps-ng 4.0.6 leaves `vsize` in PID order.
+
 `ps` takes its output width from `COLUMNS` or the terminal; redirected output without `COLUMNS` is unbounded up to its 128 KiB output-buffer limit. `w` or `-w` widens bounded output to at least 132 columns. Two `w` options, including `ww`, `-ww`, or `w -w`, remove the width bound. `--cols WIDTH`, `--columns WIDTH`, and `--width WIDTH` set an explicit width; the last explicit value wins, then the `w` options apply. Command fields are clipped by display columns without splitting UTF-8. Fixed fields and headers are preserved even on a narrow terminal; column padding remains dynamic rather than using procps's fixed minimum widths.
 
 `RSS` comes from `/proc/PID/status`'s `VmRSS` in KiB, with zero for processes without that field. `%MEM` truncates to one decimal place. `%CPU` is a lifetime average using `CLOCK_BOOTTIME` ticks: it truncates to one decimal below 100%, then prints whole percentages without capping multicore usage. `C` truncates to an integer capped at 99. `PRI` is `39 - kernel priority` (`19 - nice` for normal scheduling), and `F` shows the low three legacy flag bits after shifting by six. Elapsed-time fields subtract start ticks before converting to seconds.

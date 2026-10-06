@@ -4,8 +4,8 @@
 Columns: \fIPID\fR \fITTY\fR \fITIME\fR \fICMD\fR.
 .TP
 .B PID
-Process ID, from \fI/proc/[pid]/stat\fR field 1 (see
-\fBproc_pid_stat\fR(5)).
+Process ID (thread-group ID), from \fI/proc/[pid]/status\fR's
+\fITgid\fR. It remains the process ID in flat thread listings.
 .TP
 .B TTY
 Controlling terminal name (\fItty2\fR, \fIpts/0\fR, etc.) or
@@ -17,7 +17,7 @@ as \fIHH:MM:SS\fR.
 .TP
 .B CMD
 Short command name from \fI/proc/[pid]/stat\fR's \fIcomm\fR field
-(see \fBproc_pid_comm\fR(5)). Truncated by the kernel to 16 bytes.
+(see \fBproc_pid_comm\fR(5)). Limited by the kernel to 15 bytes.
 .SS Full format (\-f)
 .PP
 Columns: \fIUID\fR \fIPID\fR \fIPPID\fR \fIC\fR \fISTIME\fR
@@ -124,9 +124,12 @@ Field names below are listed canonical-first; bracketed forms
 Lookup is case-insensitive.
 .SS Identifiers
 .TP
-.B pid \fR[\fItid\fR, \fIlwp\fR]
-Process ID. \fItid\fR/\fIlwp\fR currently alias \fIpid\fR; per-thread
-output is deferred.
+.B pid, tgid
+Process ID (thread-group ID). Headers: \fBPID\fR and \fBTGID\fR.
+.TP
+.B tid, lwp, spid
+Actual task ID. Headers: \fBTID\fR, \fBLWP\fR and \fBSPID\fR.
+In a process-only listing this is the main task ID, equal to PID.
 .TP
 .B ppid
 Parent process ID.
@@ -186,7 +189,7 @@ the nice value; larger numbers mean higher priority.
 CPU index the process last ran on, or \fB?\fR if not reported.
 .TP
 .B nlwp \fR[\fIthcount\fR]
-Number of threads (kernel \fInum_threads\fR).
+Number of tasks in the process (group kernel \fInum_threads\fR).
 .TP
 .B cls \fR[\fIclass\fR, \fIpolicy\fR]
 Scheduler class abbreviation: \fBTS\fR (SCHED_NORMAL),

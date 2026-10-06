@@ -219,7 +219,7 @@ fn is_leap(y: i64) -> bool {
 }
 
 /// `STAT` field: state char plus modifier letters (`<`, `N`, `s`, `l`, `+`).
-pub fn format_stat(state: char, stat: &Stat) -> String {
+pub fn format_stat(state: char, stat: &Stat, tgid: i32) -> String {
     let mut s = String::new();
     s.push(state);
 
@@ -229,7 +229,7 @@ pub fn format_stat(state: char, stat: &Stat) -> String {
         s.push('N');
     }
 
-    if stat.session == stat.pid {
+    if stat.session == tgid {
         s.push('s');
     }
 

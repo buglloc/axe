@@ -6,19 +6,21 @@ use procfs::{
     process::{self, Process},
 };
 use procutils_common::{MAX_TERM_WIDTH, man::ManContent};
-use std::{collections::HashMap, process::ExitCode};
+use std::{cell::OnceCell, collections::HashMap, process::ExitCode};
 
 mod fields;
 mod format;
 mod format_helpers;
 mod output;
 mod selection;
+mod sort;
 
 pub use selection::preprocess_argv;
 
-use fields::ProcessContext;
+use fields::{ProcessContext, RowKind};
 use format::{FieldSpec, parse_format_spec};
 use selection::{BsdOptions, Selection};
+use sort::{SortSpec, SortValue};
 
 pub const MAN: ManContent = ManContent {
     description: Some(include_str!("../man/description.man")),
@@ -60,6 +62,28 @@ pub struct Args {
     /// Select active processes only.
     #[arg(short)]
     r: bool,
+
+    /// Show every thread, with an LWP column.
+    #[arg(short = 'L')]
+    threads_lwp: bool,
+
+    /// Show every thread, with an SPID column.
+    #[arg(short = 'T')]
+    threads_spid: bool,
+
+    /// Show a process summary followed by its threads.
+    #[arg(short = 'm')]
+    threads_mixed: bool,
+
+    /// Sort by comma-separated fields, optionally prefixed with + or -.
+    #[arg(
+        long = "sort",
+        short_alias = 'k',
+        allow_hyphen_values = true,
+        num_args = 0..=1,
+        default_missing_value = ""
+    )]
+    sort: Vec<String>,
 
     /// Wide output. Use twice for unlimited width.
     #[arg(short, action = clap::ArgAction::Count)]
@@ -107,10 +131,77 @@ pub struct Args {
     #[arg(long, hide = true, value_parser = selection::parse_bsd_options)]
     bsd_options: Vec<BsdOptions>,
 }
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum ThreadMode {
+    Processes,
+    Tasks,
+    Mixed,
+}
+
+struct ThreadOptions {
+    mode: ThreadMode,
+    identifier: Option<&'static str>,
+}
+
+impl ThreadOptions {
+    fn new(args: &Args) -> Result<Self, String> {
+        let bsd_threads = args.bsd_options.iter().any(|options| options.threads);
+        let bsd_mixed = args.bsd_options.iter().any(|options| options.mixed_threads);
+        if args.threads_lwp && args.threads_spid {
+            return Err("ps: thread flags conflict; can't use both -L and -T".into());
+        }
+        if bsd_threads && (bsd_mixed || args.threads_mixed) {
+            return Err("ps: thread flags conflict; can't use H with m or -m".into());
+        }
+        if bsd_mixed && args.threads_mixed {
+            return Err("ps: thread flags conflict; can't use both m and -m".into());
+        }
+        let identifier = if args.threads_lwp {
+            Some("lwp")
+        } else if args.threads_spid {
+            Some("spid")
+        } else {
+            None
+        };
+        if !args.format.is_empty() {
+            if identifier.is_some() && (bsd_threads || bsd_mixed || args.threads_mixed) {
+                return Err("ps: -L/-T with H/m/-m and -o is nonsense".into());
+            }
+            if args.f && (identifier.is_some() || bsd_threads || bsd_mixed || args.threads_mixed) {
+                return Err("ps: conflicting format options".into());
+            }
+        }
+        Ok(Self {
+            mode: if bsd_mixed || args.threads_mixed {
+                ThreadMode::Mixed
+            } else if bsd_threads || identifier.is_some() {
+                ThreadMode::Tasks
+            } else {
+                ThreadMode::Processes
+            },
+            identifier,
+        })
+    }
+}
+
+/// Rendered cells and raw sort keys share one row allocation path.
+struct Row {
+    pid: i32,
+    tid: i32,
+    cells: Vec<String>,
+    sort_values: Vec<SortValue>,
+}
+
+struct ProcessRows {
+    summary: Row,
+    tasks: Vec<Row>,
+}
 
 /// Caller-context shared across fixed and custom output.
 struct RunContext {
     selection: Selection,
+    threads: ThreadOptions,
+    sort: SortSpec,
     boot_time: u64,
     total_mem: u64,
     uptime_secs: f64,
@@ -119,6 +210,8 @@ struct RunContext {
 }
 
 fn build_ctx(args: &Args) -> Result<RunContext, String> {
+    let threads = ThreadOptions::new(args)?;
+    let sort = SortSpec::parse(&args.sort).map_err(|error| format!("ps: {error}"))?;
     let myself = Process::myself().map_err(|e| format!("ps: {e}"))?;
     let status = myself.status().map_err(|e| format!("ps: {e}"))?;
     let stat = myself.stat().map_err(|e| format!("ps: {e}"))?;
@@ -138,6 +231,8 @@ fn build_ctx(args: &Args) -> Result<RunContext, String> {
 
     Ok(RunContext {
         selection,
+        threads,
+        sort,
         boot_time,
         total_mem,
         uptime_secs,
@@ -170,10 +265,13 @@ pub fn run(args: Args) -> ExitCode {
         return run_with_format(&ctx, &specs);
     }
 
-    run_with_format(&ctx, &fixed_format(&ctx.selection, args.f))
+    run_with_format(
+        &ctx,
+        &fixed_format(&ctx.selection, args.f, ctx.threads.identifier),
+    )
 }
 
-fn fixed_format(selection: &Selection, full: bool) -> Vec<FieldSpec> {
+fn fixed_format(selection: &Selection, full: bool, identifier: Option<&str>) -> Vec<FieldSpec> {
     let columns: &[(&str, &str)] = if full {
         &[
             ("user", "UID"),
@@ -215,13 +313,35 @@ fn fixed_format(selection: &Selection, full: bool) -> Vec<FieldSpec> {
             ("comm", "CMD"),
         ]
     };
-    columns
+    let mut columns: Vec<FieldSpec> = columns
         .iter()
-        .map(|&(name, header)| FieldSpec {
-            field: fields::lookup(name).expect("fixed ps field"),
-            label: Some(header.to_string()),
-        })
-        .collect()
+        .map(|&(name, header)| fixed_field(name, header))
+        .collect();
+    if let Some(identifier) = identifier {
+        let after = if identifier == "lwp" && full {
+            "ppid"
+        } else {
+            "pid"
+        };
+        if let Some(index) = columns.iter().position(|spec| spec.field.name == after) {
+            let header = if identifier == "lwp" { "LWP" } else { "SPID" };
+            columns.insert(index + 1, fixed_field(identifier, header));
+        }
+        if identifier == "lwp" {
+            let cpu = if full { "c" } else { "%cpu" };
+            if let Some(index) = columns.iter().position(|spec| spec.field.name == cpu) {
+                columns.insert(index + 1, fixed_field("nlwp", "NLWP"));
+            }
+        }
+    }
+    columns
+}
+
+fn fixed_field(name: &str, header: &str) -> FieldSpec {
+    FieldSpec {
+        field: fields::lookup(name).expect("fixed ps field"),
+        label: Some(header.to_string()),
+    }
 }
 
 fn run_with_format(ctx: &RunContext, specs: &[FieldSpec]) -> ExitCode {
@@ -236,9 +356,11 @@ fn run_with_format(ctx: &RunContext, specs: &[FieldSpec]) -> ExitCode {
     let mut uid_cache = procutils_common::uid::UidCache::new();
     let mut gid_cache: HashMap<u32, String> = HashMap::new();
 
-    let needs_cmdline = specs.iter().any(|spec| spec.field.name == "args");
+    let needs_cmdline =
+        specs.iter().any(|spec| spec.field.name == "args") || ctx.sort.needs_cmdline();
 
-    let mut rows: Vec<(i32, Vec<String>)> = Vec::new();
+    let mut rows: Vec<Row> = Vec::new();
+    let mut groups: Vec<ProcessRows> = Vec::new();
     for proc_result in all_procs {
         let proc = match proc_result {
             Ok(p) => p,
@@ -252,7 +374,12 @@ fn run_with_format(ctx: &RunContext, specs: &[FieldSpec]) -> ExitCode {
             Ok(s) => s,
             Err(_) => continue,
         };
-        if !ctx.selection.includes(&stat, &status) {
+        let selected = if ctx.threads.mode == ThreadMode::Tasks {
+            ctx.selection.selects(&stat, &status)
+        } else {
+            ctx.selection.includes(&stat, &status)
+        };
+        if !selected {
             continue;
         }
         let cmdline = if needs_cmdline {
@@ -261,34 +388,146 @@ fn run_with_format(ctx: &RunContext, specs: &[FieldSpec]) -> ExitCode {
             String::new()
         };
 
-        let mut pctx = ProcessContext {
-            stat: &stat,
-            status: &status,
-            cmdline: &cmdline,
-            uid_cache: &mut uid_cache,
-            gid_cache: &mut gid_cache,
-            boot_time: ctx.boot_time,
-            uptime_secs: ctx.uptime_secs,
-            tps: ctx.tps,
-            total_mem_kb: ctx.total_mem / 1024,
+        let summary = if ctx.threads.mode != ThreadMode::Tasks {
+            let mut pctx = ProcessContext {
+                stat: &stat,
+                status: &status,
+                group_stat: &stat,
+                group_status: &status,
+                kind: if ctx.threads.mode == ThreadMode::Mixed {
+                    RowKind::ProcessSummary
+                } else {
+                    RowKind::Process
+                },
+                fds_cache: OnceCell::new(),
+                wchan_cache: OnceCell::new(),
+                cmdline: &cmdline,
+                uid_cache: &mut uid_cache,
+                gid_cache: &mut gid_cache,
+                boot_time: ctx.boot_time,
+                uptime_secs: ctx.uptime_secs,
+                tps: ctx.tps,
+                total_mem_kb: ctx.total_mem / 1024,
+            };
+            Some(make_row(specs, &ctx.sort, &mut pctx))
+        } else {
+            None
         };
-        let cells: Vec<String> = specs.iter().map(|s| (s.field.compute)(&mut pctx)).collect();
-        rows.push((stat.pid, cells));
+        if ctx.threads.mode == ThreadMode::Processes {
+            rows.extend(summary);
+            continue;
+        }
+
+        let mut task_rows = Vec::new();
+        let mut append_task = |task: process::Task| {
+            // Even the leader needs /proc/PID/task/PID/stat: /proc/PID/stat
+            // accumulates group CPU time and is not a main-thread snapshot.
+            let Ok(task_stat) = task.stat() else {
+                return;
+            };
+            let Ok(task_status) = task.status() else {
+                return;
+            };
+            if ctx.threads.mode == ThreadMode::Tasks
+                && !ctx.selection.includes(&task_stat, &task_status)
+            {
+                return;
+            }
+            let mut pctx = ProcessContext {
+                stat: &task_stat,
+                status: &task_status,
+                group_stat: &stat,
+                group_status: &status,
+                kind: if ctx.threads.mode == ThreadMode::Mixed {
+                    RowKind::ThreadDetail
+                } else {
+                    RowKind::Thread
+                },
+                fds_cache: OnceCell::new(),
+                wchan_cache: OnceCell::new(),
+                cmdline: &cmdline,
+                uid_cache: &mut uid_cache,
+                gid_cache: &mut gid_cache,
+                boot_time: ctx.boot_time,
+                uptime_secs: ctx.uptime_secs,
+                tps: ctx.tps,
+                total_mem_kb: ctx.total_mem / 1024,
+            };
+            let row = make_row(specs, &ctx.sort, &mut pctx);
+            if ctx.threads.mode == ThreadMode::Mixed {
+                task_rows.push(row);
+            } else {
+                rows.push(row);
+            }
+        };
+        match proc.tasks() {
+            Ok(tasks) => {
+                for task in tasks.flatten() {
+                    append_task(task);
+                }
+            }
+            Err(_) => {
+                // A task directory can disappear or be unreadable during a
+                // snapshot. Try the actual leader task, never invent a row
+                // from the aggregate stat. Mixed mode retains its summary.
+                if let Ok(task) = proc.task_main_thread() {
+                    append_task(task);
+                }
+            }
+        }
+        if let Some(summary) = summary {
+            task_rows.sort_unstable_by(|left, right| compare_rows(&ctx.sort, left, right));
+            groups.push(ProcessRows {
+                summary,
+                tasks: task_rows,
+            });
+        }
     }
 
-    rows.sort_by_key(|(pid, _)| *pid);
+    rows.sort_unstable_by(|left, right| compare_rows(&ctx.sort, left, right));
+    groups.sort_unstable_by(|left, right| compare_rows(&ctx.sort, &left.summary, &right.summary));
 
     let _ = output::write_table(
         specs,
-        &rows,
+        rows.iter().chain(
+            groups
+                .iter()
+                .flat_map(|group| std::iter::once(&group.summary).chain(group.tasks.iter())),
+        ),
         ctx.output_width,
         &mut std::io::stdout().lock(),
     );
-    if rows.is_empty() {
+    if rows.is_empty() && groups.is_empty() {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn make_row(specs: &[FieldSpec], sort: &SortSpec, context: &mut ProcessContext<'_>) -> Row {
+    let sort_values = if sort.is_empty() {
+        Vec::new()
+    } else {
+        sort.values(context)
+    };
+    Row {
+        pid: context.status.tgid,
+        tid: context.stat.pid,
+        cells: specs
+            .iter()
+            .map(|spec| spec.field.render(context))
+            .collect(),
+        sort_values,
+    }
+}
+
+fn compare_rows(sort: &SortSpec, left: &Row, right: &Row) -> std::cmp::Ordering {
+    let keys = if sort.is_empty() {
+        std::cmp::Ordering::Equal
+    } else {
+        sort.compare(&left.sort_values, &right.sort_values)
+    };
+    keys.then_with(|| (left.pid, left.tid).cmp(&(right.pid, right.tid)))
 }
 
 #[cfg(test)]

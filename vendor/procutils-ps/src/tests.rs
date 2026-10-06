@@ -77,6 +77,13 @@ fn unix_and_bsd_defaults_and_terminal_selectors() {
         (&["-w"], &[101, 102]),
         (&["-ww"], &[101, 102]),
         (&["-w", "-w"], &[101, 102]),
+        (&["--sort", "pid"], &[101, 102]),
+        (&["kpid"], &[101, 102, 103]),
+        (&["H"], &[101, 102, 103]),
+        (&["m"], &[101, 102, 103]),
+        (&["-L"], &[101, 102]),
+        (&["-T"], &[101, 102]),
+        (&["-m"], &[101, 102]),
         (&["u"], &[101, 102, 103]),
         (&["w"], &[101, 102, 103]),
         (&["ww"], &[101, 102, 103]),
@@ -208,15 +215,53 @@ fn running_only_applies_after_pid_and_user_selection() {
 }
 
 #[test]
+fn thread_selection_uses_tgid_and_task_activity_without_session_leader_leaks() {
+    let (group_stat, group_status) = process_fixture(101, 101, TTY, OWN, OWN);
+    let (mut task_stat, mut task_status) = process_fixture(501, 101, TTY, OWN, OWN);
+    task_stat.state = 'R';
+    task_status.tgid = group_status.tgid;
+    let selection = Selection::new(&args(&["-L", "-p", "101", "r"]), OWN, TTY).unwrap();
+    assert!(selection.selects(&group_stat, &group_status));
+    assert!(!selection.includes(&group_stat, &group_status));
+    assert!(selection.includes(&task_stat, &task_status));
+    assert!(
+        !Selection::new(&args(&["-L", "-p", "501"]), OWN, TTY)
+            .unwrap()
+            .includes(&task_stat, &task_status)
+    );
+    assert!(
+        !Selection::new(&args(&["-L", "-a"]), OWN, TTY)
+            .unwrap()
+            .includes(&task_stat, &task_status)
+    );
+    assert!(
+        Selection::new(&args(&["-L"]), OWN, TTY)
+            .unwrap()
+            .includes(&task_stat, &task_status)
+    );
+    assert!(
+        !Selection::new(&args(&["-L"]), OTHER, TTY)
+            .unwrap()
+            .includes(&task_stat, &task_status)
+    );
+}
+
+#[test]
 fn option_like_values_are_not_reinterpreted_as_bsd_flags() {
-    for options in [["-U", "ax"], ["-u", "aux"], ["-p", "ww"]] {
+    for options in [
+        ["-U", "ax"],
+        ["-u", "aux"],
+        ["-p", "ww"],
+        ["-p", "Hm"],
+        ["-p", "axk-rss,pid"],
+    ] {
         let parsed = args(&options);
         assert!(Selection::new(&parsed, OWN, TTY).is_err(), "{options:?}");
     }
     let parsed = args(&["-o", "pid=aux,comm=w"]);
     let specs = parse_format_spec(&parsed.format).unwrap();
     let mut rendered = Vec::new();
-    output::write_table(&specs, &[], None, &mut rendered).unwrap();
+    output::write_table(&specs, std::iter::empty(), None, &mut rendered).unwrap();
     assert_eq!(
         String::from_utf8(rendered)
             .unwrap()
@@ -247,6 +292,11 @@ fn render_process_with_memory(
     let mut process = ProcessContext {
         stat,
         status,
+        group_stat: stat,
+        group_status: status,
+        kind: RowKind::Process,
+        fds_cache: OnceCell::new(),
+        wchan_cache: OnceCell::new(),
         cmdline: "program --flag",
         uid_cache: &mut uid_cache,
         gid_cache: &mut gid_cache,
@@ -255,12 +305,9 @@ fn render_process_with_memory(
         tps: 100,
         total_mem_kb,
     };
-    let cells = specs
-        .iter()
-        .map(|spec| (spec.field.compute)(&mut process))
-        .collect();
+    let row = make_row(specs, &SortSpec::parse(&[]).unwrap(), &mut process);
     let mut output = Vec::new();
-    output::write_table(specs, &[(stat.pid, cells)], None, &mut output).unwrap();
+    output::write_table(specs, std::iter::once(&row), None, &mut output).unwrap();
     String::from_utf8(output).unwrap()
 }
 
@@ -458,7 +505,12 @@ fn fixed_user_format_uses_truncated_percentages_and_status_rss() {
     stat.stime = 0;
     status.vmrss = Some(129);
     let selection = Selection::new(&args(&["u"]), u32::MAX, TTY).unwrap();
-    let output = render_process(&fixed_format(&selection, false), &stat, &status, 200.0);
+    let output = render_process(
+        &fixed_format(&selection, false, None),
+        &stat,
+        &status,
+        200.0,
+    );
     let start = format_helpers::format_start_compact(stat.starttime, 0, 100);
     assert_eq!(
         output
@@ -492,7 +544,7 @@ fn full_format_renders_effective_user_order_and_three_part_time() {
     stat.stime = 0;
     let parsed = args(&["-f"]);
     let selection = Selection::new(&parsed, u32::MAX, TTY).unwrap();
-    let output = render_process(&fixed_format(&selection, true), &stat, &status, 200.0);
+    let output = render_process(&fixed_format(&selection, true, None), &stat, &status, 200.0);
     let mut lines = output.lines();
     assert_eq!(
         lines.next().unwrap().split_whitespace().collect::<Vec<_>>(),
@@ -515,4 +567,59 @@ fn full_format_renders_effective_user_order_and_three_part_time() {
         expected
     );
     assert!(lines.next().is_none());
+}
+
+#[test]
+fn task_cells_keep_group_identifiers_and_thread_stat_without_copying_memory_or_cpu() {
+    let (mut group_stat, mut group_status) = process_fixture(101, 101, TTY, OWN, OWN);
+    group_stat.num_threads = 3;
+    group_stat.utime = 250;
+    group_stat.stime = 50;
+    group_status.vmrss = Some(512);
+    let (mut task_stat, mut task_status) = process_fixture(501, 101, TTY, OWN, OWN);
+    task_stat.comm = "worker".into();
+    task_stat.nice = 12;
+    task_stat.num_threads = 1;
+    task_stat.utime = 100;
+    task_stat.stime = 0;
+    task_stat.state = 'R';
+    task_status.tgid = 101;
+    task_status.vmrss = None;
+    let specs = parse_format_spec(&[
+        "pid=,tgid=,tid=,lwp=,spid=,nlwp=,comm=,ni=,state=,stat=,cputimes=,rss=".into(),
+    ])
+    .unwrap();
+    let mut uid_cache = procutils_common::uid::UidCache::new();
+    let mut gid_cache = HashMap::new();
+    let mut context = ProcessContext {
+        stat: &task_stat,
+        status: &task_status,
+        group_stat: &group_stat,
+        group_status: &group_status,
+        kind: RowKind::Thread,
+        fds_cache: OnceCell::new(),
+        wchan_cache: OnceCell::new(),
+        cmdline: "",
+        uid_cache: &mut uid_cache,
+        gid_cache: &mut gid_cache,
+        boot_time: 0,
+        uptime_secs: 200.0,
+        tps: 100,
+        total_mem_kb: 1024,
+    };
+    let row = make_row(&specs, &SortSpec::parse(&[]).unwrap(), &mut context);
+    assert_eq!(
+        row.cells,
+        [
+            "101", "101", "501", "501", "501", "3", "worker", "12", "R", "RNs+", "1", "512"
+        ]
+    );
+    context.kind = RowKind::ThreadDetail;
+    let row = make_row(&specs, &SortSpec::parse(&[]).unwrap(), &mut context);
+    assert_eq!(
+        row.cells,
+        [
+            "-", "-", "501", "501", "501", "-", "-", "12", "R", "RNs+", "1", "-"
+        ]
+    );
 }
