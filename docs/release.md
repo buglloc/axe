@@ -22,7 +22,11 @@ For later releases, choose the SemVer change:
 just release-prepare patch  # or minor / major
 ```
 
-`release-prepare` uses the current workspace version for the first release; thereafter it calculates the next version from the last `vX.Y.Z` tag. It updates the workspace version and lockfile, then asks `omp -p` to draft `release-notes/vX.Y.Z.md` from public Git history and changed source. These notes are not in Hugo's content tree and do not appear on the website before publication. OMP does not choose the version or approve the release. Check every claim against the code and commits. Correct or remove unsupported claims, then commit the version, lockfile, and notes and push `main`:
+`release-prepare` uses the current workspace version for the first release; thereafter it calculates the next version from the last `vX.Y.Z` tag. It asks `omp -p` to draft `release-notes/vX.Y.Z.md` from public Git history and changed source, then updates the workspace version and lockfile. These notes are not in Hugo's content tree and do not appear on the website before publication.
+
+Lockfile preparation uses `cargo update --workspace`: registry and Git dependencies keep their locked versions unless a changed workspace requirement needs a new dependency. Cargo may access the registry index when local entries are missing; a build cache alone does not make release preparation offline. If the Cargo update fails, preparation restores the original manifest and lockfile and removes the draft notes.
+
+OMP does not choose the version or approve the release. Check every claim against the code and commits. Correct or remove unsupported claims, then commit the version, lockfile, and notes and push `main`:
 
 ```bash
 git add Cargo.toml Cargo.lock release-notes/

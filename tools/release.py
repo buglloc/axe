@@ -201,7 +201,7 @@ def prepare(bump: str) -> None:
 
     try:
         atomic_write(manifest, prefix + separator + updated)
-        run("cargo", "update", "--workspace", "--offline")
+        run("cargo", "update", "--workspace")
         page.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(page, notes.rstrip() + "\n")
     except BaseException:
