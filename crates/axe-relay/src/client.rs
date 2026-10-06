@@ -433,13 +433,14 @@ fn retry_delay(failures: u32) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use rcgen::ExtendedKeyUsagePurpose;
 
     use quinn::ServerConfig;
     use quinn::crypto::rustls::QuicServerConfig;
     use tokio::net::TcpListener;
 
     use super::*;
+    use crate::test_support::quic_identity;
 
     const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
@@ -524,14 +525,19 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_server_using_embedded_client_identity() {
+        let (server_certificate, _) =
+            quic_identity(QUIC_SERVER_NAME, ExtendedKeyUsagePurpose::ServerAuth);
+        let (client_certificate, client_private_key) =
+            quic_identity("axe-sshd", ExtendedKeyUsagePurpose::ClientAuth);
+
         let mut tls = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(
                 vec![
-                    pem_certificate(&read_key("quic_client_cert.pem"), "QUIC client certificate")
+                    pem_certificate(client_certificate.as_bytes(), "QUIC client certificate")
                         .expect("load QUIC client certificate"),
                 ],
-                pem_private_key(&read_key("quic_client_key.pem"), "QUIC client private key")
+                pem_private_key(client_private_key.as_bytes(), "QUIC client private key")
                     .expect("load QUIC client private key"),
             )
             .expect("build forged QUIC server identity");
@@ -552,9 +558,9 @@ mod tests {
         });
 
         let identity = QuicIdentity::from_pem(
-            &read_key("quic_server_cert.pem"),
-            &read_key("quic_client_cert.pem"),
-            &read_key("quic_client_key.pem"),
+            server_certificate.as_bytes(),
+            client_certificate.as_bytes(),
+            client_private_key.as_bytes(),
         )
         .expect("load QUIC client identity");
         let Credentials::Quic(config) = Credentials::quic(identity).expect("build QUIC config")
@@ -582,12 +588,5 @@ mod tests {
                 .is_err(),
             "forged relay completed a QUIC handshake"
         );
-    }
-
-    fn read_key(name: &str) -> Vec<u8> {
-        let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../keys/relay")
-            .join(name);
-        std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
     }
 }

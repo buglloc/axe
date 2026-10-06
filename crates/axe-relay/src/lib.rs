@@ -6,3 +6,7 @@ pub mod client;
 pub mod protocol;
 
 pub use protocol::Transport;
+
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod test_support;

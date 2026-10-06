@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+mod common;
+
 struct Relay(Child);
 
 impl Drop for Relay {
@@ -17,23 +19,15 @@ impl Drop for Relay {
     }
 }
 
-struct TestDirectory(PathBuf);
+struct TestDirectory(tempfile::TempDir);
 
 impl TestDirectory {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("axe-relay-monitor-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&path).expect("create isolated test directory");
-        Self(path)
+        Self(tempfile::tempdir().expect("create isolated test directory"))
     }
 
     fn path(&self, name: &str) -> PathBuf {
-        self.0.join(name)
-    }
-}
-
-impl Drop for TestDirectory {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        self.0.path().join(name)
     }
 }
 
@@ -45,7 +39,17 @@ fn write_config(
     public: u16,
     token_file: &Path,
 ) -> PathBuf {
-    let keys = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../keys/relay");
+    let (server_certificate, server_private_key) =
+        common::quic_identity("axe-relay", rcgen::ExtendedKeyUsagePurpose::ServerAuth);
+    let (client_certificate, _) =
+        common::quic_identity("axe-sshd", rcgen::ExtendedKeyUsagePurpose::ClientAuth);
+    for (name, contents) in [
+        ("quic_server_cert.pem", server_certificate),
+        ("quic_server_key.pem", server_private_key),
+        ("quic_client_cert.pem", client_certificate),
+    ] {
+        std::fs::write(dir.path(name), contents).expect("write isolated test QUIC identity");
+    }
     let config = dir.path("relay.json");
     std::fs::write(
         &config,
@@ -58,9 +62,9 @@ fn write_config(
             "min_port": public,
             "max_port": public,
             "token_file": token_file,
-            "quic_key": keys.join("quic_server_key.pem"),
-            "quic_server_cert": keys.join("quic_server_cert.pem"),
-            "quic_client_cert": keys.join("quic_client_cert.pem"),
+            "quic_key": dir.path("quic_server_key.pem"),
+            "quic_server_cert": dir.path("quic_server_cert.pem"),
+            "quic_client_cert": dir.path("quic_client_cert.pem"),
         }))
         .unwrap(),
     )

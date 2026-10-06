@@ -560,23 +560,33 @@ fn constant_time_eq(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use axe_relay::client::{Credentials, QuicIdentity};
 
     use super::*;
+    use crate::test_support::quic_identity;
 
     #[tokio::test]
     async fn silent_quic_registration_releases_control_capacity() {
-        let keys = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../keys/relay");
+        let keys = tempfile::tempdir().expect("create isolated test key directory");
+        let (server_certificate, server_private_key) =
+            quic_identity("axe-relay", rcgen::ExtendedKeyUsagePurpose::ServerAuth);
+        let (client_certificate, client_private_key) =
+            quic_identity("axe-sshd", rcgen::ExtendedKeyUsagePurpose::ClientAuth);
+        for (name, contents) in [
+            ("quic_server_key.pem", server_private_key.as_bytes()),
+            ("quic_server_cert.pem", server_certificate.as_bytes()),
+            ("quic_client_cert.pem", client_certificate.as_bytes()),
+        ] {
+            std::fs::write(keys.path().join(name), contents).expect("write test QUIC identity");
+        }
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind TCP control");
         let quic_endpoint = quic::server_endpoint(
             "127.0.0.1:0",
-            &keys.join("quic_server_key.pem"),
-            &keys.join("quic_server_cert.pem"),
-            &keys.join("quic_client_cert.pem"),
+            &keys.path().join("quic_server_key.pem"),
+            &keys.path().join("quic_server_cert.pem"),
+            &keys.path().join("quic_client_cert.pem"),
         )
         .await
         .expect("bind QUIC control");
@@ -597,9 +607,9 @@ mod tests {
         }));
 
         let identity = QuicIdentity::from_pem(
-            &std::fs::read(keys.join("quic_server_cert.pem")).expect("read server certificate"),
-            &std::fs::read(keys.join("quic_client_cert.pem")).expect("read client certificate"),
-            &std::fs::read(keys.join("quic_client_key.pem")).expect("read client key"),
+            server_certificate.as_bytes(),
+            client_certificate.as_bytes(),
+            client_private_key.as_bytes(),
         )
         .expect("parse QUIC identity");
         let Credentials::Quic(config) = Credentials::quic(identity).expect("build QUIC config")

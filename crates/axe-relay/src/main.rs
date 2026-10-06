@@ -2,6 +2,10 @@ mod http;
 mod monitor;
 mod server;
 
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod test_support;
+
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr};

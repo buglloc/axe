@@ -93,3 +93,13 @@ systemctl status axe-relay.service
 ```
 
 `status` reports uptime and active registrations; `wait` prints the target's assigned SSH `HOST:PORT` once it connects, and `watch` follows connections and disconnections (stop it with Ctrl-C). `axe-relay clients` lists current IDs, transports, and addresses; `/api/v1/status` is available locally for JSON monitoring. Use an SSH certificate issued by the configured user CA to verify actual login via the assigned port. If the service fails to start or the target does not register, inspect `journalctl -u axe-relay.service -b --no-pager` for missing credentials, bind errors, or control handshake failures, then check endpoint routing and the relevant TCP/UDP firewall rules without printing secret values.
+
+## Development checks
+
+Run `just smoke` inside `nix develop .#default`. Relay tests generate isolated QUIC identities: the client authentication test keeps them in memory, and the server and monitoring tests write them to temporary directories removed after each test. These fixtures are independent of edition credentials.
+
+To run only the relay tests:
+
+```bash
+cargo test --locked -p axe-relay --all-features
+```

@@ -40,5 +40,9 @@ url = { workspace = true, optional = true }
 uuid = { version = "1.26", features = ["serde", "v4"], optional = true }
 yamux = "0.14.0"
 
+[dev-dependencies]
+rcgen.workspace = true
+tempfile = "3"
+
 [target.'cfg(unix)'.dev-dependencies]
 libc.workspace = true
