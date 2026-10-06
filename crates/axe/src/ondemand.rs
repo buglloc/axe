@@ -489,7 +489,19 @@ mod tests {
 
         let count = root.join("count");
         let external_candidate = external.join("store-tool");
-        std::fs::copy(&current, &external_candidate).expect("copy external candidate");
+        // Copy in an owned subprocess: parallel tests can fork while a file
+        // is writable and retain its descriptor until exec despite CLOEXEC.
+        // Waiting for the copier to exit prevents ETXTBSY on first execution.
+        let prepared = Command::new(&current)
+            .args([
+                "--exact",
+                "ondemand::tests::external_candidate_fixture",
+                "--ignored",
+            ])
+            .env("AXE_TEST_COPY_EXECUTABLE_TO", &external_candidate)
+            .output()
+            .expect("prepare external candidate");
+        assert!(prepared.status.success(), "{prepared:?}");
 
         let error = StoreError {
             stage: axe_store_client::StoreStage::Manifest,
@@ -503,6 +515,7 @@ mod tests {
             &[
                 OsString::from("--exact"),
                 OsString::from("ondemand::tests::external_candidate_fixture"),
+                OsString::from("--ignored"),
                 OsString::from("--nocapture"),
             ],
             &error,
@@ -517,8 +530,13 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "owned subprocess fixture for PATH fallback"]
     fn external_candidate_fixture() {
         let current = std::env::current_exe().expect("locate fallback candidate");
+        if let Some(destination) = std::env::var_os("AXE_TEST_COPY_EXECUTABLE_TO") {
+            std::fs::copy(&current, destination).expect("copy external candidate");
+            return;
+        }
         if current.file_name() != Some(OsStr::new("store-tool")) {
             return;
         }
