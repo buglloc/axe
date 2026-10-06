@@ -16,8 +16,8 @@ title = "Changelog"
 ### Fixes
 
 - Fixed BSD-style `ps ax` selection to include other users’ processes without a TTY (`33a81cdf6a47adacf3b46158c0dcdf6cd4ec5b1a`).
-- Improved `ps` numeric fields and output-width compatibility. The attached evidence does not specify which fields or width cases changed (`7bb8ebc81a83fb7cc1d1516a424f81da0717c82c`).
-- Fixed executable preparation in the Store/PATH fallback test: copying now runs in an owned subprocess that exits before execution, preventing an `ETXTBSY` race with parallel tests (`97eea583602d62e84075283f33b30190380c621c`).
+- Improved `ps` numeric fields and output-width compatibility (`7bb8ebc81a83fb7cc1d1516a424f81da0717c82c`).
+- Fixed an executable-copy race in the Store/PATH fallback test (`97eea583602d62e84075283f33b30190380c621c`).
 
 ## [v0.3.0](https://github.com/buglloc/axe/releases/tag/v0.3.0) — 2026-10-04
 
@@ -39,18 +39,18 @@ SSH PTY sessions keep accepting input after the channel buffer fills (`58fba6b04
 
 ### Fixes
 
-- PTY sessions stalled once russh's per-channel data queue filled: the server queued every data packet before calling the handler, and the shell read through the handler, so the unused receiver blocked the connection. The handler now drops that receiver when it starts the shell, and input keeps flowing. A regression test sends 128 keystrokes past the buffer and expects `INPUT_OK` (`58fba6b0463058f816568559be41152be2a93988`).
+- Fixed SSH PTY input stalls when the channel buffer fills (`58fba6b0463058f816568559be41152be2a93988`).
 
 ## [v0.2.1](https://github.com/buglloc/axe/releases/tag/v0.2.1) — 2026-09-30
 
 ### Highlights
 
-- AXE now uses a shared `.axe-bridge/bin` directory for bundled commands instead of publishing separate bridge generations. Applet links point to the bridge’s `axe` link. (`81d8c80e4cc2c1ba599c6628665822585c76c075`)
+- Simplified the managed PATH directory for bundled commands (`81d8c80e4cc2c1ba599c6628665822585c76c075`).
 
 ### Fixes
 
-- Bridge publication now uses a file lock rather than deleting a lock based on its age, so an old timestamp cannot let another publisher take an active lock. (`81d8c80e4cc2c1ba599c6628665822585c76c075`)
-- When republishing, AXE updates the executable link and removes applet links no longer in the bundled inventory. (`81d8c80e4cc2c1ba599c6628665822585c76c075`)
+- Prevented concurrent PATH publishers from bypassing an active lock (`81d8c80e4cc2c1ba599c6628665822585c76c075`).
+- Updated executable links and removed obsolete command links during PATH publication (`81d8c80e4cc2c1ba599c6628665822585c76c075`).
 
 ## [v0.2.0](https://github.com/buglloc/axe/releases/tag/v0.2.0) — 2026-09-29
 
@@ -65,10 +65,6 @@ SSH PTY sessions keep accepting input after the channel buffer fills (`58fba6b04
 - The bootstrap guide has been shortened and points to the component guides for build and publication details. (`9f8b3eebd738530bfdfb77c3cfcd2ffb0052ab85`)
 - The AXE Store skill documentation distinguishes single-package checks from signed-snapshot verification and publication. (`6fbea0d14f566a946b9afafb40d4a62c1f146110`)
 
-### Fixes
-
-The supplied evidence does not establish a separate user-visible bug fix in this release.
-
 ## [v0.1.2](https://github.com/buglloc/axe/releases/tag/v0.1.2) — 2026-09-29
 
 ### Highlights
@@ -79,16 +75,12 @@ The supplied evidence does not establish a separate user-visible bug fix in this
 
 - The release process now builds and publishes `axe`, `axe-relay`, and `vzik` for all three supported release targets. Release metadata and download-table generation cover all nine artifacts. (`336a06e352e557c766b1b478dc4596c4e8db3381`)
 
-### Fixes
-
-- The supplied evidence does not establish a user-visible bug fix in this release.
-
 ## [v0.1.1](https://github.com/buglloc/axe/releases/tag/v0.1.1) — 2026-09-27
 
 ### Highlights
 
-- Added `dnsdomainname`, `rgrep`, and `gzcat` aliases. The supplied evidence does not establish their exact invocation behavior. (`cdccfd7f4f79678bff89c7c73f5ec7ffb4128aec`)
-- Consolidated applet dispatch and compression drivers. The supplied evidence does not establish a user-visible behavior change from this refactor. (`f34c26d8a7295be0cf70d1141c8ecf1875cb26d8`)
+- Added `dnsdomainname`, `rgrep`, and `gzcat` aliases (`cdccfd7f4f79678bff89c7c73f5ec7ffb4128aec`).
+- Consolidated applet dispatch and compression drivers (`f34c26d8a7295be0cf70d1141c8ecf1875cb26d8`).
 
 ### Changes
 
@@ -96,7 +88,7 @@ The supplied evidence does not establish a separate user-visible bug fix in this
 
 ### Fixes
 
-- Store metadata was consolidated and stale indexes are revalidated. The supplied evidence does not establish which user-visible failure this fixes. (`e62c318276bb28ad4012046cd3ccb45530a363d6`)
+- Consolidated Store metadata and revalidated stale indexes (`e62c318276bb28ad4012046cd3ccb45530a363d6`).
 
 ## [v0.1.0](https://github.com/buglloc/axe/releases/tag/v0.1.0) — 2026-09-26
 

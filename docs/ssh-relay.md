@@ -1,20 +1,22 @@
 # SSH server and relay
 
-`sshd` accepts only OpenSSH user certificates issued by a CA listed in `keys/ssh/user_ca_keys`. The username must be allowlisted and match the certificate principal; plain public keys and certificates with critical options are rejected. Set up keys and the allowlist before starting the server (see [`BOOTSTRAP.md`](../BOOTSTRAP.md)).
+`sshd` accepts only OpenSSH user certificates from the edition's trusted CAs. The login must be allowlisted and match a certificate principal; plain public keys and certificates with critical options are rejected. Configure the SSH host identity, trusted CAs, and default allowlist when building the edition (see [`BOOTSTRAP.md`](../BOOTSTRAP.md)). Use `--principals LOGIN,...` to override the allowlist at runtime.
 
 ```bash
 axe sshd --listen '[::]:6969' --workdir .
 ```
 
-The first successful interactive PTY session on each SSH transport receives a short welcome line pointing to `skill://axe`, `doctor --json`, and `vzik capabilities`. Later shell channels on the same multiplexed transport, remote exec, SFTP, and forwarding receive no welcome output.
+Interactive SSH sessions show a short welcome message. Remote exec, SFTP, and forwarding produce no welcome output.
 
 ## Relay
 
-The target runs `axe sshd`; the separate `axe-relay` daemon runs on a reachable Linux host and assigns public TCP ports to registered targets. The OSS `edition.json` disables relay by default and configures no endpoints. Without `--relay`, no relay task starts. `--relay ENDPOINT` enables the selected transport; `--no-relay` disables it even for editions with a configured default. The flags conflict.
+The target runs `axe sshd`; the separate `axe-relay` daemon assigns public TCP ports on a reachable host. Relay is disabled by default in the OSS edition. Use `--relay ENDPOINT` to enable it or `--no-relay` to override an edition's configured default.
 
-TCP is the default target transport and requires `AXE_RELAY_TOKEN` (at least 32 bytes). Its control registration sends a bearer token, so carry TCP control traffic only over a trusted, protected network (for example a VPN); do not expose it directly to an untrusted network. For QUIC, use `--relay-transport quic` and a UDP endpoint. QUIC uses mutual TLS; target credentials can be embedded by an edition or provided through `AXE_RELAY_QUIC_SERVER_CERT_FILE`, `AXE_RELAY_QUIC_CLIENT_CERT_FILE`, and `AXE_RELAY_QUIC_CLIENT_KEY_FILE`. The relay daemon requires the TCP token and QUIC server key and certificates **even if targets use only one transport**: it starts both control listeners. Generate deployment credentials and configure target endpoints as described in [`BOOTSTRAP.md`](../BOOTSTRAP.md#relay-endpoints-and-identities).
+TCP is the default transport. It uses a bearer token of at least 32 bytes, supplied by the edition or `AXE_RELAY_TOKEN`; keep its control traffic on a trusted network such as a VPN. QUIC uses mutual TLS over UDP. Supply target credentials through the edition or the `AXE_RELAY_QUIC_*_FILE` variables shown below.
 
-Without `--relay-id`, `sshd` uses `<pidns>@<user>@<hostname>`; this ID can collide across hosts or containers that share a PID namespace. Assign a distinct `--relay-id` when clients must be addressed uniquely. For example, on a target whose QUIC endpoint is `relay.example.org:11000`, supply its readable QUIC files unless the edition already embeds them:
+The relay daemon requires a TCP token and QUIC server credentials even when targets use only one transport. Generate credentials and configure endpoints as described in [`BOOTSTRAP.md`](../BOOTSTRAP.md#relay-endpoints-and-identities).
+
+Assign a unique `--relay-id` to distinguish targets; the default ID can collide across hosts or containers. For a QUIC target, supply the certificate files unless the edition embeds them:
 
 ```bash
 AXE_RELAY_QUIC_SERVER_CERT_FILE=keys/relay/quic_server_cert.pem \
@@ -23,7 +25,7 @@ AXE_RELAY_QUIC_CLIENT_KEY_FILE=keys/relay/quic_client_key.pem \
 axe sshd --listen '[::]:6969' --workdir . --relay relay.example.org:11000 --relay-transport quic --relay-id target-01
 ```
 
-This starts the target SSH server, **not** the relay daemon. Keep the target's client private key restricted to its runtime user. On a TCP target, use its protected TCP control endpoint (port 6999 in the example below), omit `--relay-transport quic`, and provision the same TCP token to the target. Configure the target's SSH host identity, user CA, and allowlist before starting it. Registration alone does not prove that SSH authentication and forwarding work.
+Keep the client private key restricted to the target's runtime user. For TCP, omit `--relay-transport quic`, use the protected TCP control endpoint (port 6999 below), and set `AXE_RELAY_TOKEN` to the relay's token. The target also needs an SSH host identity, user CA, and allowlist.
 
 ### Linux relay service
 
@@ -37,7 +39,7 @@ sudo install -d -o root -g root -m 0700 /etc/axe-relay
 sudo install -o root -g root -m 0600 keys/relay/{token,quic_server_key.pem,quic_server_cert.pem,quic_client_cert.pem} /etc/axe-relay/
 ```
 
-The example uses `relay.example.org` as the public DNS name; replace it with a name reachable by SSH users on the bound address family. Save the following as `/etc/axe-relay/config.json` (root-owned, mode 0600). The service runs as root and can read the protected configuration and credentials. The token generated by axe-store has no trailing newline; the daemon also accepts a final CR or LF. All JSON keys shown are required. `public_bind` is an IP address (`::`), while listener addresses such as `tcp_control` include a port and bracket IPv6 (`[::1]:6999`).
+Replace `relay.example.org` with the relay's public DNS name. Save this JSON as `config.json`; all fields are required. `public_bind` is a bare IP address, while listener addresses include a port and bracket IPv6.
 
 ```json
 {
@@ -55,7 +57,13 @@ The example uses `relay.example.org` as the public DNS name; replace it with a n
 }
 ```
 
-Install this config as root with `sudo install -o root -g root -m 0600 config.json /etc/axe-relay/config.json` after saving the JSON above to `config.json` in your working directory. Save the following as `/etc/systemd/system/axe-relay.service` (root-owned, mode 0644). The service directly starts the installed binary; it does not need a shell wrapper or token environment variable.
+Install the configuration:
+
+```bash
+sudo install -o root -g root -m 0600 config.json /etc/axe-relay/config.json
+```
+
+Save this unit as `/etc/systemd/system/axe-relay.service` (root-owned, mode 0644):
 
 ```ini
 [Unit]
@@ -77,9 +85,11 @@ PrivateTmp=true
 WantedBy=multi-user.target
 ```
 
-The server requires `--config FILE` and uses its `token_file` by default. If needed, `--token FILE` overrides that path with another readable token **file**; it does not accept token bytes. This is distinct from `AXE_RELAY_TOKEN` on a **TCP target** running `axe sshd`, which remains the literal bearer token. Never use the target's environment-variable convention to start the relay server.
+The server requires `--config FILE`; `--token FILE` can override its `token_file`. Both accept file paths, whereas `AXE_RELAY_TOKEN` on the TCP target contains the token itself.
 
-The TCP control listener above is loopback-only. For TCP targets on a protected network, change `tcp_control` in the JSON to the relay host's private/VPN address and restrict firewall access to those targets. TCP registration sends a bearer token, so never expose TCP control to an untrusted network. For QUIC targets, allow UDP 11000 to the relay from those targets. Allow incoming TCP 3000–6000 from SSH users: these are assigned public SSH ports, **not** control ports or the target's `--listen` port. Adjust the range and firewall together. The monitor HTTP listener stays at `[::1]:7000`; its dashboard and JSON API do **not** enforce authentication. Never expose port 7000 directly. For remote monitoring, place an authenticated HTTPS reverse proxy in front of this loopback listener and restrict access to the proxy.
+For TCP targets, change the loopback-only `tcp_control` address to the relay's private/VPN address and restrict access to those targets. Never expose this bearer-token listener to an untrusted network. Allow UDP 11000 from QUIC targets and TCP 3000–6000 from SSH users; keep the public port range and firewall rules in sync.
+
+The dashboard and JSON API have no authentication. Keep port 7000 on loopback. Remote monitoring requires an authenticated HTTPS reverse proxy with restricted access.
 
 After installing the unit, an operator can run:
 
@@ -96,7 +106,7 @@ systemctl status axe-relay.service
 
 ## Development checks
 
-Run `just smoke` inside `nix develop .#default`. Relay tests generate isolated QUIC identities: the client authentication test keeps them in memory, and the server and monitoring tests write them to temporary directories removed after each test. These fixtures are independent of edition credentials.
+Run `just smoke` inside `nix develop .#default`. Relay tests use their own credentials, independent of the selected edition.
 
 To run only the relay tests:
 

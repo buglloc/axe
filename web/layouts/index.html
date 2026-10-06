@@ -43,14 +43,13 @@
       </div>
       <div class="terminal-window__body" id="terminal-shell" role="tabpanel" aria-labelledby="tab-shell">
         <p><span class="prompt">root@unknown:/#</span> <span class="command">env -i HOME=/tmp PATH=/nonexistent ./axe --norc --noprofile</span></p>
-        <p class="output">bundled registry ready</p>
         <p><span class="prompt">axe%</span> <span class="command">doctor</span></p>
         <p class="output accent">Self-exec: works<br>Degradations: none</p>
         <p><span class="prompt">axe%</span> <span class="cursor" aria-label="cursor"></span></p>
       </div>
       <div class="terminal-window__body" id="terminal-remote" role="tabpanel" aria-labelledby="tab-remote" hidden>
-        <p><span class="prompt">relay@public:$</span> <span class="command">axe-relay</span></p>
-        <p class="output">Standalone relay service · TCP+yamux · QUIC+mTLS · public TCP port range</p>
+        <p><span class="prompt">relay@public:$</span> <span class="command">axe-relay --config /etc/axe-relay/config.json</span></p>
+        <p class="output">Standalone relay service · TCP · QUIC</p>
         <p><span class="prompt">root@target:#</span> <span class="command">./axe sshd --relay-transport quic --relay relay.example:11000 --relay-id host-01</span></p>
         <p class="output accent">outbound registration → relay.example:3000</p>
       </div>
@@ -110,7 +109,7 @@
       <div class="environment-terminal" aria-label="AXE doctor isolation report">
         <div class="environment-terminal__bar">
           <span>axe doctor</span>
-          <span>passive inspection</span>
+          <span>live diagnostics</span>
         </div>
         <div class="environment-terminal__body">
           <p><span class="prompt">axe%</span> <span class="command">doctor</span></p>
@@ -235,7 +234,7 @@
       <div class="diagram-node diagram-node--accent">
         <span class="diagram-node__icon">⇄</span>
         <strong>axe-relay</strong>
-        <small>standalone service · TCP+yamux · QUIC+mTLS</small>
+        <small>standalone service · TCP · QUIC</small>
       </div>
       <div class="diagram-link diagram-link--reverse"><span>outbound control</span><i></i></div>
       <div class="diagram-node">
@@ -247,9 +246,9 @@
 
     <div class="remote-details">
       <article><span>01</span><h3>Certificate identity</h3><p>OpenSSH user certificates authorize logins. The certificate principal matches the login and its configured allowlist.</p></article>
-      <article><span>02</span><h3>Separate QUIC identities</h3><p><code>sshd</code> pins the relay certificate and presents its own embedded client identity.</p></article>
-      <article><span>03</span><h3>Outbound registration</h3><p><code>sshd</code> keeps one control connection with bounded reconnect backoff; relay assigns its public TCP port.</p></article>
-      <article><span>04</span><h3>Owned lifecycle</h3><p>Listeners bind before readiness. Connection tasks are bounded, supervised and shut down explicitly.</p></article>
+      <article><span>02</span><h3>QUIC authentication</h3><p>The target and relay authenticate each other with separate certificates.</p></article>
+      <article><span>03</span><h3>Outbound registration</h3><p>The target connects to the relay, which assigns a public TCP port for SSH access.</p></article>
+      <article><span>04</span><h3>Protected control access</h3><p>Use QUIC or keep TCP control traffic on a trusted network. Relay access still requires SSH certificate authentication.</p></article>
     </div>
   </section>
 
@@ -267,7 +266,7 @@
       <li><span>05</span><b>PATH</b><small>transient failure only</small></li>
     </ol>
     <div class="integrity-rule"><span>!</span><p>signature · digest · schema · TLS failure</p><strong>STOP / 126</strong></div>
-    <p class="store-mode-summary"><code>AXE_STORE_MODE</code> <b>auto</b> cache + network · <b>cache-only</b> verified cache · <b>off</b> PATH only. Auto backs off transient network failures for 30 seconds; SSH sessions inherit the effective restriction.</p>
+    <p class="store-mode-summary"><code>AXE_STORE_MODE</code> <b>auto</b> cache + network · <b>cache-only</b> verified cache · <b>off</b> no Store commands. Bundled commands remain available in every mode.</p>
   </section>
 
   <section class="section download-section" id="download" aria-labelledby="download-title">
@@ -285,8 +284,8 @@
     <div class="install-block">
       <div class="install-block__bar"><span>download.sh</span><button type="button" data-copy-target="install-command">copy</button></div>
       <pre id="install-command"><code>curl -fL -o axe https://storage.yandexcloud.net/axe-store/axe/stable/x86_64-linux/axe
-chmod +x axe
-./axe --version</code></pre>
+sha256sum axe</code></pre>
+      <p>Compare the hash with <a href="https://github.com/buglloc/axe/blob/main/README.md#downloads">the published SHA-256</a> before running <code>chmod +x axe</code> and <code>./axe --version</code>.</p>
       <p><span class="status"><i></i> edition: oss</span> x86_64 Linux download from S3 stable</p>
     </div>
   </section>

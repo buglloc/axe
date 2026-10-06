@@ -6,16 +6,19 @@ Run that executable as an interactive [Brush](https://github.com/reubeno/brush) 
 
 ## Quick start
 
-Download the Linux x86_64 release binary and run it:
+Download the Linux x86_64 release binary:
 
 ```bash
-curl -fL https://storage.yandexcloud.net/axe-store/axe/releases/v0.1.2/x86_64-linux/axe -o axe
+curl -fL https://storage.yandexcloud.net/axe-store/axe/releases/v0.4.0/x86_64-linux/axe -o axe
+```
+
+Compare `sha256sum axe` with the SHA-256 in [Downloads](#downloads) before running it. For other platforms, choose the corresponding binary below.
+
+```bash
 chmod +x axe
 ./axe --version
 ./axe --list
 ```
-
-Verify the download against the SHA-256 in [Downloads](#downloads) before using it. For other platforms, choose the corresponding binary below.
 
 ## Downloads
 
@@ -57,7 +60,7 @@ Use `commands` to inspect the active executable and its configured Store. Availa
 
 ## Installing with Nix
 
-The root flake exposes `packages.<system>.axe` and `default` for targets listed in [`nix/axe-releases.json`](nix/axe-releases.json). It downloads an immutable release binary and verifies its recorded SRI hash.
+Install the release binary with `nix profile add github:buglloc/axe`. The flake verifies the download hash.
 
 ## Building from source
 

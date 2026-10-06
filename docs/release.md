@@ -1,32 +1,32 @@
 # Local AXE releases
 
-Publish AXE binaries and the GitHub Release from a trusted local OSS publisher, outside PR and release CI. A separate GitHub Actions workflow deploys the website. Operators install binaries on remote machines. For Store identities and publisher setup, see [BOOTSTRAP.md](../BOOTSTRAP.md).
+Publish AXE binaries and the GitHub Release from a trusted local OSS publisher, not CI. GitHub Actions deploys the website; operators install binaries on remote machines. For publisher identities and Store access, see [BOOTSTRAP.md](../BOOTSTRAP.md).
 
 ## Inputs and trust
 
-Enter `nix develop .#default`. Before publishing, check that `edition.json` identifies the `oss` edition, `config/store.json` points to the intended bucket, and `gh` is authenticated to `buglloc/axe`. The publisher also needs its edition-local private `keys/store/` identity. Public `store/trusted/*.pub` and the signed `store/bootstrap-index.cbor.zst` are tracked inputs. AXE embeds the public trust keys and signed bootstrap Index, but never the Store signing key or S3 credentials. Keep secrets in ignored edition-local paths, out of tracked files and OMP evidence.
+Enter `nix develop .#default`. Check that `AXE_EDITION_ROOT` is unset or points to the public checkout, `edition.json` identifies `oss`, `config/store.json` points to the intended bucket, and `gh` is authenticated to `buglloc/axe`.
 
-If the package inventory or signed snapshot needs updating, run `just store-sync` on the trusted publisher first. It publishes Store objects only and replaces the local bootstrap snapshot; review and commit the updated public snapshot and inventory together before the AXE release. Check the destination and target-removal safeguards in BOOTSTRAP.md before running it. An AXE release build rejects a missing snapshot or one that does not match the trusted keys and inventory.
+The publisher needs its private Store signing key and S3 credentials. Public `store/trusted/*.pub` and the signed `store/bootstrap-index.cbor.zst` are tracked inputs. The binary embeds Store trust and the snapshot, never the signing key or S3 credentials. Keep secrets in ignored paths and out of logs or shared evidence. `release-publish` prefers `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` when set; unset them and `AWS_SESSION_TOKEN` to use `keys/store/s3_access_key_id` and `keys/store/s3_secret_access_key`.
+
+If the inventory or snapshot needs updating, run `just store-sync` on the trusted publisher first. This publishes Store packages and updates the Index and local snapshot, not AXE binaries. Review and commit the inventory and snapshot together before the AXE release. Check the destination and [target-removal safeguards](store.md#publication) first. Release staging requires a signed snapshot; the build checks its trust and inventory.
 
 ## Prepare the reviewed source
 
-From a clean `main`, use `initial` for the first release (there is no `vX.Y.Z` tag yet):
-
-```bash
-just release-prepare initial
-```
-
-For later releases, choose the SemVer change:
+From a clean `main`, choose the SemVer change:
 
 ```bash
 just release-prepare patch  # or minor / major
 ```
 
-`release-prepare` uses the current workspace version for the first release; thereafter it calculates the next version from the last `vX.Y.Z` tag. It asks `omp -p` to draft `release-notes/vX.Y.Z.md` from public Git history and changed source, then updates the workspace version and lockfile. These notes are not in Hugo's content tree and do not appear on the website before publication.
+For a first release with no `vX.Y.Z` tag, use the current workspace version:
 
-Lockfile preparation uses `cargo update --workspace`: registry and Git dependencies keep their locked versions unless a changed workspace requirement needs a new dependency. Cargo may access the registry index when local entries are missing; a build cache alone does not make release preparation offline. If the Cargo update fails, preparation restores the original manifest and lockfile and removes the draft notes.
+```bash
+just release-prepare initial
+```
 
-OMP does not choose the version or approve the release. Check every claim against the code and commits. Correct or remove unsupported claims, then commit the version, lockfile, and notes and push `main`:
+`release-prepare` drafts `release-notes/vX.Y.Z.md` with OMP and updates the workspace version and lockfile. Preparation may need registry access even when builds are cached. It does not create a tag or publish the notes to the website.
+
+Review every claim against the code and commits. Correct or remove unsupported claims, then commit the version, lockfile, and notes and push `main`:
 
 ```bash
 git add Cargo.toml Cargo.lock release-notes/
@@ -43,17 +43,19 @@ just release-check /path/outside/checkout/axe-release-check
 just release-publish
 ```
 
-`release-check` runs formatting, project checks, Clippy, smoke tests, and builds `axe`, `axe-relay`, and standalone `vzik` for all three supported targets. It checks the runnable x86_64 `axe` binary's version, commit, and `oss` edition. It then generates the website command inventory `registry.json` from that binary and exercises both publisher phases against a local directory. Use a directory outside the checkout, or an ignored path under `dist/`, so the generated objects do not dirty the worktree. The command neither creates a tag nor uploads anything. Keep `dist/releases/vX.Y.Z/`: it contains the tested assets, `registry.json`, `SHA256SUMS`, reviewed notes, and snapshot digest needed for publication and retries.
+`release-check` checks formatting, the project and Store inventory, Clippy, and smoke tests. It builds `axe`, `axe-relay`, and `vzik` for all three supported targets and checks the runnable x86_64 `axe` binary's version, commit, and `oss` edition. It generates `registry.json` and exercises immutable and stable publication against the local directory without creating a tag or uploading to GitHub or S3. Use a directory outside the checkout, or an ignored path under `dist/`, to keep the worktree clean.
 
-`release-publish` requires that commit on `origin/main` and refuses staged bytes from another commit or snapshot. It then:
+Keep `dist/releases/vX.Y.Z/`, or `$AXE_RELEASE_DIR/releases/vX.Y.Z/` when overridden. It holds the tested assets, checksums, reviewed notes, and release metadata needed for publication and retries. Existing staged assets are reused rather than rebuilt.
+
+`release-publish` requires the reviewed commit on `origin/main` and the same staged assets, snapshot, and notes. It:
 
 1. Creates and pushes the annotated `vX.Y.Z` tag and opens a draft GitHub Release with the reviewed notes.
-2. Uploads immutable S3 objects for all nine binaries (`axe`, `axe-relay`, and `vzik` on three targets), downloads them without credentials, and checks their SHA-256 against the staged binaries.
-3. Uploads the nine binaries, `registry.json`, and `SHA256SUMS` to GitHub. It downloads and verifies every asset before publishing the draft.
-4. Runs `axe-store release --stable-only` for each binary. This checks staged metadata and every remote immutable object before updating stable paths. The publisher then downloads the stable objects without credentials, verifies their SHA-256, writes the `axe`-only `nix/axe-releases.json`, adds the reviewed notes to `web/content/changelog.md`, and fills in the README download table with GitHub and S3 links for all nine binaries.
+2. Uploads immutable S3 objects for all nine binaries (`axe`, `axe-relay`, and `vzik` on three targets), then downloads them without credentials and verifies their SHA-256.
+3. Uploads the binaries, `registry.json`, and `SHA256SUMS` to GitHub. It downloads and verifies every asset before publishing the draft.
+4. Verifies the remote immutable objects before updating stable S3 paths, then downloads and checks the stable objects without credentials. It updates `nix/axe-releases.json` for `axe`, adds the reviewed notes to `web/content/changelog.md`, and fills the README download table with GitHub and S3 links for all nine binaries.
 
-Check the published URLs, hashes, metadata, README table, and `/changelog/`. Review those post-publication changes, commit them, and push `main`. The website workflow runs for main pushes and published releases. Release events use their own `registry.json`; main pushes use the latest release and skip deployment when it has no registry asset. Release binaries come from the trusted local publisher.
+Check the published URLs, hashes, metadata, README table, and `/changelog/`. Review the generated changes, commit them, and push `main`. The website workflow runs on main pushes and published releases. It uses that release's `registry.json` for release events and the latest release's registry for main pushes; without that asset, deployment is skipped.
 
-GitHub, S3, Git, and the website cannot be published atomically. If a step fails, retry from the same commit with the same `dist/releases/vX.Y.Z/` bytes. Do not move the tag, rebuild it with different inputs, replace immutable objects, or silently change the approved notes. The publisher checks existing assets on retry. A failure while updating stable paths can leave targets on different versions; retry with the same staged release. The GitHub Release may be public before all stable paths or the README have been updated.
+Publication is not atomic across GitHub, S3, Git, and the website. If a step fails, retry from the same commit with the same staged bytes. Do not move the tag, rebuild with different inputs, replace immutable objects, or change the approved notes. Existing assets are checked on retry. A stable-path failure can leave targets on different versions, and GitHub may be public before stable paths or the README are updated.
 
-Other editions need their own publisher and bucket. This GitHub workflow accepts only the OSS edition root and public distribution material.
+This procedure accepts only the public OSS edition root. Other editions need their own publisher, destination, and release process.

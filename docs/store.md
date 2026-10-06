@@ -1,16 +1,18 @@
 # AXE Store
 
-Nix builds packages; `axe-store` signs metadata and publishes content-addressed objects. Before running a package, the client verifies signatures, manifests, size, and SHA-256. A verified cache works offline. On Linux, AXE can launch a single executable from a sealed `memfd` if no suitable filesystem backend is available.
+AXE Store delivers tools on demand. Nix builds the packages; `axe-store` signs their metadata and publishes them. AXE verifies signatures, sizes, and SHA-256 hashes before execution. Previously cached tools can run offline. On Linux, supported single-file tools can run even without a writable executable filesystem.
 
-`AXE_STORE_DIR` selects a preferred storage root. Otherwise AXE tries roots from `config/store.json`, the platform cache, writable persistent mounts, tmpfs, and the platform temporary directory. Metadata is namespaced by normalized Store URL, trusted key IDs, and channel. Different trust identities do not reuse each other's metadata, even on a shared fallback root. Content-addressed objects are identified by SHA-256. Where possible, configure separate `AXE_STORE_DIR` roots to keep editions operationally separate.
+`AXE_STORE_DIR` sets the preferred cache root. If it is unavailable, AXE tries configured roots, the platform cache, writable persistent mounts, tmpfs, and the temporary directory. Store metadata is isolated by URL, trust keys, and channel. Use separate roots for co-installed editions.
 
 Set the mode with `AXE_STORE_MODE` or `sshd --store-mode`:
 
-- `auto`: use the verified cache and refresh from the network according to TTL; transient or unavailable delivery failures permit `PATH` fallback.
-- `cache-only`: use only the verified cache; an unavailable cache entry can permit `PATH` fallback.
+- `auto` (default): use the verified cache and refresh stale metadata from the network.
+- `cache-only`: use embedded metadata and the verified cache without network requests.
 - `off`: do not initialize Store or register its commands.
 
-`sshd` passes the effective mode to shell and exec sessions; child sessions cannot relax an inherited restriction. `clean-tools` removes metadata for the current Store identity from accessible cache roots; it skips automatically discovered roots that cannot be traversed but reports a permission error for the explicit `AXE_STORE_DIR`. `refresh-tools` forces an Index refresh.
+In `auto` and `cache-only`, transient delivery failures or an unavailable tool can permit `PATH` fallback. Signature, integrity, and configuration errors do not. `sshd` passes its mode to shell and exec sessions; child sessions cannot relax an inherited restriction.
+
+`axe refresh-tools` fetches and verifies the current Index; it requires `auto` mode. `axe clean-tools` removes metadata for the current Store identity, not shared content-addressed objects. It skips inaccessible automatically discovered roots but reports permission errors for an explicit `AXE_STORE_DIR`.
 
 ## Package inventory
 
@@ -83,4 +85,30 @@ The `gori` package disables startup update checks by default. Set `update.check_
 
 ## Adding a package
 
-Package definitions live in [`store/nix/packages/`](../store/nix/packages/). After changing them, regenerate `store/bootstrap.json` with `just store-bootstrap` and check it with `just check-store-bootstrap`. See [BOOTSTRAP.md](../BOOTSTRAP.md) for identities and Store access and [Local releases](release.md) for the signed snapshot required by release builds.
+Package definitions live in [`store/nix/packages/`](../store/nix/packages/). After changing them, regenerate and check the inventory:
+
+```bash
+just store-bootstrap
+just check-store-bootstrap
+```
+
+See [BOOTSTRAP.md](../BOOTSTRAP.md) for identities and Store access.
+
+## Publication
+
+Run Store recipes from the development shell on the trusted publisher. They use Podman by default; set `CONTAINER_RUNTIME` to use another compatible runtime. Check `AXE_EDITION_ROOT` and its `config/store.json` before uploading.
+
+```bash
+just store-build    # build and sign packages without uploading
+just store-publish  # upload the staged packages and update the Index
+```
+
+To regenerate the inventory, build, publish, and replace the edition's signed bootstrap snapshot in one step:
+
+```bash
+just store-sync
+```
+
+Publication rejects removal of previously published tool, channel, or target entries. For an intentional removal, review the affected consumers before running `AXE_STORE_ALLOW_TARGET_REMOVAL=1 just store-sync`. This override permits removal; it does not migrate installed binaries.
+
+Review and commit the updated `store/bootstrap.json` and `store/bootstrap-index.cbor.zst` together before an AXE release. Store publication does not publish AXE binaries; follow [Local releases](release.md) for that.

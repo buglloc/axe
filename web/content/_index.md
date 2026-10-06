@@ -8,37 +8,37 @@ terminalLabel = "incident@unknown:/#"
 
 [[survival]]
 condition = "No shell"
-response = "[Brush](https://github.com/reubeno/brush) is built in, with interactive Reedline and a minimal backend for scripts and pipes."
+response = "[Brush](https://github.com/reubeno/brush) provides an interactive shell and runs scripts and pipelines."
 code = "SHELL"
 outcome = "interactive shell"
 [[survival]]
 condition = "No coreutils"
-response = "Bundled applets run without PATH. If the BusyBox-style PATH bridge cannot be published, direct dispatch still works."
+response = "Bundled commands work without host coreutils or PATH."
 code = "PATH"
 outcome = "local toolbox"
 [[survival]]
 condition = "No procfs"
-response = "Missing or masked /proc removes one execution route. On Linux, AXE retains its executable descriptor so children can start without procfs."
+response = "A running Linux AXE can keep launching bundled commands when /proc becomes unavailable. Procfs-based diagnostics remain limited."
 code = "PROC"
-outcome = "fd-backed self-exec"
+outcome = "commands remain available"
 [[survival]]
 condition = "Broken filesystem"
-response = "AXE tries descriptor exec, then a probed private relay and an inode-checked path. Single-file Store tools can run from a sealed memfd."
+response = "AXE can use alternative execution routes, but filesystem and execution restrictions can still block commands."
 code = "EXEC"
-outcome = "checked fallback"
+outcome = "best-effort recovery"
 [[survival]]
 condition = "Binary deleted"
-response = "On Linux, a retained descriptor pins the original inode across unlink or replacement, keeping bundled children, workers and SSH sessions launchable."
+response = "A running Linux AXE can keep launching bundled commands and SSH sessions after its executable is deleted or replaced."
 code = "FD"
-outcome = "image continuity"
+outcome = "continued execution"
 [[survival]]
 condition = "No child exec"
-response = "If self-exec fails, child launches fail, but shell builtins, aliases, functions and doctor remain available. AXE does not fall through to PATH."
+response = "If child execution fails, shell builtins, aliases, functions and doctor remain available. Bundled commands do not silently switch to host tools."
 code = "SPAWN"
 outcome = "controlled degradation"
 [[survival]]
 condition = "Network gone"
-response = "Bundled applets stay available. A fresh AXE Store cache keeps working offline."
+response = "Bundled commands stay available. Verified cached Store tools can be used in offline mode."
 code = "NET"
 outcome = "offline recovery"
 [[survival]]
@@ -57,7 +57,7 @@ environmentLead = "AXE reports virtualization, containers, sandboxing and restri
 staticTitle = "No host loader required"
 staticLead = "The primary Linux release is a static musl ELF executable. It needs no loader, shell or coreutils on the target."
 remoteTitle = "SSH access through an outbound connection"
-remoteLead = "Run the certificate-only SSH/SFTP server on the target. A standalone relay makes it reachable over an outbound TCP+yamux or QUIC connection."
+remoteLead = "Run the certificate-only SSH/SFTP server on the target. A standalone relay makes it reachable through an outbound TCP or QUIC connection."
 resolutionTitle = "Command lookup order"
 resolutionLead = "Aliases, functions, builtins and bundled applets take precedence. AXE Store integrity failures stop execution rather than falling through to a PATH binary."
 +++

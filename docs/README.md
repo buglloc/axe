@@ -13,7 +13,7 @@ Start with the [project README](../README.md) for downloads, a first run, and a 
 ## Building and maintaining AXE
 
 - [Architecture](architecture.md) — command execution, Store trust, and remote-access boundaries.
-- [Custom editions](editions.md) — build-input bundle, OSS Store reuse, and deployment identities.
-- [Runtime survivability](runtime-survivability.md) — self-exec and degradation when the executable or procfs is unavailable.
+- [Custom editions](editions.md) — configuration, OSS Store reuse, and deployment identities.
+- [Runtime survivability](runtime-survivability.md) — what remains usable when the executable, procfs, or child execution is unavailable.
 - [Bootstrapping](../BOOTSTRAP.md) — edition setup, identities, Store publishing, and relay credentials.
 - [Local releases](release.md) — checking and publishing OSS release artifacts.
