@@ -14,7 +14,7 @@ apple_sdk_archive := cargo_target_dir + "/toolchains/MacOSX26.2.sdk.tar.gz"
 apple_sdk_root := cargo_target_dir + "/toolchains/MacOSX26.2.sdk"
 
 [positional-arguments]
-dev *args:
+shell *args:
     @if (( $# )); then exec nix develop . --command "$@"; else exec nix develop .; fi
 
 
