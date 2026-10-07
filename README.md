@@ -67,11 +67,13 @@ Install the release binary with `nix profile add github:buglloc/axe`. The flake 
 For the OSS edition on Linux x86_64:
 
 ```bash
-nix develop .#default
+just shell
 just build
 install -Dm755 dist/axe-x86_64-unknown-linux-musl "$HOME/.local/bin/axe"
 "$HOME/.local/bin/axe" --version
 ```
+
+Enter the development shell with `just shell`, or `nix develop .#default` if `just` is not installed. To run a single command inside the shell, use `just shell just build`.
 
 `just build` creates missing development keys and writes the Linux x86_64 artifact under `dist/`. Install it as `axe` to use the commands in this guide. For other targets use `just build-linux-arm64`, `just build-darwin-arm64`, or `just build-all`. See [Custom editions](docs/editions.md) for a build with your own identity and Store trust; [BOOTSTRAP.md](BOOTSTRAP.md) covers production identities and publishing.
 

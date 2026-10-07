@@ -4,7 +4,7 @@ Publish AXE binaries and the GitHub Release from a trusted local OSS publisher, 
 
 ## Inputs and trust
 
-Enter `nix develop .#default`. Check that `AXE_EDITION_ROOT` is unset or points to the public checkout, `edition.json` identifies `oss`, `config/store.json` points to the intended bucket, and `gh` is authenticated to `buglloc/axe`.
+Enter the development shell with `just shell`. Check that `AXE_EDITION_ROOT` is unset or points to the public checkout, `edition.json` identifies `oss`, `config/store.json` points to the intended bucket, and `gh` is authenticated to `buglloc/axe`.
 
 The publisher needs its private Store signing key and S3 credentials. Public `store/trusted/*.pub` and the signed `store/bootstrap-index.cbor.zst` are tracked inputs. The binary embeds Store trust and the snapshot, never the signing key or S3 credentials. Keep secrets in ignored paths and out of logs or shared evidence. `release-publish` prefers `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` when set; unset them and `AWS_SESSION_TOKEN` to use `keys/store/s3_access_key_id` and `keys/store/s3_secret_access_key`.
 

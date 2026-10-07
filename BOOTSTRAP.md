@@ -7,7 +7,7 @@ Use this guide to provision edition inputs, production identities, Store access,
 Run builds and checks in the development shell:
 
 ```bash
-nix develop .#default
+just shell
 just generate-dev-keys
 ```
 

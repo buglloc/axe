@@ -106,7 +106,7 @@ systemctl status axe-relay.service
 
 ## Development checks
 
-Run `just smoke` inside `nix develop .#default`. Relay tests use their own credentials, independent of the selected edition.
+Run `just smoke` inside the development shell (`just shell`). Relay tests use their own credentials, independent of the selected edition.
 
 To run only the relay tests:
 

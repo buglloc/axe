@@ -7,7 +7,7 @@ An edition changes the inputs embedded in `axe`: its ID, SSH host key and truste
 From the public checkout, enter the development shell and create an isolated edition root. This example uses OSS Store configuration and trust without a signed bootstrap Index. It needs network access to discover Store tools unless a verified Index is already cached. Replace `my-axe` and the SSH principal with your own values. The edition ID accepts only lowercase ASCII letters, digits, and hyphens.
 
 ```bash
-nix develop .#default
+just shell
 export AXE_EDITION_ROOT="$PWD/target/my-axe-edition"
 umask 077
 mkdir -p target
