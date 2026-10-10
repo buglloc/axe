@@ -1,6 +1,7 @@
 {
   mkNixpkgsBinary,
   buildPkgs,
+  pkgsFor,
   linuxSystems,
   staticSetFor,
   targetStrip,
@@ -147,7 +148,108 @@
       nativeInstallCheckInputs = [];
       propagatedNativeBuildInputs = [];
     });
+  fioMinimal = staticSet: let
+    canExecute = staticSet.stdenv.buildPlatform.canExecute staticSet.stdenv.hostPlatform;
+  in
+    (staticSet.fio.override {
+      withGnuplot = false;
+      withLibnbd = false;
+    }).overrideAttrs
+    (old: {
+      outputs = ["out"];
+      buildInputs =
+        [
+          staticSet.libaio
+          staticSet.zlib
+        ]
+        ++ buildPkgs.lib.optional canExecute staticSet.cunit;
+      nativeBuildInputs = [staticSet.buildPackages.pkg-config];
+      pythonPath = [];
+      propagatedBuildInputs = [];
+      dontAddPrefix = true;
+      configureFlags =
+        (old.configureFlags or [])
+        ++ [
+          "--prefix=/usr"
+          "--build-static"
+        ];
+      postPatch = "";
+      buildFlags =
+        ["fio"]
+        ++ buildPkgs.lib.optional canExecute "unittests/unittest";
+      doCheck = canExecute;
+      installPhase = ''
+        runHook preInstall
+        install -Dm755 fio "$out/bin/fio"
+        runHook postInstall
+      '';
+      postInstall = "";
+      postFixup = "";
+    });
+  binutilsMinimal = staticSet:
+    (staticSet.binutils-unwrapped.override {
+      enableGold = false;
+      enableShared = false;
+    }).overrideAttrs
+    (old: {
+      outputs = ["out"];
+      separateDebugInfo = false;
+      nativeBuildInputs = (old.nativeBuildInputs or []) ++ [staticSet.buildPackages.pkg-config];
+      buildInputs = [
+        staticSet.zlib
+        staticSet.zstd
+      ];
+      configureFlags =
+        (old.configureFlags or [])
+        ++ [
+          "--enable-targets=all"
+          "--disable-gas"
+          "--disable-ld"
+          "--disable-gprof"
+          "--disable-nls"
+          "--disable-plugins"
+          "--without-debuginfod"
+          "--with-zstd"
+          "--prefix=/usr"
+          "--libdir=/usr/lib"
+          "--datadir=/usr/share"
+          "--with-separate-debug-dir=/usr/lib/debug"
+        ];
+      buildPhase = ''
+        runHook preBuild
+        make -j"$NIX_BUILD_CORES" "''${makeFlags[@]}" \
+          "TARGET-binutils=readelf objdump" all-binutils
+        runHook postBuild
+      '';
+      installPhase = ''
+        runHook preInstall
+        install -Dm755 binutils/readelf binutils/objdump -t "$out/bin"
+        ${targetStrip staticSet} -s "$out/bin/readelf" "$out/bin/objdump"
+        runHook postInstall
+      '';
+      postInstall = "";
+      postFixup = "";
+      doCheck = false;
+      doInstallCheck = false;
+    });
+  binutilsPackages = buildPkgs.lib.genAttrs linuxSystems (
+    target: binutilsMinimal (staticSetFor target (pkgsFor target))
+  );
 in {
+  readelf = mkNixpkgsBinary {
+    name = "readelf";
+    synopsis = "Inspect ELF headers, sections, symbols, and debug information";
+    systems = linuxSystems;
+    packageFor = target: _: binutilsPackages.${target};
+  };
+
+  objdump = mkNixpkgsBinary {
+    name = "objdump";
+    synopsis = "Disassemble binaries and inspect object-file contents";
+    systems = linuxSystems;
+    packageFor = target: _: binutilsPackages.${target};
+  };
+
   bpftool = mkNixpkgsBinary {
     name = "bpftool";
     synopsis = "Inspect and manage Linux eBPF objects";
@@ -160,6 +262,13 @@ in {
     synopsis = "Monitor messages on D-Bus buses";
     systems = linuxSystems;
     packageFor = target: targetPkgs: dbusMonitorMinimal (staticSetFor target targetPkgs);
+  };
+
+  fio = mkNixpkgsBinary {
+    name = "fio";
+    synopsis = "Benchmark and verify storage I/O workloads";
+    systems = linuxSystems;
+    packageFor = target: targetPkgs: fioMinimal (staticSetFor target targetPkgs);
   };
 
   strace = mkNixpkgsBinary {
