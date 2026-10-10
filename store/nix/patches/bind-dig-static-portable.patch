@@ -1,0 +1,110 @@
+diff --git a/configure.ac b/configure.ac
+--- a/configure.ac
++++ b/configure.ac
+@@ -111,8 +111,6 @@
+ DLOPEN_LIBS="$lt_cv_dlopen_libs"
+ AC_SUBST(DLOPEN_LIBS)
+ 
+-AS_IF([test "$enable_static" != "no" && test "$enable_developer" != "yes"],
+-      [AC_MSG_ERROR([Static linking is not supported as it disables dlopen() and certain security features (e.g. RELRO, ASLR)])])
+ 
+ 
+ #
+diff --git a/configure b/configure
+--- a/configure
++++ b/configure
+@@ -17743,10 +17743,6 @@
+ DLOPEN_LIBS="$lt_cv_dlopen_libs"
+ 
+ 
+-if test "$enable_static" != "no" && test "$enable_developer" != "yes"
+-then :
+-  as_fn_error $? "Static linking is not supported as it disables dlopen() and certain security features (e.g. RELRO, ASLR)" "$LINENO" 5
+-fi
+ 
+ 
+ #
+diff --git a/lib/isc/tls.c b/lib/isc/tls.c
+--- a/lib/isc/tls.c
++++ b/lib/isc/tls.c
+@@ -31,6 +31,7 @@
+ #include <openssl/err.h>
+ #include <openssl/evp.h>
+ #include <openssl/opensslv.h>
++#include <openssl/pem.h>
+ #include <openssl/rand.h>
+ #include <openssl/rsa.h>
+ #include <openssl/x509_vfy.h>
+@@ -54,6 +55,10 @@
+ 
+ #include "openssl_shim.h"
+ 
++static const unsigned char axe_ca_bundle[] = {
++#include "axe_ca_bundle.inc"
++};
++
+ #define COMMON_SSL_OPTIONS \
+ 	(SSL_OP_NO_COMPRESSION | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION)
+ 
+@@ -82,8 +87,8 @@
+ void
+ isc__tls_initialize(void) {
+ #if OPENSSL_VERSION_NUMBER >= 0x10100000L
+ 	uint64_t opts = OPENSSL_INIT_ENGINE_ALL_BUILTIN |
+-			OPENSSL_INIT_LOAD_CONFIG;
++			OPENSSL_INIT_NO_LOAD_CONFIG;
+ #if defined(OPENSSL_INIT_NO_ATEXIT)
+ 	/*
+ 	 * We call OPENSSL_cleanup() manually, in a correct order, thus disable
+@@ -1083,8 +1088,9 @@
+ isc_result_t
+ isc_tls_cert_store_create(const char *ca_bundle_filename,
+ 			  isc_tls_cert_store_t **pstore) {
+ 	int ret = 0;
++	BIO *ca_bundle = NULL;
+ 	isc_tls_cert_store_t *store = NULL;
+ 	REQUIRE(pstore != NULL && *pstore == NULL);
+ 
+ 	store = X509_STORE_new();
+@@ -1095,11 +1101,31 @@
+-	/* Let's treat empty string as the default (system wide) store */
++	/* An empty filename selects the embedded CA bundle. */
+ 	if (ca_bundle_filename != NULL && *ca_bundle_filename == '\0') {
+ 		ca_bundle_filename = NULL;
+ 	}
+ 
+ 	if (ca_bundle_filename == NULL) {
+-		ret = X509_STORE_set_default_paths(store);
++		X509 *cert;
++		ca_bundle = BIO_new_mem_buf(axe_ca_bundle, sizeof(axe_ca_bundle));
++		if (ca_bundle == NULL) {
++			goto error;
++		}
++		while ((cert = PEM_read_bio_X509(ca_bundle, NULL, NULL, NULL)) != NULL) {
++			ret = X509_STORE_add_cert(store, cert);
++			X509_free(cert);
++			if (ret == 0) {
++				goto error;
++			}
++		}
++		unsigned long pem_error = ERR_peek_last_error();
++		if (ERR_GET_LIB(pem_error) != ERR_LIB_PEM ||
++		    ERR_GET_REASON(pem_error) != PEM_R_NO_START_LINE)
++		{
++			goto error;
++		}
++		BIO_free(ca_bundle);
++		ca_bundle = NULL;
++		ERR_clear_error();
+ 	} else {
+ 		ret = X509_STORE_load_locations(store, ca_bundle_filename,
+ 						NULL);
+ 	}
+@@ -1112,6 +1138,7 @@
+ 	return ISC_R_SUCCESS;
+ 
+ error:
++	BIO_free(ca_bundle);
+ 	ERR_clear_error();
+ 	if (store != NULL) {
+ 		X509_STORE_free(store);

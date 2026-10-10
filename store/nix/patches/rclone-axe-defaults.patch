@@ -1,0 +1,496 @@
+diff --git a/cmd/version/version.go b/cmd/version/version.go
+--- a/cmd/version/version.go
++++ b/cmd/version/version.go
+@@ -2,34 +2,21 @@
+ package version
+ 
+ import (
+-	"context"
+ 	"debug/buildinfo"
+-	"errors"
+ 	"fmt"
+-	"io"
+-	"net/http"
+ 	"os"
+ 	"runtime/debug"
+-	"strings"
+-	"time"
+ 
+-	"github.com/coreos/go-semver/semver"
+ 	"github.com/rclone/rclone/cmd"
+-	"github.com/rclone/rclone/fs"
+ 	"github.com/rclone/rclone/fs/config/flags"
+-	"github.com/rclone/rclone/fs/fshttp"
+ 	"github.com/spf13/cobra"
+ )
+ 
+-var (
+-	check = false
+-	deps  = false
+-)
++var deps = false
+ 
+ func init() {
+ 	cmd.Root.AddCommand(commandDefinition)
+ 	cmdFlags := commandDefinition.Flags()
+-	flags.BoolVarP(cmdFlags, &check, "check", "", false, "Check for new version", "")
+ 	flags.BoolVarP(cmdFlags, &deps, "deps", "", false, "Show the Go dependencies", "")
+ }
+ 
+@@ -57,27 +44,6 @@
+ Note: before rclone version 1.55 the os/type and os/arch lines were merged,
+       and the "go/version" line was tagged as "go version".
+ 
+-If you supply the --check flag, then it will do an online check to
+-compare your version with the latest release and the latest beta.
+-
+-` + "```console" + `
+-$ rclone version --check
+-yours:  1.42.0.6
+-latest: 1.42          (released 2018-06-16)
+-beta:   1.42.0.5      (released 2018-06-17)
+-` + "```" + `
+-
+-Or
+-
+-` + "```console" + `
+-$ rclone version --check
+-yours:  1.41
+-latest: 1.42          (released 2018-06-16)
+-  upgrade: https://downloads.rclone.org/v1.42
+-beta:   1.42.0.5      (released 2018-06-17)
+-  upgrade: https://beta.rclone.org/v1.42-005-g56e1e820
+-` + "```" + `
+-
+ If you supply the --deps flag then rclone will print a list of all the
+ packages it depends on and their versions along with some other
+ information about the build.`,
+@@ -85,88 +51,13 @@
+ 		"versionIntroduced": "v1.33",
+ 	},
+ 	RunE: func(command *cobra.Command, args []string) error {
+-		ctx := context.Background()
+ 		cmd.CheckArgs(0, 0, command, args)
+ 		if deps {
+ 			return printDependencies()
+ 		}
+-		if check {
+-			CheckVersion(ctx)
+-		} else {
+-			cmd.ShowVersion()
+-		}
++		cmd.ShowVersion()
+ 		return nil
+ 	},
+-}
+-
+-// strip a leading v off the string
+-func stripV(s string) string {
+-	if len(s) > 0 && s[0] == 'v' {
+-		return s[1:]
+-	}
+-	return s
+-}
+-
+-// GetVersion gets the version available for download
+-func GetVersion(ctx context.Context, url string) (v *semver.Version, vs string, date time.Time, err error) {
+-	resp, err := fshttp.NewClient(ctx).Get(url)
+-	if err != nil {
+-		return v, vs, date, err
+-	}
+-	defer fs.CheckClose(resp.Body, &err)
+-	if resp.StatusCode != http.StatusOK {
+-		return v, vs, date, errors.New(resp.Status)
+-	}
+-	bodyBytes, err := io.ReadAll(resp.Body)
+-	if err != nil {
+-		return v, vs, date, err
+-	}
+-	vs = strings.TrimSpace(string(bodyBytes))
+-	vs = strings.TrimPrefix(vs, "rclone ")
+-	vs = strings.TrimRight(vs, "β")
+-	date, err = http.ParseTime(resp.Header.Get("Last-Modified"))
+-	if err != nil {
+-		return v, vs, date, err
+-	}
+-	v, err = semver.NewVersion(stripV(vs))
+-	return v, vs, date, err
+-}
+-
+-// CheckVersion checks the installed version against available downloads
+-func CheckVersion(ctx context.Context) {
+-	vCurrent, err := semver.NewVersion(stripV(fs.Version))
+-	if err != nil {
+-		fs.Errorf(nil, "Failed to parse version: %v", err)
+-	}
+-	const timeFormat = "2006-01-02"
+-
+-	printVersion := func(what, url string) {
+-		v, vs, t, err := GetVersion(ctx, url+"version.txt")
+-		if err != nil {
+-			fs.Errorf(nil, "Failed to get rclone %s version: %v", what, err)
+-			return
+-		}
+-		fmt.Printf("%-8s%-40v %20s\n",
+-			what+":",
+-			v,
+-			"(released "+t.Format(timeFormat)+")",
+-		)
+-		if v.Compare(*vCurrent) > 0 {
+-			fmt.Printf("  upgrade: %s\n", url+vs)
+-		}
+-	}
+-	fmt.Printf("yours:  %-13s\n", vCurrent)
+-	printVersion(
+-		"latest",
+-		"https://downloads.rclone.org/",
+-	)
+-	printVersion(
+-		"beta",
+-		"https://beta.rclone.org/",
+-	)
+-	if strings.HasSuffix(fs.Version, "-DEV") {
+-		fmt.Println("Your version is compiled from git so comparisons may be wrong.")
+-	}
+ }
+ 
+ // Print info about a build module
+diff --git a/fs/rc/rc.go b/fs/rc/rc.go
+--- a/fs/rc/rc.go
++++ b/fs/rc/rc.go
+@@ -44,31 +44,6 @@
+ 	Help:    "Don't require auth for certain methods",
+ 	Groups:  "RC",
+ }, {
+-	Name:    "rc_web_gui",
+-	Default: false,
+-	Help:    "Launch WebGUI on localhost",
+-	Groups:  "RC",
+-}, {
+-	Name:    "rc_web_gui_update",
+-	Default: false,
+-	Help:    "Check and update to latest version of web gui",
+-	Groups:  "RC",
+-}, {
+-	Name:    "rc_web_gui_force_update",
+-	Default: false,
+-	Help:    "Force update to latest version of web gui",
+-	Groups:  "RC",
+-}, {
+-	Name:    "rc_web_gui_no_open_browser",
+-	Default: false,
+-	Help:    "Don't open the browser automatically",
+-	Groups:  "RC",
+-}, {
+-	Name:    "rc_web_fetch_url",
+-	Default: "https://api.github.com/repos/rclone/rclone-webui-react/releases/latest",
+-	Help:    "URL to fetch the releases for webgui",
+-	Groups:  "RC",
+-}, {
+ 	Name:    "rc_enable_metrics",
+ 	Default: false,
+ 	Help:    "Enable the Prometheus metrics path at the remote control server",
+@@ -107,11 +82,6 @@
+ 	Serve               bool                   `config:"rc_serve"`                   // set to serve files from remotes
+ 	ServeNoModTime      bool                   `config:"rc_serve_no_modtime"`        // don't read the modification time
+ 	NoAuth              bool                   `config:"rc_no_auth"`                 // set to disable auth checks on methods which require it
+-	WebUI               bool                   `config:"rc_web_gui"`                 // set to launch the web ui
+-	WebGUIUpdate        bool                   `config:"rc_web_gui_update"`          // set to check new update
+-	WebGUIForceUpdate   bool                   `config:"rc_web_gui_force_update"`    // set to force download new update
+-	WebGUINoOpenBrowser bool                   `config:"rc_web_gui_no_open_browser"` // set to disable auto opening browser
+-	WebGUIFetchURL      string                 `config:"rc_web_fetch_url"`           // set the default url for fetching webgui
+ 	EnableMetrics       bool                   `config:"rc_enable_metrics"`          // set to disable prometheus metrics on /metrics
+ 	MetricsHTTP         libhttp.Config         `config:"metrics"`
+ 	MetricsAuth         libhttp.AuthConfig     `config:"metrics"`
+diff --git a/cmd/all/all.go b/cmd/all/all.go
+--- a/cmd/all/all.go
++++ b/cmd/all/all.go
+@@ -31,7 +31,6 @@
+ 	_ "github.com/rclone/rclone/cmd/genautocomplete"
+ 	_ "github.com/rclone/rclone/cmd/gendocs"
+ 	_ "github.com/rclone/rclone/cmd/gitannex"
+-	_ "github.com/rclone/rclone/cmd/gui"
+ 	_ "github.com/rclone/rclone/cmd/hashsum"
+ 	_ "github.com/rclone/rclone/cmd/link"
+ 	_ "github.com/rclone/rclone/cmd/listremotes"
+@@ -56,7 +55,6 @@
+ 	_ "github.com/rclone/rclone/cmd/reveal"
+ 	_ "github.com/rclone/rclone/cmd/rmdir"
+ 	_ "github.com/rclone/rclone/cmd/rmdirs"
+-	_ "github.com/rclone/rclone/cmd/selfupdate"
+ 	_ "github.com/rclone/rclone/cmd/serve"
+ 	_ "github.com/rclone/rclone/cmd/serve/dlna"
+ 	_ "github.com/rclone/rclone/cmd/serve/docker"
+diff --git a/cmd/cmd.go b/cmd/cmd.go
+--- a/cmd/cmd.go
++++ b/cmd/cmd.go
+@@ -16,7 +16,6 @@
+ 	"runtime"
+ 	"runtime/pprof"
+ 	"strconv"
+-	"strings"
+ 	"sync"
+ 	"time"
+ 
+@@ -537,9 +536,6 @@
+ 	setupRootCommand(Root)
+ 	AddBackendFlags()
+ 	if err := Root.Execute(); err != nil {
+-		if strings.HasPrefix(err.Error(), "unknown command") && selfupdateEnabled {
+-			Root.PrintErrf("You could use '%s selfupdate' to get latest features.\n\n", Root.CommandPath())
+-		}
+ 		fs.Logf(nil, "Fatal error: %v", err)
+ 		os.Exit(exitcode.UsageError)
+ 	}
+diff --git a/fs/rc/rcserver/rcserver.go b/fs/rc/rcserver/rcserver.go
+--- a/fs/rc/rcserver/rcserver.go
++++ b/fs/rc/rcserver/rcserver.go
+@@ -3,15 +3,12 @@
+ 
+ import (
+ 	"context"
+-	"encoding/base64"
+ 	"encoding/json"
+ 	"errors"
+-	"flag"
+ 	"fmt"
+ 	"mime"
+ 	"net/http"
+ 	"net/url"
+-	"path/filepath"
+ 	"regexp"
+ 	"sort"
+ 	"strings"
+@@ -25,11 +22,8 @@
+ 	"github.com/rclone/rclone/fs/list"
+ 	"github.com/rclone/rclone/fs/rc"
+ 	"github.com/rclone/rclone/fs/rc/jobs"
+-	"github.com/rclone/rclone/fs/rc/webgui"
+ 	libhttp "github.com/rclone/rclone/lib/http"
+ 	"github.com/rclone/rclone/lib/http/serve"
+-	"github.com/rclone/rclone/lib/random"
+-	"github.com/skratchdot/open-golang/open"
+ )
+ 
+ // Start the remote control server if configured
+@@ -53,60 +47,25 @@
+ 	ctx            context.Context // for global config
+ 	server         *libhttp.Server
+ 	files          http.Handler
+-	pluginsHandler http.Handler
+ 	opt            *rc.Options
+ 	noAuth         bool // snapshot of opt.NoAuth at startup to prevent runtime mutation
+ }
+ 
+ func newServer(ctx context.Context, opt *rc.Options, mux *http.ServeMux) (*Server, error) {
+ 	fileHandler := http.Handler(nil)
+-	pluginsHandler := http.Handler(nil)
+ 	// Add some more mime types which are often missing
+ 	_ = mime.AddExtensionType(".wasm", "application/wasm")
+ 	_ = mime.AddExtensionType(".js", "application/javascript")
+ 
+-	cachePath := filepath.Join(config.GetCacheDir(), "webgui")
+-	extractPath := filepath.Join(cachePath, "current/build")
+-	// File handling
+ 	if opt.Files != "" {
+-		if opt.WebUI {
+-			fs.Logf(nil, "--rc-files overrides --rc-web-gui command\n")
+-		}
+ 		fs.Logf(nil, "Serving files from %q", opt.Files)
+ 		fileHandler = http.FileServer(http.Dir(opt.Files))
+-	} else if opt.WebUI {
+-		if err := webgui.CheckAndDownloadWebGUIRelease(opt.WebGUIUpdate, opt.WebGUIForceUpdate, opt.WebGUIFetchURL, config.GetCacheDir()); err != nil {
+-			fs.Errorf(nil, "Error while fetching the latest release of Web GUI: %v", err)
+-		}
+-		if opt.NoAuth {
+-			fs.Logf(nil, "It is recommended to use web gui with auth.")
+-		} else {
+-			if opt.Auth.BasicUser == "" && opt.Auth.HtPasswd == "" {
+-				opt.Auth.BasicUser = "gui"
+-				fs.Infof(nil, "No username specified. Using default username: %s \n", rc.Opt.Auth.BasicUser)
+-			}
+-			if opt.Auth.BasicPass == "" && opt.Auth.HtPasswd == "" {
+-				randomPass, err := random.Password(128)
+-				if err != nil {
+-					fs.Fatalf(nil, "Failed to make password: %v", err)
+-				}
+-				opt.Auth.BasicPass = randomPass
+-				fs.Infof(nil, "No password specified. Using random password: %s \n", randomPass)
+-			}
+-		}
+-		opt.Serve = true
+-
+-		fs.Logf(nil, "Serving Web GUI")
+-		fileHandler = http.FileServer(http.Dir(extractPath))
+-
+-		pluginsHandler = http.FileServer(http.Dir(webgui.PluginsPath))
+ 	}
+ 
+ 	s := &Server{
+ 		ctx:            ctx,
+ 		opt:            opt,
+ 		files:          fileHandler,
+-		pluginsHandler: pluginsHandler,
+ 		noAuth:         opt.NoAuth,
+ 	}
+ 
+@@ -149,35 +108,7 @@
+ 
+ 	for _, URL := range s.server.URLs() {
+ 		fs.Logf(nil, "Serving remote control on %s", URL)
+-		// Open the files in the browser if set
+-		if s.files != nil {
+-			openURL, err := url.Parse(URL)
+-			if err != nil {
+-				return fmt.Errorf("invalid serving URL: %w", err)
+-			}
+-			// Add username, password into the URL if they are set
+-			user, pass := s.opt.Auth.BasicUser, s.opt.Auth.BasicPass
+-			if user != "" && pass != "" {
+-				openURL.User = url.UserPassword(user, pass)
+-
+-				// Base64 encode username and password to be sent through url
+-				loginToken := user + ":" + pass
+-				parameters := url.Values{}
+-				encodedToken := base64.URLEncoding.EncodeToString([]byte(loginToken))
+-				fs.Debugf(nil, "login_token %q", encodedToken)
+-				parameters.Add("login_token", encodedToken)
+-				openURL.RawQuery = parameters.Encode()
+-				openURL.RawPath = "/#/login"
+-			}
+-			// Don't open browser if serving in testing environment or required not to do so.
+-			if flag.Lookup("test.v") == nil && !s.opt.WebGUINoOpenBrowser {
+-				if err := open.Start(openURL.String()); err != nil {
+-					fs.Errorf(nil, "Failed to open Web GUI in browser: %v. Manually access it at: %s", err, openURL.String())
+-				}
+-			} else {
+-				fs.Logf(nil, "Web GUI is not automatically opening browser. Navigate to %s to use.", openURL.String())
+-			}
+-		}
++
+ 	}
+ 	return nil
+ }
+@@ -459,21 +390,6 @@
+ 		s.serveRoot(w, r)
+ 		return
+ 	case s.files != nil:
+-		if s.opt.WebUI {
+-			pluginsMatchResult := webgui.PluginsMatch.FindStringSubmatch(path)
+-
+-			if len(pluginsMatchResult) > 2 {
+-				ok := webgui.ServePluginOK(w, r, pluginsMatchResult)
+-				if !ok {
+-					r.URL.Path = fmt.Sprintf("/%s/%s/app/build/%s", pluginsMatchResult[1], pluginsMatchResult[2], pluginsMatchResult[3])
+-					s.pluginsHandler.ServeHTTP(w, r)
+-					return
+-				}
+-				return
+-			} else if webgui.ServePluginWithReferrerOK(w, r, path) {
+-				return
+-			}
+-		}
+ 		// Serve the files
+ 		r.URL.Path = "/" + path
+ 		s.files.ServeHTTP(w, r)
+diff --git a/rclone.go b/rclone.go
+--- a/rclone.go
++++ b/rclone.go
+@@ -1,15 +1,29 @@
+ // Sync files and directories to and from local and remote object stores
+ //
+ // Nick Craig-Wood <nick@craig-wood.com>
++//go:debug x509usefallbackroots=1
++
+ package main
+ 
+ import (
++	"crypto/x509"
++	_ "embed"
++	_ "time/tzdata"
++
+ 	_ "github.com/rclone/rclone/backend/all" // import all backends
+ 	"github.com/rclone/rclone/cmd"
+ 	_ "github.com/rclone/rclone/cmd/all"    // import all commands
+ 	_ "github.com/rclone/rclone/lib/plugin" // import plugins
+ )
+ 
++//go:embed axe-ca-bundle.pem
++var axeCABundle []byte
++
+ func main() {
++	roots := x509.NewCertPool()
++	if !roots.AppendCertsFromPEM(axeCABundle) {
++		panic("embedded AXE CA bundle is empty or invalid")
++	}
++	x509.SetFallbackRoots(roots)
+ 	cmd.Main()
+ }
+diff --git a/backend/azureblob/auth/auth.go b/backend/azureblob/auth/auth.go
+--- a/backend/azureblob/auth/auth.go
++++ b/backend/azureblob/auth/auth.go
+@@ -333,6 +333,7 @@
+ 	// Client options specifying our own transport
+ 	policyClientOptions := policy.ClientOptions{
+ 		Transport: newTransporter(ctx),
++		Telemetry: policy.TelemetryOptions{Disabled: true},
+ 	}
+ 	// Can't do this with generics (yet)
+ 	// clientOpt := service.ClientOptions{
+diff --git a/backend/azureblob/azureblob.go b/backend/azureblob/azureblob.go
+--- a/backend/azureblob/azureblob.go
++++ b/backend/azureblob/azureblob.go
+@@ -733,6 +733,7 @@
+ 		ClientOptions: azcore.ClientOptions{
+ 			Transport:       auth.Transporter(ctx),
+ 			PerCallPolicies: []policy.Policy{setAcceptEncodingGzip{}},
++			Telemetry:       policy.TelemetryOptions{Disabled: true},
+ 		},
+ 	}
+ 
+diff --git a/backend/googlecloudstorage/googlecloudstorage.go b/backend/googlecloudstorage/googlecloudstorage.go
+--- a/backend/googlecloudstorage/googlecloudstorage.go
++++ b/backend/googlecloudstorage/googlecloudstorage.go
+@@ -600,7 +600,7 @@
+ 
+ 	// Create a new authorized Drive client.
+ 	f.client = oAuthClient
+-	gcsOpts := []option.ClientOption{option.WithHTTPClient(f.client)}
++	gcsOpts := []option.ClientOption{option.WithHTTPClient(f.client), option.WithTelemetryDisabled()}
+ 	if opt.Endpoint != "" {
+ 		gcsOpts = append(gcsOpts, option.WithEndpoint(opt.Endpoint))
+ 	}
+diff --git a/backend/drive/drive.go b/backend/drive/drive.go
+--- a/backend/drive/drive.go
++++ b/backend/drive/drive.go
+@@ -1430,13 +1430,13 @@
+ 
+ 	// Create a new authorized Drive client.
+ 	f.client = oAuthClient
+-	f.svc, err = drive.NewService(context.Background(), option.WithHTTPClient(f.client))
++	f.svc, err = drive.NewService(context.Background(), option.WithHTTPClient(f.client), option.WithTelemetryDisabled())
+ 	if err != nil {
+ 		return nil, fmt.Errorf("couldn't create Drive client: %w", err)
+ 	}
+ 
+ 	if f.opt.V2DownloadMinSize >= 0 {
+-		f.v2Svc, err = drive_v2.NewService(context.Background(), option.WithHTTPClient(f.client))
++		f.v2Svc, err = drive_v2.NewService(context.Background(), option.WithHTTPClient(f.client), option.WithTelemetryDisabled())
+ 		if err != nil {
+ 			return nil, fmt.Errorf("couldn't create Drive v2 client: %w", err)
+ 		}
+@@ -3432,12 +3432,12 @@
+ 		return fmt.Errorf("drive: failed when making oauth client: %w", err)
+ 	}
+ 	f.client = oAuthClient
+-	f.svc, err = drive.NewService(context.Background(), option.WithHTTPClient(f.client))
++	f.svc, err = drive.NewService(context.Background(), option.WithHTTPClient(f.client), option.WithTelemetryDisabled())
+ 	if err != nil {
+ 		return fmt.Errorf("couldn't create Drive client: %w", err)
+ 	}
+ 	if f.opt.V2DownloadMinSize >= 0 {
+-		f.v2Svc, err = drive_v2.NewService(context.Background(), option.WithHTTPClient(f.client))
++		f.v2Svc, err = drive_v2.NewService(context.Background(), option.WithHTTPClient(f.client), option.WithTelemetryDisabled())
+ 		if err != nil {
+ 			return fmt.Errorf("couldn't create Drive v2 client: %w", err)
+ 		}

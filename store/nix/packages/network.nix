@@ -314,6 +314,45 @@
       nativeInstallCheckInputs = [];
     });
 
+  websocatMinimal = staticSet:
+    (staticSet.websocat.override {
+      openssl = portableOpenSsl staticSet;
+    }).overrideAttrs (old: {
+      env =
+        (old.env or {})
+        // {
+          OPENSSL_STATIC = "1";
+          PKG_CONFIG_ALL_STATIC = "1";
+        };
+      postPatch =
+        (old.postPatch or "")
+        + ''
+              cp ${axePortableCaBundle} src/axe-ca-bundle.pem
+              substituteInPlace src/ssl_peer.rs \
+                --replace-fail 'let mut b = TlsConnector::builder();' \
+                  'let mut b = tls_connector_builder()?;'
+              substituteInPlace src/ws_client_peer.rs \
+                --replace-fail 'let mut builder_ = super::ssl_peer::native_tls::TlsConnector::builder();' \
+                  'let mut builder_ = super::ssl_peer::tls_connector_builder()?;'
+              cat >> src/ssl_peer.rs <<'EOF'
+
+          pub(super) fn tls_connector_builder() -> native_tls::Result<native_tls::TlsConnectorBuilder> {
+              let mut builder = TlsConnector::builder();
+              for pem in include_str!("axe-ca-bundle.pem").split_inclusive("-----END CERTIFICATE-----") {
+                  if pem.contains("-----BEGIN CERTIFICATE-----") {
+                      builder.add_root_certificate(native_tls::Certificate::from_pem(pem.as_bytes())?);
+                  }
+              }
+              Ok(builder)
+          }
+          EOF
+        '';
+      outputs = ["out"];
+      postInstall = "";
+      doInstallCheck = false;
+      nativeInstallCheckInputs = [];
+    });
+
   nmapMinimal = {
     packageSet,
     dependencySet,
@@ -451,6 +490,136 @@
       doInstallCheck = false;
       installCheckPhase = "";
     });
+
+  portableOpenSsl = staticSet:
+    staticSet.openssl.overrideAttrs (old: {
+      postPatch =
+        (old.postPatch or "")
+        + ''
+          substituteInPlace Configurations/unix-Makefile.tmpl \
+            --replace-fail 'OPENSSLDIR="\"$(OPENSSLDIR)\""' 'OPENSSLDIR="\"/etc/ssl\""' \
+            --replace-fail 'ENGINESDIR="\"$(ENGINESDIR)\""' 'ENGINESDIR="\"/usr/lib/engines\""' \
+            --replace-fail 'MODULESDIR="\"$(MODULESDIR)\""' 'MODULESDIR="\"/usr/lib/ossl-modules\""'
+        '';
+    });
+
+  digMinimal = staticSet: let
+    openssl = portableOpenSsl staticSet;
+  in
+    (staticSet.bind.override {
+      enableGSSAPI = false;
+      inherit openssl;
+    }).overrideAttrs (old: {
+      outputs = ["out"];
+      nativeBuildInputs = (old.nativeBuildInputs or []) ++ [buildPkgs.xxd];
+      buildInputs = [
+        staticSet.libcap
+        staticSet.libidn2
+        staticSet.liburcu
+        staticSet.libuv
+        staticSet.nghttp2
+        staticSet.zlib
+        openssl
+      ];
+      patches = (old.patches or []) ++ [../patches/bind-dig-static-portable.patch];
+      postPatch =
+        (old.postPatch or "")
+        + ''
+          xxd -i < ${axePortableCaBundle} > lib/isc/axe_ca_bundle.inc
+        '';
+      configureFlags =
+        [
+          "--prefix=/usr"
+          "--sysconfdir=/etc"
+          "--localstatedir=/var"
+          "--enable-static"
+          "--disable-shared"
+          "--disable-dnstap"
+          "--disable-geoip"
+          "--without-gssapi"
+          "--without-lmdb"
+          "--without-libxml2"
+          "--without-json-c"
+          "--without-readline"
+          "--without-jemalloc"
+          "--without-cmocka"
+          "--with-libidn2"
+          "--with-libnghttp2=yes"
+          "--with-zlib=yes"
+        ]
+        ++ buildPkgs.lib.optional (
+          staticSet.stdenv.hostPlatform != staticSet.stdenv.buildPlatform
+        ) "BUILD_CC=$(CC_FOR_BUILD)";
+      buildPhase = ''
+        runHook preBuild
+        make -C lib -j"$NIX_BUILD_CORES"
+        make -C bin/dig -j"$NIX_BUILD_CORES" dig
+        runHook postBuild
+      '';
+      installPhase = ''
+        runHook preInstall
+        install -Dm755 bin/dig/dig "$out/bin/dig"
+        ${targetStrip staticSet} -s "$out/bin/dig"
+        runHook postInstall
+      '';
+      postInstall = "";
+      postFixup = "";
+      doCheck = false;
+      doInstallCheck = false;
+      nativeInstallCheckInputs = [];
+    });
+
+  ethtoolMinimal = staticSet:
+    staticSet.ethtool.overrideAttrs (old: {
+      outputs = ["out"];
+      configureFlags =
+        (old.configureFlags or [])
+        ++ [
+          "--prefix=/usr"
+          "--without-bash-completion-dir"
+        ];
+      installPhase = ''
+        runHook preInstall
+        install -Dm755 ethtool "$out/bin/ethtool"
+        ${targetStrip staticSet} -s "$out/bin/ethtool"
+        runHook postInstall
+      '';
+      postInstall = "";
+      doInstallCheck = false;
+      nativeInstallCheckInputs = [];
+    });
+
+  rclonePackageFor = target: targetPkgs:
+    (
+      if target == "aarch64-darwin"
+      then
+        goDarwin {
+          package = "rclone";
+          subPackage = ".";
+        }
+      else (packageSetFor target targetPkgs).rclone.override {enableCmount = false;}
+    ).overrideAttrs
+    (old: {
+      outputs = ["out"];
+      buildInputs = [];
+      env = (old.env or {}) // {CGO_ENABLED = 0;};
+      tags = ["noselfupdate"];
+      patches = (old.patches or []) ++ [../patches/rclone-axe-defaults.patch];
+      postPatch =
+        (old.postPatch or "")
+        + ''
+          cp ${axePortableCaBundle} axe-ca-bundle.pem
+        '';
+      postConfigure = ''
+        rm -r cmd/gui cmd/selfupdate cmd/selfupdate_enabled.go \
+          cmd/selfupdate_disabled.go fs/rc/webgui
+        export GOFLAGS="$GOFLAGS -tags=noselfupdate"
+      '';
+      postInstall = "";
+      postFixup = "";
+      doInstallCheck = false;
+      nativeInstallCheckInputs = [];
+    });
 in {
   tcpdump = mkNixpkgsBinary {
     name = "tcpdump";
@@ -495,6 +664,13 @@ in {
       "libresolv.9.dylib"
       "libutil.dylib"
     ];
+  };
+
+  websocat = mkNixpkgsBinary {
+    name = "websocat";
+    synopsis = "Relay data between WebSockets and streams";
+    systems = linuxSystems;
+    packageFor = target: targetPkgs: websocatMinimal (staticSetFor target targetPkgs);
   };
 
   openssh = mkNixpkgsBinary {
@@ -709,5 +885,26 @@ in {
     synopsis = "Scan large networks for open ports at high speed";
     systems = linuxSystems;
     packageFor = target: targetPkgs: masscanMinimal (staticSetFor target targetPkgs);
+  };
+
+  dig = mkNixpkgsBinary {
+    name = "dig";
+    synopsis = "Query DNS records with the BIND DNS client";
+    systems = linuxSystems;
+    packageFor = target: targetPkgs: digMinimal (staticSetFor target targetPkgs);
+  };
+
+  ethtool = mkNixpkgsBinary {
+    name = "ethtool";
+    synopsis = "Inspect and configure Linux network device parameters";
+    systems = linuxSystems;
+    packageFor = target: targetPkgs: ethtoolMinimal (staticSetFor target targetPkgs);
+  };
+
+  rclone = mkNixpkgsBinary {
+    name = "rclone";
+    synopsis = "Copy and synchronize files with remote storage";
+    systems = portableSystems;
+    packageFor = rclonePackageFor;
   };
 }
