@@ -67,7 +67,10 @@ impl CommandLineArgs {
 }
 
 /// Main entry point for the `brush` shell.
-pub fn run() {
+///
+/// `default_prompt` sets interactive `PS1` before startup files run, unless
+/// inherited from the environment. An inherited empty `PS1` is preserved.
+pub fn run(default_prompt: Option<&str>) {
     //
     // Install the bundled-command registry so it's available both for
     // bundled dispatch (handled next) and for builtin shim registration
@@ -142,7 +145,7 @@ pub fn run() {
         std::process::exit(1);
     };
 
-    let result = runtime.block_on(run_async(&args, parsed_args));
+    let result = runtime.block_on(run_async(&args, parsed_args, default_prompt));
 
     let exit_code = match result {
         Ok(code) => code,
@@ -182,6 +185,7 @@ pub(crate) const DEFAULT_ENABLE_HIGHLIGHTING: bool = false;
 async fn run_async(
     cli_args: &[String],
     args: CommandLineArgs,
+    default_prompt: Option<&str>,
 ) -> Result<u8, brush_interactive::ShellError> {
     // Initializing tracing.
     let mut event_config = TRACE_EVENT_CONFIG.lock().await;
@@ -199,7 +203,16 @@ async fn run_async(
     // Instantiate an appropriately configured shell and wrap it in an `Arc`. Note that we do
     // *not* run any code in the shell yet. We'll delay loading profiles and such until after
     // we've set up everything else (in `run_in_shell`).
-    let shell: BrushShell = instantiate_shell(&args, cli_args).await?;
+    let mut shell: BrushShell = instantiate_shell(&args, cli_args).await?;
+    if let Some(default_prompt) = default_prompt
+        && shell.options().interactive
+        && !shell.options().sh_mode
+        && (args.do_not_inherit_env || std::env::var_os("PS1").is_none())
+    {
+        shell
+            .env_mut()
+            .set_global("PS1", brush_core::ShellVariable::new(default_prompt))?;
+    }
     let shell = Arc::new(Mutex::new(shell));
 
     // Run with the selected input backend. Each branch instantiates the concrete

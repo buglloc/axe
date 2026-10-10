@@ -125,7 +125,7 @@ fn main() {
     }
 
     disable_persistent_shell_history();
-    brush_shell::entry::run();
+    brush_shell::entry::run(Some(r"axe \w\$ "));
 }
 
 /// How argv selected an applet, in dispatch precedence order.

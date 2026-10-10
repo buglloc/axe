@@ -35,6 +35,25 @@ A symlink named after a bundled applet also runs that applet; for example, a lin
 
 The applet PATH bridge is best-effort; bundled commands still resolve without it. See [Runtime survivability](runtime-survivability.md) for child execution and behavior when the executable is removed, and [AXE Store](store.md) for Store storage and delivery.
 
+## Interactive prompt
+
+The default `PS1` is `axe \w\$ `: the current directory, with `~` for the home
+directory, followed by `$` for a regular user or `#` for root. The prompt is
+independent of the executable's filename.
+
+An inherited `PS1`, including an empty value, takes precedence over the default.
+Startup files can override it. For an ordinary interactive shell, AXE reads
+`~/.bashrc` and then `~/.brushrc`; put AXE-specific settings in `~/.brushrc`:
+
+```bash
+PS1='\u@\h:\w\$ '
+```
+
+A login shell (`axe -l`) reads the first available file among `~/.bash_profile`,
+`~/.bash_login`, and `~/.profile`. Set `PS1` there or source `~/.brushrc` from it.
+`--norc` skips rc files; `--noenv` ignores inherited environment variables.
+Non-interactive shells do not receive the default `PS1`.
+
 ## Bundled commands
 
 Bundled commands are built into `axe`; Store commands are signed on-demand artifacts. An inventory entry does not guarantee a reachable download. Linux-only commands are absent from Darwin builds.
