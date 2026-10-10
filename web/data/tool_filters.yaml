@@ -1,34 +1,27 @@
 filters:
-  - id: core
-    label: Core system
-    categories: [administration, coreutils, environment]
-  - id: text
-    label: Text & data
-    categories: [binary, data, text]
-  - id: process
-    label: Processes & debugging
-    categories: [debugging, process, system]
-  - id: network
-    label: Network
-    categories: [network]
   - id: files
     label: Files & search
-    categories: [filesystem, search]
-  - id: inspect
-    label: Host & storage
-    categories: [host-inspection, inspection, storage]
+  - id: text
+    label: Text & data
   - id: archives
-    label: Archives
-    categories: [archive, compression]
+    label: Archives & compression
+  - id: storage
+    label: Storage & backup
+  - id: process
+    label: Processes
+  - id: system
+    label: Host & system
+  - id: network
+    label: Network & remote access
   - id: containers
-    label: Containers
-    categories: [containers]
+    label: Containers & orchestration
+  - id: debugging
+    label: Debugging & binary analysis
   - id: security
-    label: Security
-    categories: [security]
+    label: Security & permissions
+  - id: terminal
+    label: Shell & terminal
   - id: runtime
-    label: Runtime
-    categories: [runtime]
-  - id: services
-    label: Services & AXE
-    categories: [control, service]
+    label: Runtimes
+  - id: axe
+    label: AXE

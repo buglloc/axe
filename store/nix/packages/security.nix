@@ -36,44 +36,6 @@
       doInstallCheck = false;
       nativeInstallCheckInputs = [];
     });
-  binwalkMinimal = packageSet: compressionSet:
-    (packageSet.binwalk.override {
-      bzip2 = compressionSet.bzip2;
-      python3 = {
-        pkgs.python-lzo = null;
-      };
-      xz = compressionSet.xz;
-    }).overrideAttrs
-    (_: {
-      buildInputs = [
-        compressionSet.bzip2
-        packageSet.dtc
-        packageSet.fontconfig
-        packageSet.lzo
-        packageSet.openssl_3
-        packageSet.ucl
-        packageSet.unzip
-        compressionSet.xz
-        packageSet.zlib
-      ];
-      postInstall = "";
-      doCheck = false;
-      postFixup = "";
-      doInstallCheck = false;
-      nativeInstallCheckInputs = [];
-    });
-
-  # Binwalk links libbz2 and liblzma. Keep the native Darwin stdenv and make
-  # only those runtime dependencies static.
-  binwalkPackageFor = target: targetPkgs: let
-    packageSet = packageSetFor target targetPkgs;
-    compressionSet =
-      if target == "aarch64-darwin"
-      then staticSetFor target targetPkgs
-      else packageSet;
-  in
-    binwalkMinimal packageSet compressionSet;
-
   agePackageFor = target: targetPkgs:
     (
       if target == "aarch64-darwin"
@@ -217,15 +179,6 @@ in {
     synopsis = "Set Linux file capabilities";
     systems = linuxSystems;
     packageFor = target: targetPkgs: capshMinimal (staticSetFor target targetPkgs);
-  };
-
-  binwalk = mkNixpkgsBinary {
-    name = "binwalk";
-    synopsis = "Analyze firmware images and embedded files";
-    systems = portableSystems;
-    packageFor = binwalkPackageFor;
-    rewriteBuildConfigurationPaths = true;
-    darwinSystemLibraries = ["libiconv.2.dylib"];
   };
 
   ffuf = mkNixpkgsBinary {

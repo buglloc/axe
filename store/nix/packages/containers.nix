@@ -290,13 +290,6 @@ in {
     packageFor = utilLinuxMinimal;
   };
 
-  findmnt = mkNixpkgsBinary {
-    name = "findmnt";
-    synopsis = "Find and describe mounted filesystems";
-    systems = linuxSystems;
-    packageFor = utilLinuxMinimal;
-  };
-
   nsenter = mkNixpkgsBinary {
     name = "nsenter";
     synopsis = "Run a program in another process's Linux namespaces";

@@ -2600,7 +2600,7 @@ fn commands_is_queryable_with_bundled_jq_inside_shell() {
             "--norc",
             "--noprofile",
             "-c",
-            "commands | jq -c '{schema, schema_version, keys: (keys | sort), invalid_availability: [.commands[] | select(.availability != \"local\" and .availability != \"on_demand\" and .availability != \"blocked\") | .name], examples: ([.commands[] | select(.name == \"doctor\" or .name == \"goblin\" or .name == \"jq\") | {name, source, category, availability, local_path_type: (.local_path | type)}] | sort_by(.name))}'",
+            "commands | jq -c '{schema, schema_version, keys: (keys | sort), invalid_availability: [.commands[] | select(.availability != \"local\" and .availability != \"on_demand\" and .availability != \"blocked\") | .name], invalid_bundled_categories: [.commands[] | select(.source == \"bundled\") | select(.category as $category | [\"files\", \"text\", \"archives\", \"storage\", \"process\", \"system\", \"network\", \"containers\", \"debugging\", \"security\", \"terminal\", \"runtime\", \"axe\"] | index($category) == null) | .name], categories: ([.commands[] | select(.name == \"chmod\" or .name == \"cp\" or .name == \"df\" or .name == \"dnsdomainname\" or .name == \"env\" or .name == \"gunzip\" or .name == \"tar\") | {name, category, alias_of}] | sort_by(.name)), examples: ([.commands[] | select(.name == \"doctor\" or .name == \"goblin\" or .name == \"jq\") | {name, source, category, availability, local_path_type: (.local_path | type)}] | sort_by(.name))}'",
         ])
         .output()
         .expect("query commands from the bundled shell");
@@ -2619,25 +2619,35 @@ fn commands_is_queryable_with_bundled_jq_inside_shell() {
             "schema_version": 1,
             "keys": ["commands", "schema", "schema_version"],
             "invalid_availability": [],
+            "invalid_bundled_categories": [],
+            "categories": [
+                {"name": "chmod", "category": "security", "alias_of": null},
+                {"name": "cp", "category": "files", "alias_of": null},
+                {"name": "df", "category": "storage", "alias_of": null},
+                {"name": "dnsdomainname", "category": "system", "alias_of": "hostname"},
+                {"name": "env", "category": "terminal", "alias_of": null},
+                {"name": "gunzip", "category": "archives", "alias_of": "gzip"},
+                {"name": "tar", "category": "archives", "alias_of": null}
+            ],
             "examples": [
                 {
                     "name": "doctor",
                     "source": "bundled",
-                    "category": "control",
+                    "category": "axe",
                     "availability": "local",
                     "local_path_type": "string"
                 },
                 {
                     "name": "goblin",
                     "source": "bundled",
-                    "category": "binary",
+                    "category": "debugging",
                     "availability": "local",
                     "local_path_type": "string"
                 },
                 {
                     "name": "jq",
                     "source": "bundled",
-                    "category": "data",
+                    "category": "text",
                     "availability": "local",
                     "local_path_type": "string"
                 },

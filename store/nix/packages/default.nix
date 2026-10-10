@@ -8,12 +8,14 @@
   publicCategories = {
     archives = import ./archives.nix helpers;
     containers = import ./containers.nix helpers;
-    data = import ./data.nix helpers;
     debugging = import ./debugging.nix helpers;
+    files = import ./files.nix helpers;
     network = import ./network.nix helpers;
     runtime = import ./runtime.nix helpers;
-    search = import ./search.nix helpers;
     security = import ./security.nix helpers;
+    storage = import ./storage.nix helpers;
+    terminal = import ./terminal.nix helpers;
+    text = import ./text.nix helpers;
   };
   extras = extraCategories helpers;
   categories =

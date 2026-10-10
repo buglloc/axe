@@ -2,6 +2,10 @@
 {{ $commands := hugo.Data.registry.commands }}
 {{ $bundledCommands := where $commands "source" "bundled" }}
 {{ $storeCommands := where $commands "source" "store" }}
+{{ $categoryLabels := dict }}
+{{ range hugo.Data.tool_filters.filters }}
+  {{ $categoryLabels = merge $categoryLabels (dict .id .label) }}
+{{ end }}
 
 <main id="main" class="landing">
   <section class="hero" aria-labelledby="hero-title">
@@ -196,17 +200,12 @@
         </thead>
         <tbody>
           {{ range $commands }}
-          {{ $command := . }}
-          {{ $filterIDs := slice }}
-          {{ range hugo.Data.tool_filters.filters }}
-            {{ if in .categories $command.category }}{{ $filterIDs = $filterIDs | append .id }}{{ end }}
-          {{ end }}
-          {{ if eq (len $filterIDs) 0 }}{{ errorf "command %q has unmapped web category %q" $command.name $command.category }}{{ end }}
-          <tr data-command data-source="{{ $command.source }}" data-categories="{{ delimit $filterIDs " " }}" data-search="{{ $command.name | lower }} {{ $command.synopsis | lower }} {{ $command.category | lower }} {{ $command.source }}">
-            <td class="tool-table__name"><span aria-hidden="true">→</span><code>{{ $command.name }}</code></td>
-            <td class="tool-table__synopsis">{{ $command.synopsis }}</td>
-            <td><span class="tool-source tool-source--{{ $command.source }}">{{ $command.source }}</span></td>
-            <td class="tool-table__category">{{ $command.category | humanize }}</td>
+          {{ if not (isset $categoryLabels .category) }}{{ errorf "command %q has unmapped web category %q" .name .category }}{{ end }}
+          <tr data-command data-source="{{ .source }}" data-category="{{ .category }}" data-search="{{ .name | lower }} {{ .synopsis | lower }} {{ .category | lower }} {{ index $categoryLabels .category | lower }} {{ .source }}">
+            <td class="tool-table__name"><span aria-hidden="true">→</span><code>{{ .name }}</code></td>
+            <td class="tool-table__synopsis">{{ .synopsis }}</td>
+            <td><span class="tool-source tool-source--{{ .source }}">{{ .source }}</span></td>
+            <td class="tool-table__category">{{ index $categoryLabels .category }}</td>
           </tr>
           {{ end }}
         </tbody>

@@ -11,6 +11,11 @@ axe doctor --json
 
 `commands` returns a versioned JSON inventory. `availability` is `local`, `on_demand`, or `blocked`; `local_path` is the published applet path, if one exists. Use the shell's `type`, `command`, and `command -v` builtins to inspect aliases, functions, and builtins.
 
+Each command has one primary `category`, shared by bundled and Store commands.
+Aliases inherit their target's category. Categories describe purpose; `source`
+separately identifies bundled or Store delivery. The website uses the same
+category IDs for filters and inventory rows.
+
 ## Command resolution
 
 Within the shell, resolution follows this order:
@@ -58,23 +63,25 @@ Non-interactive shells do not receive the default `PS1`.
 
 Bundled commands are built into `axe`; Store commands are signed on-demand artifacts. An inventory entry does not guarantee a reachable download. Linux-only commands are absent from Darwin builds.
 
-| Group | Commands | Purpose |
-| --- | --- | --- |
-| Shell | Brush builtins | Shell state, jobs, history, completion, and POSIX/Bash-style control flow |
-| Coreutils | `uutils/coreutils`, including `hostname` and its `dnsdomainname` alias | Basic file, text, process, and environment operations |
-| Process | `free`, `hugetop`, `killall`, `pgrep`, `pidof`, `pidwait`, `pkill`, `pmap`, `ps`, `pwdx`, `skill`, `slabtop`, `snice`, `sysctl`, `tload`, `top`, `vmstat`, `w`, `watch` | Linux processes and system state |
-| System | `dmesg`, `hexdump`, `last`, `mountpoint` | Kernel log, hex dumps, login history, and mount points |
-| Text | `awk`, `grep`, `egrep`, `fgrep`, `rgrep`, `sed`, `find`, `xargs`, `diff`, `cmp`, `diff3` | Search, transform, and compare data |
-| Data | `jq` | JSON queries and transformations |
-| Archives | `tar`, `gzip`, `gunzip`, `zcat`, `gzcat`, `bzip2`, `bunzip2`, `bzcat`, `xz`, `unxz`, `xzcat`, `zstd` | Archives and compressed streams |
-| Binary inspection | `file`, `goblin`, `strings` | Identify and inspect binary formats |
-| Network | `http`, `arp`, `ifconfig`, `ip`, `ipaddr`, `iplink`, `ipneigh`, `iproute`, `iprule`, `ipcalc`, `host`, `nslookup`, `ping`, `ping6`, `traceroute`, `traceroute6` | Bounded HTTP requests, Linux networking, DNS, and connectivity |
-| Storage | `blkid`, `blockdev`, `mount` | Block devices and mounts; bundled `mount` is read-only |
-| Inspection | `iostat`, `ipcs`, `lsmod`, `lsof`, `lspci`, `lsscsi`, `lsusb`, `modinfo` | I/O, IPC, modules, open files, and devices |
-| Filesystem | `inotifywait`, `inotifywatch`, `tree`, `which` | File events, directory trees, and executable lookup |
-| AXE control | `commands`, `doctor`, `clean-tools`, `refresh-tools` | Command inventory, diagnostics, and AXE Store cache |
-| Services | `sshd` | Certificate-only SSH/SFTP server |
-| Evidence | `vzik` | Passive host overview, targeted process inspection, bounded security evidence in JSONL, and sealed private captures |
+Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-style control flow. The inventory below groups bundled applets by their primary purpose.
+
+| Category | Bundled commands |
+| --- | --- |
+| `files` — Files & search | `basename`, `cp`, `dir`, `dirname`, `find`, `inotifywait`, `inotifywatch`, `install`, `link`, `ln`, `ls`, `mkdir`, `mkfifo`, `mknod`, `mktemp`, `mv`, `pathchk`, `pwd`, `readlink`, `realpath`, `rm`, `rmdir`, `stat`, `touch`, `tree`, `truncate`, `unlink`, `vdir` |
+| `text` — Text & data | `awk`, `b2sum`, `base32`, `base64`, `basenc`, `cat`, `cksum`, `cmp`, `comm`, `csplit`, `cut`, `diff`, `diff3`, `expand`, `factor`, `fmt`, `fold`, `grep`, `egrep`, `fgrep`, `rgrep`, `head`, `hexdump`, `hd`, `join`, `jq`, `md5sum`, `nl`, `numfmt`, `od`, `paste`, `pr`, `ptx`, `sed`, `seq`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, `shuf`, `sort`, `split`, `sum`, `tac`, `tail`, `tee`, `tr`, `tsort`, `unexpand`, `uniq`, `wc` |
+| `archives` — Archives & compression | `tar`, `gzip`, `gunzip`, `zcat`, `gzcat`, `bzip2`, `bunzip2`, `bzcat`, `xz`, `unxz`, `xzcat`, `zstd` |
+| `storage` — Storage & backup | `blkid`, `blockdev`, `dd`, `df`, `du`, `iostat`, `mount`, `mountpoint`, `sync` |
+| `process` — Processes | `hugetop`, `kill`, `killall`, `lsof`, `nice`, `nohup`, `pgrep`, `pidof`, `pidwait`, `pkill`, `pmap`, `ps`, `pwdx`, `skill`, `snice`, `timeout`, `top`, `watch`, `xargs` |
+| `system` — Host & system | `arch`, `date`, `dmesg`, `free`, `hostid`, `hostname`, `dnsdomainname`, `ipcs`, `last`, `logname`, `lsmod`, `lspci`, `lsscsi`, `lsusb`, `modinfo`, `nproc`, `pinky`, `slabtop`, `sysctl`, `tload`, `uname`, `uptime`, `users`, `vmstat`, `vzik`, `w`, `who` |
+| `network` — Network & remote access | `http`, `arp`, `ifconfig`, `ip`, `ipaddr`, `iplink`, `ipneigh`, `iproute`, `iprule`, `ipcalc`, `host`, `nslookup`, `ping`, `ping6`, `traceroute`, `traceroute6` |
+| `containers` — Containers & orchestration | `chroot` |
+| `debugging` — Debugging & binary analysis | `file`, `goblin`, `strings` |
+| `security` — Security & permissions | `chgrp`, `chmod`, `chown`, `groups`, `id`, `shred`, `whoami` |
+| `terminal` — Shell & terminal | `[`, `dircolors`, `echo`, `env`, `expr`, `false`, `more`, `printenv`, `printf`, `sleep`, `stty`, `test`, `true`, `tty`, `which`, `yes` |
+| `runtime` — Runtimes | Store only; see [Store inventory](store.md#package-inventory) |
+| `axe` — AXE | `commands`, `doctor`, `clean-tools`, `refresh-tools`, `sshd` |
+
+The bundled `mount` is read-only. Linux-specific applets in this table remain absent from Darwin builds.
 
 For the bundled HTTP applet, see [HTTP requests](http.md).
 

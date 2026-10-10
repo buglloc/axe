@@ -3,10 +3,50 @@
   buildPkgs,
   pkgsFor,
   linuxSystems,
+  portableSystems,
   staticSetFor,
+  packageSetFor,
   targetStrip,
   ...
 }: let
+  binwalkMinimal = packageSet: compressionSet:
+    (packageSet.binwalk.override {
+      bzip2 = compressionSet.bzip2;
+      python3 = {
+        pkgs.python-lzo = null;
+      };
+      xz = compressionSet.xz;
+    }).overrideAttrs
+    (_: {
+      buildInputs = [
+        compressionSet.bzip2
+        packageSet.dtc
+        packageSet.fontconfig
+        packageSet.lzo
+        packageSet.openssl_3
+        packageSet.ucl
+        packageSet.unzip
+        compressionSet.xz
+        packageSet.zlib
+      ];
+      postInstall = "";
+      doCheck = false;
+      postFixup = "";
+      doInstallCheck = false;
+      nativeInstallCheckInputs = [];
+    });
+
+  # Binwalk links libbz2 and liblzma. Keep the native Darwin stdenv and make
+  # only those runtime dependencies static.
+  binwalkPackageFor = target: targetPkgs: let
+    packageSet = packageSetFor target targetPkgs;
+    compressionSet =
+      if target == "aarch64-darwin"
+      then staticSetFor target targetPkgs
+      else packageSet;
+  in
+    binwalkMinimal packageSet compressionSet;
+
   bpftoolVersion = "7.7.0";
   bpftoolSources = {
     aarch64-linux = {
@@ -148,44 +188,6 @@
       nativeInstallCheckInputs = [];
       propagatedNativeBuildInputs = [];
     });
-  fioMinimal = staticSet: let
-    canExecute = staticSet.stdenv.buildPlatform.canExecute staticSet.stdenv.hostPlatform;
-  in
-    (staticSet.fio.override {
-      withGnuplot = false;
-      withLibnbd = false;
-    }).overrideAttrs
-    (old: {
-      outputs = ["out"];
-      buildInputs =
-        [
-          staticSet.libaio
-          staticSet.zlib
-        ]
-        ++ buildPkgs.lib.optional canExecute staticSet.cunit;
-      nativeBuildInputs = [staticSet.buildPackages.pkg-config];
-      pythonPath = [];
-      propagatedBuildInputs = [];
-      dontAddPrefix = true;
-      configureFlags =
-        (old.configureFlags or [])
-        ++ [
-          "--prefix=/usr"
-          "--build-static"
-        ];
-      postPatch = "";
-      buildFlags =
-        ["fio"]
-        ++ buildPkgs.lib.optional canExecute "unittests/unittest";
-      doCheck = canExecute;
-      installPhase = ''
-        runHook preInstall
-        install -Dm755 fio "$out/bin/fio"
-        runHook postInstall
-      '';
-      postInstall = "";
-      postFixup = "";
-    });
   binutilsMinimal = staticSet:
     (staticSet.binutils-unwrapped.override {
       enableGold = false;
@@ -236,6 +238,15 @@
     target: binutilsMinimal (staticSetFor target (pkgsFor target))
   );
 in {
+  binwalk = mkNixpkgsBinary {
+    name = "binwalk";
+    synopsis = "Analyze firmware images and embedded files";
+    systems = portableSystems;
+    packageFor = binwalkPackageFor;
+    rewriteBuildConfigurationPaths = true;
+    darwinSystemLibraries = ["libiconv.2.dylib"];
+  };
+
   readelf = mkNixpkgsBinary {
     name = "readelf";
     synopsis = "Inspect ELF headers, sections, symbols, and debug information";
@@ -262,13 +273,6 @@ in {
     synopsis = "Monitor messages on D-Bus buses";
     systems = linuxSystems;
     packageFor = target: targetPkgs: dbusMonitorMinimal (staticSetFor target targetPkgs);
-  };
-
-  fio = mkNixpkgsBinary {
-    name = "fio";
-    synopsis = "Benchmark and verify storage I/O workloads";
-    systems = linuxSystems;
-    packageFor = target: targetPkgs: fioMinimal (staticSetFor target targetPkgs);
   };
 
   strace = mkNixpkgsBinary {

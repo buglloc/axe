@@ -2,6 +2,13 @@
 title = "Changelog"
 +++
 
+## Unreleased
+
+### Changes
+
+- Unified bundled and Store command categories by purpose. Website filters and inventory rows use the same category IDs and labels.
+- Renamed 15 Store package IDs to match their categories, including `files/rg`, `text/jq`, `storage/restic`, and `terminal/tmux`. Regenerate the signed Store bootstrap snapshot before an AXE release.
+
 ## [v0.5.0](https://github.com/buglloc/axe/releases/tag/v0.5.0) — 2026-10-10
 
 ### Highlights

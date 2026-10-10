@@ -451,23 +451,6 @@
       useBundledLibraries = target == "aarch64-darwin";
     };
 
-  rsyncDarwin = staticSet:
-    staticSet.rsync.overrideAttrs (_: {
-      outputs = ["out"];
-      preBuild = "";
-      doCheck = false;
-      nativeCheckInputs = [];
-      doInstallCheck = false;
-      installPhase = ''
-        runHook preInstall
-        install -Dm755 rsync "$out/bin/rsync"
-        ${targetStrip staticSet} -s "$out/bin/rsync"
-        runHook postInstall
-      '';
-      postInstall = "";
-      postFixup = "";
-    });
-
   masscanMinimal = staticSet:
     (staticSet.masscan.override {
       libpcap = staticSet.libpcap;
@@ -588,59 +571,6 @@
       doInstallCheck = false;
       nativeInstallCheckInputs = [];
     });
-
-  s5cmdPackageFor = target: targetPkgs:
-    (
-      if target == "aarch64-darwin"
-      then
-        goDarwin {
-          package = "s5cmd";
-          subPackage = ".";
-        }
-      else (packageSetFor target targetPkgs).s5cmd
-    ).overrideAttrs (old: {
-      outputs = ["out"];
-      env = (old.env or {}) // {CGO_ENABLED = 0;};
-      ldflags = (old.ldflags or []) ++ ["-linkmode=internal"];
-      patches = (old.patches or []) ++ [../patches/s5cmd-embedded-ca.patch];
-      postPatch =
-        (old.postPatch or "")
-        + ''
-          cp ${axePortableCaBundle} axe-ca-bundle.pem
-        '';
-    });
-
-  rclonePackageFor = target: targetPkgs:
-    (
-      if target == "aarch64-darwin"
-      then
-        goDarwin {
-          package = "rclone";
-          subPackage = ".";
-        }
-      else (packageSetFor target targetPkgs).rclone.override {enableCmount = false;}
-    ).overrideAttrs
-    (old: {
-      outputs = ["out"];
-      buildInputs = [];
-      env = (old.env or {}) // {CGO_ENABLED = 0;};
-      tags = ["noselfupdate"];
-      patches = (old.patches or []) ++ [../patches/rclone-axe-defaults.patch];
-      postPatch =
-        (old.postPatch or "")
-        + ''
-          cp ${axePortableCaBundle} axe-ca-bundle.pem
-        '';
-      postConfigure = ''
-        rm -r cmd/gui cmd/selfupdate cmd/selfupdate_enabled.go \
-          cmd/selfupdate_disabled.go fs/rc/webgui
-        export GOFLAGS="$GOFLAGS -tags=noselfupdate"
-      '';
-      postInstall = "";
-      postFixup = "";
-      doInstallCheck = false;
-      nativeInstallCheckInputs = [];
-    });
 in {
   caddy = import ./network/caddy.nix helpers;
 
@@ -757,21 +687,6 @@ in {
     rewriteBuildConfigurationPaths = true;
     darwinSystemLibraries = darwinOpenSshLibraries;
     packageFor = opensshPackageFor;
-  };
-
-  rsync = mkNixpkgsBinary {
-    name = "rsync";
-    synopsis = "Synchronize files efficiently between local and remote paths";
-    systems = portableSystems;
-    rewriteBuildConfigurationPaths = true;
-    packageFor = target: targetPkgs:
-      if target == "aarch64-darwin"
-      then rsyncDarwin (staticSetFor target targetPkgs)
-      else (packageSetFor target targetPkgs).rsync;
-    darwinSystemLibraries = [
-      "libiconv.2.dylib"
-      "libz.dylib"
-    ];
   };
 
   curl = mkNixpkgsBinary {
@@ -922,19 +837,5 @@ in {
     synopsis = "Inspect and configure Linux network device parameters";
     systems = linuxSystems;
     packageFor = target: targetPkgs: ethtoolMinimal (staticSetFor target targetPkgs);
-  };
-
-  rclone = mkNixpkgsBinary {
-    name = "rclone";
-    synopsis = "Copy and synchronize files with remote storage";
-    systems = portableSystems;
-    packageFor = rclonePackageFor;
-  };
-
-  s5cmd = mkNixpkgsBinary {
-    name = "s5cmd";
-    synopsis = "Copy and manage S3 objects with parallel batch operations";
-    systems = portableSystems;
-    packageFor = s5cmdPackageFor;
   };
 }

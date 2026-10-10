@@ -111,7 +111,7 @@ cat >"$tmp/workspace/flake.nix" <<'EOF'
 
       lib.axeStoreMetadata = {
         rg = {
-          id = "search/rg";
+          id = "files/rg";
           name = "rg";
           aliases = [ ];
           synopsis = "AXE Store smoke executable";
@@ -151,7 +151,7 @@ cp "$root/config/store.json" "$tmp/workspace/config/store.json"
     for manifest in store/dist/tools/*/*/manifests/*.cbor; do
         test "$(sha256sum "$manifest" | cut -d ' ' -f 1).cbor" = "$(basename "$manifest")"
     done
-    rg_manifests=(store/dist/tools/search/rg/manifests/*.cbor)
+    rg_manifests=(store/dist/tools/files/rg/manifests/*.cbor)
     test "${#rg_manifests[@]}" -eq 1
     printf '%s\n' "${rg_manifests[0]#store/dist/}" >"$tmp/manifest-relative"
     package_compatible=false

@@ -3,9 +3,6 @@
   buildPkgs,
   portableSystems,
   staticSetFor,
-  packageSetFor,
-  goDarwin,
-  axePortableCaBundle,
   ...
 }: let
   sevenZipMinimal = staticSet:
@@ -47,28 +44,6 @@
       tar -xJf ${archive} 7zz
       install -Dm755 7zz "$out/bin/7zz"
     '';
-
-  resticPackageFor = target: targetPkgs:
-    (
-      if target == "aarch64-darwin"
-      then
-        goDarwin {
-          package = "restic";
-          subPackage = "./cmd/restic";
-        }
-      else (packageSetFor target targetPkgs).restic
-    ).overrideAttrs (old: {
-      outputs = ["out"];
-      env = (old.env or {}) // {CGO_ENABLED = 0;};
-      ldflags = (old.ldflags or []) ++ ["-linkmode=internal"];
-      patches = (old.patches or []) ++ [../patches/restic-embedded-ca.patch];
-      postPatch =
-        (old.postPatch or "")
-        + ''
-          cp ${axePortableCaBundle} cmd/restic/axe-ca-bundle.pem
-        '';
-      postInstall = "";
-    });
 in {
   "7zz" = mkNixpkgsBinary {
     name = "7zz";
@@ -78,12 +53,5 @@ in {
       if target == "aarch64-darwin"
       then sevenZipDarwin
       else sevenZipMinimal (staticSetFor target targetPkgs);
-  };
-
-  restic = mkNixpkgsBinary {
-    name = "restic";
-    synopsis = "Back up and restore files in encrypted repositories";
-    systems = portableSystems;
-    packageFor = resticPackageFor;
   };
 }

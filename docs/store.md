@@ -18,83 +18,83 @@ In `auto` and `cache-only`, transient delivery failures or an unavailable tool c
 
 This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 
-| Command | Purpose | Targets |
-| --- | --- | --- |
-| `7zz` | Create and extract archives with 7-Zip | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `age` | Encrypt and decrypt files with keys or passphrases | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `binwalk` | Analyze firmware images and embedded files | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `bpftool` | Inspect and manage Linux eBPF objects | `aarch64-linux`, `x86_64-linux` |
-| `bwrap` | Run commands in isolated Linux namespaces | `aarch64-linux`, `x86_64-linux` |
-| `caddy` | Serve HTTP and reverse proxy traffic with automatic HTTPS | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `capsh` | Inspect and change Linux capabilities | `aarch64-linux`, `x86_64-linux` |
-| `cek` | Inspect, copy, and compare files in OCI images without a container runtime | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `curl` | Transfer data over HTTPS with Mozilla CAs | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `dbus-monitor` | Monitor D-Bus messages | `aarch64-linux`, `x86_64-linux` |
-| `dig` | Query DNS records with the BIND client | `aarch64-linux`, `x86_64-linux` |
-| `dnsx` | Resolve and enumerate DNS records | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `docker` | Manage Docker through a remote daemon | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `dumpcap` | Capture packets for Wireshark CLI tools | `aarch64-linux`, `x86_64-linux` |
-| `ethtool` | Inspect and configure Linux network devices | `aarch64-linux`, `x86_64-linux` |
-| `fd` | Find filesystem entries by name and attributes | `aarch64-darwin`, `x86_64-linux` |
-| `ffuf` | Fuzz web application paths and parameters | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `findmnt` | Locate and describe mounted filesystems | `aarch64-linux`, `x86_64-linux` |
-| `fio` | Benchmark and verify storage I/O workloads | `aarch64-linux`, `x86_64-linux` |
-| `fzf` | Interactively filter and select values | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `gdb` | Debug native programs and processes | `aarch64-linux`, `x86_64-linux` |
-| `gdbserver` | Expose native programs to remote GDB | `aarch64-linux`, `x86_64-linux` |
-| `getcap` | Display Linux file capabilities | `aarch64-linux`, `x86_64-linux` |
-| `getpcaps` | Display Linux process capabilities | `aarch64-linux`, `x86_64-linux` |
-| `gobuster` | Enumerate web paths, DNS names, and virtual hosts | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `gori` | Intercept HTTP traffic and test web applications from the terminal | `aarch64-linux`, `x86_64-linux` |
-| `grpcurl` | Call and inspect gRPC services | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `helm` | Install and manage Kubernetes applications with charts | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `httpx` | Probe HTTP services and discover live targets | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `interactsh-client` | Generate out-of-band testing payloads and collect interactions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `jq` | Process JSON | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `kubectl` | Manage Kubernetes clusters | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `layerx` | Inspect container image layers in a terminal UI or CI | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `lsns` | Show Linux namespaces and processes | `aarch64-linux`, `x86_64-linux` |
-| `ltrace` | Trace Linux library calls | `aarch64-linux`, `x86_64-linux` |
-| `masscan` | Scan large networks quickly | `aarch64-linux`, `x86_64-linux` |
-| `naabu` | Find open ports | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `ncat`, `nc` | Connect, listen, and proxy network traffic | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `nmap` | Discover hosts and probe services with NSE | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `nsenter` | Run a program in another process's namespaces | `aarch64-linux`, `x86_64-linux` |
-| `nuclei` | Scan targets with bundled vulnerability templates | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `objdump` | Disassemble binaries and inspect object files | `aarch64-linux`, `x86_64-linux` |
-| `openssl` | Inspect certificates and perform cryptographic operations | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `podman` | Manage Podman through a remote service | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `pspy` | Observe Linux processes without root | `aarch64-linux`, `x86_64-linux` |
-| `python`, `python3` | Static Python with HTTP, WebSocket, and HTML libraries | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `rclone` | Copy and synchronize files with remote storage | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `readelf` | Inspect ELF headers, sections, symbols, and debug information | `aarch64-linux`, `x86_64-linux` |
-| `restic` | Back up and restore files in encrypted repositories | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `rg` | Search file contents with regular expressions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `rsync` | Synchronize local and remote paths | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `s5cmd` | Copy and manage S3 objects with parallel batch operations | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `scp` | Copy files over OpenSSH | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `setcap` | Set Linux file capabilities | `aarch64-linux`, `x86_64-linux` |
-| `sftp` | Transfer files over OpenSSH SFTP | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `socat` | Transfer data between sockets and streams | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `sqlite3` | Read and modify SQLite databases | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `ss` | Show sockets and network connections | `aarch64-linux`, `x86_64-linux` |
-| `ssh` | Connect to hosts over OpenSSH | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `ssh-add` | Add keys to an OpenSSH agent | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `ssh-agent` | Hold OpenSSH private keys for a session | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `ssh-keygen` | Create and modify OpenSSH keys | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `ssh-keyscan` | Collect OpenSSH host keys | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `stern` | Tail logs from multiple Kubernetes pods and containers | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `strace` | Trace Linux system calls and signals | `aarch64-linux`, `x86_64-linux` |
-| `subfinder` | Enumerate subdomains | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `tcpdump` | Capture and display network packets | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `tmux` | Multiplex terminal sessions and windows | `aarch64-linux`, `x86_64-linux` |
-| `tshark` | Analyze packet captures from the CLI | `aarch64-linux`, `x86_64-linux` |
-| `unshare` | Run a program in new Linux namespaces | `aarch64-linux`, `x86_64-linux` |
-| `websocat` | Relay data between WebSockets and streams | `aarch64-linux`, `x86_64-linux` |
-| `xh` | Interactive-friendly HTTP client | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `yc` | Manage Yandex Cloud resources | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `yq` | Process YAML, JSON, and XML | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
-| `zellij` | Manage terminal sessions, panes, and embedded plugins | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| Command | Store ID | Purpose | Targets |
+| --- | --- | --- | --- |
+| `7zz` | `archives/7zz` | Create and extract archives with 7-Zip | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `age` | `security/age` | Encrypt and decrypt files with keys or passphrases | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `binwalk` | `debugging/binwalk` | Analyze firmware images and embedded files | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `bpftool` | `debugging/bpftool` | Inspect and manage Linux eBPF objects | `aarch64-linux`, `x86_64-linux` |
+| `bwrap` | `containers/bwrap` | Run commands in isolated Linux namespaces | `aarch64-linux`, `x86_64-linux` |
+| `caddy` | `network/caddy` | Serve HTTP and reverse proxy traffic with automatic HTTPS | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `capsh` | `security/capsh` | Inspect and change Linux capabilities | `aarch64-linux`, `x86_64-linux` |
+| `cek` | `containers/cek` | Inspect, copy, and compare files in OCI images without a container runtime | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `curl` | `network/curl` | Transfer data over HTTPS with Mozilla CAs | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `dbus-monitor` | `debugging/dbus-monitor` | Monitor D-Bus messages | `aarch64-linux`, `x86_64-linux` |
+| `dig` | `network/dig` | Query DNS records with the BIND client | `aarch64-linux`, `x86_64-linux` |
+| `dnsx` | `network/dnsx` | Resolve and enumerate DNS records | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `docker` | `containers/docker` | Manage Docker through a remote daemon | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `dumpcap` | `network/dumpcap` | Capture packets for Wireshark CLI tools | `aarch64-linux`, `x86_64-linux` |
+| `ethtool` | `network/ethtool` | Inspect and configure Linux network devices | `aarch64-linux`, `x86_64-linux` |
+| `fd` | `files/fd` | Find filesystem entries by name and attributes | `aarch64-darwin`, `x86_64-linux` |
+| `ffuf` | `security/ffuf` | Fuzz web application paths and parameters | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `findmnt` | `storage/findmnt` | Locate and describe mounted filesystems | `aarch64-linux`, `x86_64-linux` |
+| `fio` | `storage/fio` | Benchmark and verify storage I/O workloads | `aarch64-linux`, `x86_64-linux` |
+| `fzf` | `files/fzf` | Interactively filter and select values | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `gdb` | `debugging/gdb` | Debug native programs and processes | `aarch64-linux`, `x86_64-linux` |
+| `gdbserver` | `debugging/gdbserver` | Expose native programs to remote GDB | `aarch64-linux`, `x86_64-linux` |
+| `getcap` | `security/getcap` | Display Linux file capabilities | `aarch64-linux`, `x86_64-linux` |
+| `getpcaps` | `security/getpcaps` | Display Linux process capabilities | `aarch64-linux`, `x86_64-linux` |
+| `gobuster` | `security/gobuster` | Enumerate web paths, DNS names, and virtual hosts | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `gori` | `security/gori` | Intercept HTTP traffic and test web applications from the terminal | `aarch64-linux`, `x86_64-linux` |
+| `grpcurl` | `network/grpcurl` | Call and inspect gRPC services | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `helm` | `containers/helm` | Install and manage Kubernetes applications with charts | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `httpx` | `network/httpx` | Probe HTTP services and discover live targets | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `interactsh-client` | `security/interactsh-client` | Generate out-of-band testing payloads and collect interactions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `jq` | `text/jq` | Process JSON | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `kubectl` | `containers/kubectl` | Manage Kubernetes clusters | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `layerx` | `containers/layerx` | Inspect container image layers in a terminal UI or CI | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `lsns` | `containers/lsns` | Show Linux namespaces and processes | `aarch64-linux`, `x86_64-linux` |
+| `ltrace` | `debugging/ltrace` | Trace Linux library calls | `aarch64-linux`, `x86_64-linux` |
+| `masscan` | `network/masscan` | Scan large networks quickly | `aarch64-linux`, `x86_64-linux` |
+| `naabu` | `network/naabu` | Find open ports | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `ncat`, `nc` | `network/ncat` | Connect, listen, and proxy network traffic | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `nmap` | `network/nmap` | Discover hosts and probe services with NSE | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `nsenter` | `containers/nsenter` | Run a program in another process's namespaces | `aarch64-linux`, `x86_64-linux` |
+| `nuclei` | `security/nuclei` | Scan targets with bundled vulnerability templates | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `objdump` | `debugging/objdump` | Disassemble binaries and inspect object files | `aarch64-linux`, `x86_64-linux` |
+| `openssl` | `security/openssl` | Inspect certificates and perform cryptographic operations | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `podman` | `containers/podman` | Manage Podman through a remote service | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `pspy` | `debugging/pspy` | Observe Linux processes without root | `aarch64-linux`, `x86_64-linux` |
+| `python`, `python3` | `runtime/python` | Static Python with HTTP, WebSocket, and HTML libraries | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `rclone` | `storage/rclone` | Copy and synchronize files with remote storage | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `readelf` | `debugging/readelf` | Inspect ELF headers, sections, symbols, and debug information | `aarch64-linux`, `x86_64-linux` |
+| `restic` | `storage/restic` | Back up and restore files in encrypted repositories | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `rg` | `files/rg` | Search file contents with regular expressions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `rsync` | `storage/rsync` | Synchronize local and remote paths | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `s5cmd` | `storage/s5cmd` | Copy and manage S3 objects with parallel batch operations | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `scp` | `network/scp` | Copy files over OpenSSH | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `setcap` | `security/setcap` | Set Linux file capabilities | `aarch64-linux`, `x86_64-linux` |
+| `sftp` | `network/sftp` | Transfer files over OpenSSH SFTP | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `socat` | `network/socat` | Transfer data between sockets and streams | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `sqlite3` | `text/sqlite3` | Read and modify SQLite databases | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `ss` | `network/ss` | Show sockets and network connections | `aarch64-linux`, `x86_64-linux` |
+| `ssh` | `network/ssh` | Connect to hosts over OpenSSH | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `ssh-add` | `network/ssh-add` | Add keys to an OpenSSH agent | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `ssh-agent` | `network/ssh-agent` | Hold OpenSSH private keys for a session | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `ssh-keygen` | `network/ssh-keygen` | Create and modify OpenSSH keys | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `ssh-keyscan` | `network/ssh-keyscan` | Collect OpenSSH host keys | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `stern` | `containers/stern` | Tail logs from multiple Kubernetes pods and containers | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `strace` | `debugging/strace` | Trace Linux system calls and signals | `aarch64-linux`, `x86_64-linux` |
+| `subfinder` | `network/subfinder` | Enumerate subdomains | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `tcpdump` | `network/tcpdump` | Capture and display network packets | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `tmux` | `terminal/tmux` | Multiplex terminal sessions and windows | `aarch64-linux`, `x86_64-linux` |
+| `tshark` | `network/tshark` | Analyze packet captures from the CLI | `aarch64-linux`, `x86_64-linux` |
+| `unshare` | `containers/unshare` | Run a program in new Linux namespaces | `aarch64-linux`, `x86_64-linux` |
+| `websocat` | `network/websocat` | Relay data between WebSockets and streams | `aarch64-linux`, `x86_64-linux` |
+| `xh` | `network/xh` | Interactive-friendly HTTP client | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `yc` | `network/yc` | Manage Yandex Cloud resources | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `yq` | `text/yq` | Process YAML, JSON, and XML | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `zellij` | `terminal/zellij` | Manage terminal sessions, panes, and embedded plugins | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 
 The `nuclei` package includes pinned `nuclei-templates`; no separate template download is needed on first run.
 
@@ -141,7 +141,29 @@ The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinn
 
 ## Adding a package
 
-Package definitions live in [`store/nix/packages/`](../store/nix/packages/). After changing them, regenerate and check the inventory:
+Package definitions live in [`store/nix/packages/`](../store/nix/packages/).
+
+Each package belongs to one primary category, shared with bundled commands. Its Store ID is generated as `<category>/<name>`; command aliases use the same package and category. Choose the category by the tool's main purpose, not its implementation or transport:
+
+| Category ID | Label |
+| --- | --- |
+| `files` | Files & search |
+| `text` | Text & data |
+| `archives` | Archives & compression |
+| `storage` | Storage & backup |
+| `process` | Processes |
+| `system` | Host & system |
+| `network` | Network & remote access |
+| `containers` | Containers & orchestration |
+| `debugging` | Debugging & binary analysis |
+| `security` | Security & permissions |
+| `terminal` | Shell & terminal |
+| `runtime` | Runtimes |
+| `axe` | AXE |
+
+For example, `restic`, `fio`, `findmnt`, `rclone`, `rsync`, and `s5cmd` belong to `storage`, while `binwalk` and `pspy` belong to `debugging`. Terminal multiplexers belong to `terminal`; Python belongs to `runtime`. Define only categories containing packages in the public Store inventory; do not add empty modules or compatibility category aliases. Changing a package's category changes its Store ID and requires regenerating the inventory and the signed snapshot before release.
+
+After changing package definitions, regenerate and check the inventory:
 
 ```bash
 just store-bootstrap

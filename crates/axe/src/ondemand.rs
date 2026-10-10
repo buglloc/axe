@@ -50,13 +50,11 @@ pub(crate) fn store_is_blocked() -> bool {
 pub fn register_controls(commands: &mut RegistryBuilder) {
     commands.insert_bundled_if_vacant(
         "clean-tools",
-        "control",
         Some("Remove managed AXE Store cache entries"),
         clean as brush_shell::bundled::BundledFn,
     );
     commands.insert_bundled_if_vacant(
         "refresh-tools",
-        "control",
         Some("Refresh and verify AXE Store metadata"),
         refresh as brush_shell::bundled::BundledFn,
     );

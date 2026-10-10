@@ -59,7 +59,7 @@
     for (const command of commands) {
       const sourceMatches = activeSource === "all" || command.dataset.source === activeSource;
       const categoryMatches = activeCategories.size === 0
-        || command.dataset.categories.split(" ").some((category) => activeCategories.has(category));
+        || activeCategories.has(command.dataset.category);
       const queryMatches = !query || command.dataset.search.includes(query);
       const visible = sourceMatches && categoryMatches && queryMatches;
       command.hidden = !visible;

@@ -153,7 +153,6 @@ impl RegistryBuilder {
     pub(crate) fn insert_bundled(
         &mut self,
         name: impl Into<String>,
-        category: &str,
         synopsis: Option<&str>,
         entry: BundledFn,
     ) {
@@ -163,7 +162,7 @@ impl RegistryBuilder {
             canonical_name: name.clone(),
             name: name.clone(),
             source: CommandSource::Bundled,
-            category: category.to_owned(),
+            category: bundled_category(&name).to_owned(),
             alias_of: None,
             synopsis: synopsis.to_owned(),
         };
@@ -180,7 +179,6 @@ impl RegistryBuilder {
     pub(crate) fn insert_builtin_bundled(
         &mut self,
         name: impl Into<String>,
-        category: &str,
         synopsis: &str,
         entry: BundledFn,
         callback: InProcessFn,
@@ -190,7 +188,7 @@ impl RegistryBuilder {
             canonical_name: name.clone(),
             name: name.clone(),
             source: CommandSource::Bundled,
-            category: category.to_owned(),
+            category: bundled_category(&name).to_owned(),
             alias_of: None,
             synopsis: synopsis.to_owned(),
         };
@@ -207,22 +205,17 @@ impl RegistryBuilder {
     pub(crate) fn insert_bundled_if_vacant(
         &mut self,
         name: &str,
-        category: &str,
         synopsis: Option<&str>,
         entry: BundledFn,
     ) {
         if !self.commands.contains_key(name) {
-            self.insert_bundled(name, category, synopsis, entry);
+            self.insert_bundled(name, synopsis, entry);
         }
     }
 
-    fn extend_bundled(
-        &mut self,
-        commands: impl IntoIterator<Item = (String, BundledFn)>,
-        category: &str,
-    ) {
+    fn extend_bundled(&mut self, commands: impl IntoIterator<Item = (String, BundledFn)>) {
         for (name, entry) in commands {
-            self.insert_bundled(name, category, None, entry);
+            self.insert_bundled(name, None, entry);
         }
     }
 
@@ -318,6 +311,44 @@ impl RegistryBuilder {
         info.sort_unstable_by(|left, right| left.name.cmp(&right.name));
 
         (entries, info)
+    }
+}
+
+fn bundled_category(name: &str) -> &'static str {
+    match name {
+        "basename" | "cp" | "dir" | "dirname" | "find" | "inotifywait" | "inotifywatch"
+        | "install" | "link" | "ln" | "ls" | "mkdir" | "mkfifo" | "mknod" | "mktemp" | "mv"
+        | "pathchk" | "pwd" | "readlink" | "realpath" | "rm" | "rmdir" | "stat" | "touch"
+        | "tree" | "truncate" | "unlink" | "vdir" => "files",
+        "awk" | "b2sum" | "base32" | "base64" | "basenc" | "cat" | "cksum" | "cmp" | "comm"
+        | "csplit" | "cut" | "diff" | "diff3" | "expand" | "factor" | "fmt" | "fold" | "grep"
+        | "head" | "hexdump" | "join" | "jq" | "md5sum" | "nl" | "numfmt" | "od" | "paste"
+        | "pr" | "ptx" | "sed" | "seq" | "sha1sum" | "sha224sum" | "sha256sum" | "sha384sum"
+        | "sha512sum" | "shuf" | "sort" | "split" | "sum" | "tac" | "tail" | "tee" | "tr"
+        | "tsort" | "unexpand" | "uniq" | "wc" => "text",
+        "bunzip2" | "bzcat" | "bzip2" | "gzip" | "tar" | "unxz" | "xz" | "xzcat" | "zstd" => {
+            "archives"
+        }
+        "blkid" | "blockdev" | "dd" | "df" | "du" | "iostat" | "mount" | "mountpoint" | "sync" => {
+            "storage"
+        }
+        "hugetop" | "kill" | "killall" | "lsof" | "nice" | "nohup" | "pgrep" | "pidof"
+        | "pidwait" | "pkill" | "pmap" | "ps" | "pwdx" | "skill" | "snice" | "timeout" | "top"
+        | "watch" | "xargs" => "process",
+        "arch" | "date" | "dmesg" | "free" | "hostid" | "hostname" | "ipcs" | "last"
+        | "logname" | "lsmod" | "lspci" | "lsscsi" | "lsusb" | "modinfo" | "nproc" | "pinky"
+        | "slabtop" | "sysctl" | "tload" | "uname" | "uptime" | "users" | "vmstat" | "vzik"
+        | "w" | "who" => "system",
+        "arp" | "host" | "http" | "ifconfig" | "ip" | "ipaddr" | "ipcalc" | "iplink"
+        | "ipneigh" | "iproute" | "iprule" | "nslookup" | "ping" | "ping6" | "traceroute"
+        | "traceroute6" => "network",
+        "chroot" => "containers",
+        "file" | "goblin" | "strings" => "debugging",
+        "chgrp" | "chmod" | "chown" | "groups" | "id" | "shred" | "whoami" => "security",
+        "[" | "dircolors" | "echo" | "env" | "expr" | "false" | "more" | "printenv" | "printf"
+        | "sleep" | "stty" | "test" | "true" | "tty" | "which" | "yes" => "terminal",
+        "clean-tools" | "commands" | "doctor" | "refresh-tools" | "sshd" => "axe",
+        _ => panic!("bundled command '{name}' is missing a category"),
     }
 }
 
@@ -523,167 +554,105 @@ pub fn build(
     let mut commands = RegistryBuilder::default();
     commands.insert_bundled(
         "commands",
-        "control",
         Some("List commands available through AXE"),
         crate::applets::commands as BundledFn,
     );
     commands.insert_builtin_bundled(
         "doctor",
-        "control",
         "Diagnose the current AXE runtime, shell, isolation, and restrictions",
         crate::applets::doctor as BundledFn,
         crate::applets::doctor_builtin,
     );
-    commands.extend_bundled(brush_coreutils_builtins::bundled_commands(), "coreutils");
-    commands.extend_bundled(
-        crate::applets::admin_coreutils::commands(),
-        "administration",
-    );
-    commands.insert_bundled("awk", "text", None, crate::applets::awk as BundledFn);
-    commands.insert_bundled("grep", "text", None, crate::applets::grep as BundledFn);
-    commands.insert_bundled("sed", "text", None, crate::applets::sed as BundledFn);
+    commands.extend_bundled(brush_coreutils_builtins::bundled_commands());
+    commands.extend_bundled(crate::applets::admin_coreutils::commands());
+    commands.insert_bundled("awk", None, crate::applets::awk as BundledFn);
+    commands.insert_bundled("grep", None, crate::applets::grep as BundledFn);
+    commands.insert_bundled("sed", None, crate::applets::sed as BundledFn);
     {
-        commands.insert_bundled(
-            "find",
-            "filesystem",
-            None,
-            crate::applets::find as BundledFn,
-        );
-        commands.insert_bundled("xargs", "process", None, crate::applets::xargs as BundledFn);
+        commands.insert_bundled("find", None, crate::applets::find as BundledFn);
+        commands.insert_bundled("xargs", None, crate::applets::xargs as BundledFn);
     }
     {
-        commands.insert_bundled("diff", "text", None, crate::applets::diff as BundledFn);
-        commands.insert_bundled("cmp", "text", None, crate::applets::cmp as BundledFn);
-        commands.insert_bundled("diff3", "text", None, crate::applets::diff3 as BundledFn);
+        commands.insert_bundled("diff", None, crate::applets::diff as BundledFn);
+        commands.insert_bundled("cmp", None, crate::applets::cmp as BundledFn);
+        commands.insert_bundled("diff3", None, crate::applets::diff3 as BundledFn);
     }
-    commands.insert_bundled("file", "binary", None, crate::applets::file as BundledFn);
-    commands.insert_bundled(
-        "goblin",
-        "binary",
-        None,
-        crate::applets::goblin as BundledFn,
-    );
-    commands.insert_bundled("jq", "data", None, crate::applets::jq as BundledFn);
-    commands.insert_bundled(
-        "strings",
-        "binary",
-        None,
-        crate::applets::strings as BundledFn,
-    );
-    commands.insert_bundled("tar", "archive", None, crate::applets::tar as BundledFn);
-    commands.insert_bundled(
-        "gzip",
-        "compression",
-        None,
-        crate::applets::gzip as BundledFn,
-    );
+    commands.insert_bundled("file", None, crate::applets::file as BundledFn);
+    commands.insert_bundled("goblin", None, crate::applets::goblin as BundledFn);
+    commands.insert_bundled("jq", None, crate::applets::jq as BundledFn);
+    commands.insert_bundled("strings", None, crate::applets::strings as BundledFn);
+    commands.insert_bundled("tar", None, crate::applets::tar as BundledFn);
+    commands.insert_bundled("gzip", None, crate::applets::gzip as BundledFn);
     {
         for name in ["bzip2", "bunzip2", "bzcat"] {
-            commands.insert_bundled(
-                name,
-                "compression",
-                None,
-                crate::applets::bzip2 as BundledFn,
-            );
+            commands.insert_bundled(name, None, crate::applets::bzip2 as BundledFn);
         }
         for name in ["xz", "unxz", "xzcat"] {
-            commands.insert_bundled(name, "compression", None, crate::applets::xz as BundledFn);
+            commands.insert_bundled(name, None, crate::applets::xz as BundledFn);
         }
-        commands.insert_bundled(
-            "zstd",
-            "compression",
-            None,
-            crate::applets::zstd as BundledFn,
-        );
+        commands.insert_bundled("zstd", None, crate::applets::zstd as BundledFn);
     }
-    commands.insert_bundled("http", "network", None, crate::applets::http as BundledFn);
+    commands.insert_bundled("http", None, crate::applets::http as BundledFn);
     #[cfg(target_os = "linux")]
     {
-        commands.extend_bundled(crate::applets::linux_network::commands(), "network");
-        commands.insert_bundled(
-            "nslookup",
-            "network",
-            None,
-            crate::applets::nslookup as BundledFn,
-        );
-        commands.insert_bundled("host", "network", None, crate::applets::host as BundledFn);
-        commands.insert_bundled("ping", "network", None, crate::applets::ping as BundledFn);
-        commands.insert_bundled("ping6", "network", None, crate::applets::ping6 as BundledFn);
-        commands.insert_bundled(
-            "traceroute",
-            "network",
-            None,
-            crate::applets::traceroute as BundledFn,
-        );
+        commands.extend_bundled(crate::applets::linux_network::commands());
+        commands.insert_bundled("nslookup", None, crate::applets::nslookup as BundledFn);
+        commands.insert_bundled("host", None, crate::applets::host as BundledFn);
+        commands.insert_bundled("ping", None, crate::applets::ping as BundledFn);
+        commands.insert_bundled("ping6", None, crate::applets::ping6 as BundledFn);
+        commands.insert_bundled("traceroute", None, crate::applets::traceroute as BundledFn);
         commands.insert_bundled(
             "traceroute6",
-            "network",
             None,
             crate::applets::traceroute6 as BundledFn,
         );
     }
     #[cfg(target_os = "linux")]
-    commands.extend_bundled(crate::applets::linux_storage::commands(), "storage");
+    commands.extend_bundled(crate::applets::linux_storage::commands());
     #[cfg(target_os = "linux")]
-    commands.extend_bundled(crate::applets::linux_inspect::commands(), "inspection");
+    commands.extend_bundled(crate::applets::linux_inspect::commands());
     #[cfg(target_os = "linux")]
     {
         commands.insert_bundled(
             "inotifywait",
-            "filesystem",
             None,
             crate::applets::inotifywait as BundledFn,
         );
         commands.insert_bundled(
             "inotifywatch",
-            "filesystem",
             None,
             crate::applets::inotifywatch as BundledFn,
         );
     }
     #[cfg(target_os = "linux")]
-    commands.extend_bundled(
-        [
-            ("free".into(), crate::applets::free as BundledFn),
-            ("hugetop".into(), crate::applets::hugetop as BundledFn),
-            ("killall".into(), crate::applets::killall as BundledFn),
-            ("pgrep".into(), crate::applets::pgrep as BundledFn),
-            ("pidof".into(), crate::applets::pidof as BundledFn),
-            ("pidwait".into(), crate::applets::pidwait as BundledFn),
-            ("pkill".into(), crate::applets::pkill as BundledFn),
-            ("pmap".into(), crate::applets::pmap as BundledFn),
-            ("ps".into(), crate::applets::ps as BundledFn),
-            ("pwdx".into(), crate::applets::pwdx as BundledFn),
-            ("skill".into(), crate::applets::skill as BundledFn),
-            ("slabtop".into(), crate::applets::slabtop as BundledFn),
-            ("snice".into(), crate::applets::snice as BundledFn),
-            ("sysctl".into(), crate::applets::sysctl as BundledFn),
-            ("tload".into(), crate::applets::tload as BundledFn),
-            ("top".into(), crate::applets::top as BundledFn),
-            ("vmstat".into(), crate::applets::vmstat as BundledFn),
-            ("w".into(), crate::applets::w as BundledFn),
-            ("watch".into(), crate::applets::watch as BundledFn),
-        ],
-        "process",
-    );
+    commands.extend_bundled([
+        ("free".into(), crate::applets::free as BundledFn),
+        ("hugetop".into(), crate::applets::hugetop as BundledFn),
+        ("killall".into(), crate::applets::killall as BundledFn),
+        ("pgrep".into(), crate::applets::pgrep as BundledFn),
+        ("pidof".into(), crate::applets::pidof as BundledFn),
+        ("pidwait".into(), crate::applets::pidwait as BundledFn),
+        ("pkill".into(), crate::applets::pkill as BundledFn),
+        ("pmap".into(), crate::applets::pmap as BundledFn),
+        ("ps".into(), crate::applets::ps as BundledFn),
+        ("pwdx".into(), crate::applets::pwdx as BundledFn),
+        ("skill".into(), crate::applets::skill as BundledFn),
+        ("slabtop".into(), crate::applets::slabtop as BundledFn),
+        ("snice".into(), crate::applets::snice as BundledFn),
+        ("sysctl".into(), crate::applets::sysctl as BundledFn),
+        ("tload".into(), crate::applets::tload as BundledFn),
+        ("top".into(), crate::applets::top as BundledFn),
+        ("vmstat".into(), crate::applets::vmstat as BundledFn),
+        ("w".into(), crate::applets::w as BundledFn),
+        ("watch".into(), crate::applets::watch as BundledFn),
+    ]);
     #[cfg(target_os = "linux")]
-    commands.extend_bundled(crate::applets::util_linux::commands(), "system");
-    commands.insert_bundled(
-        "tree",
-        "filesystem",
-        None,
-        crate::applets::tree as BundledFn,
-    );
-    commands.insert_bundled(
-        "which",
-        "environment",
-        None,
-        crate::applets::which as BundledFn,
-    );
-    commands.insert_bundled("sshd", "service", None, crate::applets::sshd as BundledFn);
+    commands.extend_bundled(crate::applets::util_linux::commands());
+    commands.insert_bundled("tree", None, crate::applets::tree as BundledFn);
+    commands.insert_bundled("which", None, crate::applets::which as BundledFn);
+    commands.insert_bundled("sshd", None, crate::applets::sshd as BundledFn);
     commands.insert_bundled(
         "vzik",
-        "host-inspection",
         Some("Collect bounded host and container evidence as JSONL"),
         crate::applets::vzik as BundledFn,
     );
