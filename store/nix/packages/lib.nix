@@ -65,14 +65,15 @@
         runHook preBuild
         export GOCACHE="$TMPDIR/go-cache"
         export GOTOOLCHAIN=local
+        # A same-named source directory makes go build -o write inside it.
         go build -buildmode=exe -trimpath \
           -ldflags "-linkmode internal ${toString (old.ldflags or [])}" \
-          -o ${binary} ${subPackage}
+          -o "$TMPDIR/${binary}" ${subPackage}
         runHook postBuild
       '';
       installPhase = ''
         runHook preInstall
-        install -Dm755 ${binary} "$out/bin/${binary}"
+        install -Dm755 "$TMPDIR/${binary}" "$out/bin/${binary}"
         runHook postInstall
       '';
       postInstall = "";
