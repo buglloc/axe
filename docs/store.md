@@ -67,6 +67,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `readelf` | Inspect ELF headers, sections, symbols, and debug information | `aarch64-linux`, `x86_64-linux` |
 | `rg` | Search file contents with regular expressions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `rsync` | Synchronize local and remote paths | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `s5cmd` | Copy and manage S3 objects with parallel batch operations | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `scp` | Copy files over OpenSSH | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `setcap` | Set Linux file capabilities | `aarch64-linux`, `x86_64-linux` |
 | `sftp` | Transfer files over OpenSSH SFTP | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
@@ -106,6 +107,8 @@ The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinn
 `dig` includes CA roots for certificate-verified DNS-over-TLS and HTTPS queries. Use `+tls-ca` to enable verification, or `+tls-ca=FILE` for an explicit CA file.
 
 `rclone` embeds CA roots and timezone data. Release checks, self-update, the GUI downloader, and cloud SDK telemetry are disabled or removed. The authenticated RC API and explicit `--rc-files` remain available. Cgo-based mounting is excluded; Go FUSE mounts require host FUSE support and its mount helper.
+
+`s5cmd` uses AWS credentials and profiles, supports custom S3 endpoints with `--endpoint-url`, and runs command files with `run`. HTTPS uses host CA roots; set `SSL_CERT_FILE` for a custom CA bundle. S3-compatible providers may support only a subset of its operations.
 
 `bwrap` is Bubblewrap's standalone executable. Unprivileged sandboxing requires user namespaces permitted by the host kernel and security policy.
 

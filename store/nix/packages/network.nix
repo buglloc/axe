@@ -589,6 +589,21 @@
       nativeInstallCheckInputs = [];
     });
 
+  s5cmdPackageFor = target: targetPkgs:
+    (
+      if target == "aarch64-darwin"
+      then
+        goDarwin {
+          package = "s5cmd";
+          subPackage = ".";
+        }
+      else (packageSetFor target targetPkgs).s5cmd
+    ).overrideAttrs (old: {
+      outputs = ["out"];
+      env = (old.env or {}) // {CGO_ENABLED = 0;};
+      ldflags = (old.ldflags or []) ++ ["-linkmode=internal"];
+    });
+
   rclonePackageFor = target: targetPkgs:
     (
       if target == "aarch64-darwin"
@@ -906,5 +921,12 @@ in {
     synopsis = "Copy and synchronize files with remote storage";
     systems = portableSystems;
     packageFor = rclonePackageFor;
+  };
+
+  s5cmd = mkNixpkgsBinary {
+    name = "s5cmd";
+    synopsis = "Copy and manage S3 objects with parallel batch operations";
+    systems = portableSystems;
+    packageFor = s5cmdPackageFor;
   };
 }
