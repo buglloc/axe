@@ -51,6 +51,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `interactsh-client` | Generate out-of-band testing payloads and collect interactions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `jq` | Process JSON | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `kubectl` | Manage Kubernetes clusters | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `layerx` | Inspect container image layers in a terminal UI or CI | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `lsns` | Show Linux namespaces and processes | `aarch64-linux`, `x86_64-linux` |
 | `ltrace` | Trace Linux library calls | `aarch64-linux`, `x86_64-linux` |
 | `masscan` | Scan large networks quickly | `aarch64-linux`, `x86_64-linux` |
@@ -115,6 +116,8 @@ The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinn
 `restic` supports local and remote encrypted repositories. It embeds edition CA roots as a fallback when system trust is unavailable; `--cacert` remains available for explicit trust. SFTP and rclone backends require `ssh` and `rclone` on `PATH`. Mounting requires host FUSE support. Self-update is excluded.
 
 `caddy` includes the standard modules for HTTP serving, reverse proxying, and automatic HTTPS. It embeds edition CA roots as a fallback for outgoing TLS connections. Explicit trust pools remain available. Certificate and configuration state needs a writable directory. Binary-replacement commands (`upgrade`, `add-package`, and `remove-package`) are excluded; additional DNS-provider plugins are not bundled.
+
+`layerx` reads Docker-save and OCI archives without a daemon. Live image inspection uses a Docker-compatible Docker or Podman API; `build` also needs the selected engine's CLI on `PATH`. It provides a terminal UI, JSON analysis, efficiency gates with `ci`, and image comparisons with `compare`.
 
 `bwrap` is Bubblewrap's standalone executable. Unprivileged sandboxing requires user namespaces permitted by the host kernel and security policy.
 

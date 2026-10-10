@@ -8,7 +8,7 @@
   goDarwin,
   targetStrip,
   ...
-}: let
+} @ helpers: let
   utilLinuxMinimal = system: pkgs: (staticSetFor system pkgs).util-linuxMinimal;
 
   bubblewrapMinimal = staticSet:
@@ -244,6 +244,8 @@
       install -Dm755 ${source.path} "$out/bin/podman"
     '';
 in {
+  layerx = import ./containers/layerx.nix helpers;
+
   bwrap = mkNixpkgsBinary {
     name = "bwrap";
     synopsis = "Run commands in isolated Linux namespaces";
