@@ -1,0 +1,30 @@
+diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -2,6 +2,8 @@ package main
+ 
+ import (
+ 	"context"
++	"crypto/x509"
++	_ "embed"
+ 	"os"
+ 	"os/signal"
+ 	"syscall"
+@@ -9,7 +11,17 @@ import (
+ 	"github.com/peak/s5cmd/v2/command"
+ )
+ 
++//go:embed axe-ca-bundle.pem
++var axeCABundle []byte
++
+ func main() {
++	roots := x509.NewCertPool()
++	if !roots.AppendCertsFromPEM(axeCABundle) {
++		panic("embedded AXE CA bundle is empty or invalid")
++	}
++
++	x509.SetFallbackRoots(roots)
++
+ 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+ 	defer cancel()
+ 

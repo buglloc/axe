@@ -602,6 +602,12 @@
       outputs = ["out"];
       env = (old.env or {}) // {CGO_ENABLED = 0;};
       ldflags = (old.ldflags or []) ++ ["-linkmode=internal"];
+      patches = (old.patches or []) ++ [../patches/s5cmd-embedded-ca.patch];
+      postPatch =
+        (old.postPatch or "")
+        + ''
+          cp ${axePortableCaBundle} axe-ca-bundle.pem
+        '';
     });
 
   rclonePackageFor = target: targetPkgs:
