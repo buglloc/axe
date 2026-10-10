@@ -25,6 +25,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `binwalk` | Analyze firmware images and embedded files | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `bpftool` | Inspect and manage Linux eBPF objects | `aarch64-linux`, `x86_64-linux` |
 | `bwrap` | Run commands in isolated Linux namespaces | `aarch64-linux`, `x86_64-linux` |
+| `caddy` | Serve HTTP and reverse proxy traffic with automatic HTTPS | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `capsh` | Inspect and change Linux capabilities | `aarch64-linux`, `x86_64-linux` |
 | `curl` | Transfer data over HTTPS with Mozilla CAs | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `dbus-monitor` | Monitor D-Bus messages | `aarch64-linux`, `x86_64-linux` |
@@ -112,6 +113,8 @@ The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinn
 `s5cmd` uses AWS credentials and profiles, supports custom S3 endpoints with `--endpoint-url`, and runs command files with `run`. It embeds Mozilla CA roots and additional CAs from the selected edition as a fallback when system roots are unavailable. System trust and `SSL_CERT_FILE` custom CA bundles remain available. S3-compatible providers may support only a subset of its operations.
 
 `restic` supports local and remote encrypted repositories. It embeds edition CA roots as a fallback when system trust is unavailable; `--cacert` remains available for explicit trust. SFTP and rclone backends require `ssh` and `rclone` on `PATH`. Mounting requires host FUSE support. Self-update is excluded.
+
+`caddy` includes the standard modules for HTTP serving, reverse proxying, and automatic HTTPS. It embeds edition CA roots as a fallback for outgoing TLS connections. Explicit trust pools remain available. Certificate and configuration state needs a writable directory. Binary-replacement commands (`upgrade`, `add-package`, and `remove-package`) are excluded; additional DNS-provider plugins are not bundled.
 
 `bwrap` is Bubblewrap's standalone executable. Unprivileged sandboxing requires user namespaces permitted by the host kernel and security policy.
 

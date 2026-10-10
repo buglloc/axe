@@ -14,7 +14,7 @@
   goDarwin,
   disableCdncheckIPv6Probe,
   ...
-}: let
+} @ helpers: let
   libpcapMinimal = staticSet: staticSet.libpcap.override {withBluez = false;};
   tsharkMinimal = staticSet:
     (staticSet.wireshark-cli.override {
@@ -642,6 +642,8 @@
       nativeInstallCheckInputs = [];
     });
 in {
+  caddy = import ./network/caddy.nix helpers;
+
   tcpdump = mkNixpkgsBinary {
     name = "tcpdump";
     synopsis = "Capture and inspect network packets";

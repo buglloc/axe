@@ -1,0 +1,478 @@
+diff --git a/cmd/commands.go b/cmd/commands.go
+--- a/cmd/commands.go
++++ b/cmd/commands.go
+@@ -402,51 +402,6 @@
+ 			cmd.Flags().BoolP("overwrite", "w", false, "Overwrite the input file with the results")
+ 			cmd.Flags().BoolP("diff", "d", false, "Print the differences between the input file and the formatted output")
+ 			cmd.RunE = WrapCommandFuncForCobra(cmdFmt)
+-		},
+-	})
+-
+-	RegisterCommand(Command{
+-		Name:  "upgrade",
+-		Short: "Upgrade Caddy (EXPERIMENTAL)",
+-		Long: `
+-Downloads an updated Caddy binary with the same modules/plugins at the
+-latest versions. EXPERIMENTAL: May be changed or removed.
+-`,
+-		CobraFunc: func(cmd *cobra.Command) {
+-			cmd.Flags().BoolP("keep-backup", "k", false, "Keep the backed up binary, instead of deleting it")
+-			cmd.RunE = WrapCommandFuncForCobra(cmdUpgrade)
+-		},
+-	})
+-
+-	RegisterCommand(Command{
+-		Name:  "add-package",
+-		Usage: "<package[@version]...>",
+-		Short: "Adds Caddy packages (EXPERIMENTAL)",
+-		Long: `
+-Downloads an updated Caddy binary with the specified packages (module/plugin)
+-added, with an optional version specified (e.g., "package@version"). Retains
+-existing packages. Returns an error if any of the specified packages are already
+-included. EXPERIMENTAL: May be changed or removed.
+-`,
+-		CobraFunc: func(cmd *cobra.Command) {
+-			cmd.Flags().BoolP("keep-backup", "k", false, "Keep the backed up binary, instead of deleting it")
+-			cmd.RunE = WrapCommandFuncForCobra(cmdAddPackage)
+-		},
+-	})
+-
+-	RegisterCommand(Command{
+-		Name:  "remove-package",
+-		Func:  cmdRemovePackage,
+-		Usage: "<packages...>",
+-		Short: "Removes Caddy packages (EXPERIMENTAL)",
+-		Long: `
+-Downloads an updated Caddy binaries without the specified packages (module/plugin).
+-Returns an error if any of the packages are not included.
+-EXPERIMENTAL: May be changed or removed.
+-`,
+-		CobraFunc: func(cmd *cobra.Command) {
+-			cmd.Flags().BoolP("keep-backup", "k", false, "Keep the backed up binary, instead of deleting it")
+-			cmd.RunE = WrapCommandFuncForCobra(cmdRemovePackage)
+ 		},
+ 	})
+ 
+diff --git a/cmd/packagesfuncs.go b/cmd/packagesfuncs.go
+--- a/cmd/packagesfuncs.go
++++ b/cmd/packagesfuncs.go
+@@ -15,203 +15,13 @@
+ package caddycmd
+ 
+ import (
+-	"encoding/json"
+ 	"fmt"
+-	"io"
+-	"net/http"
+-	"net/url"
+-	"os"
+-	"os/exec"
+-	"path/filepath"
+ 	"reflect"
+-	"runtime"
+ 	"runtime/debug"
+ 	"strings"
+ 
+-	"go.uber.org/zap"
+-
+ 	"github.com/caddyserver/caddy/v2"
+ )
+-
+-func cmdUpgrade(fl Flags) (int, error) {
+-	_, nonstandard, _, err := getModules()
+-	if err != nil {
+-		return caddy.ExitCodeFailedStartup, fmt.Errorf("unable to enumerate installed plugins: %v", err)
+-	}
+-	pluginPkgs, err := getPluginPackages(nonstandard)
+-	if err != nil {
+-		return caddy.ExitCodeFailedStartup, err
+-	}
+-
+-	return upgradeBuild(pluginPkgs, fl)
+-}
+-
+-func splitModule(arg string) (module, version string, err error) {
+-	const versionSplit = "@"
+-
+-	// accommodate module paths that have @ in them, but we can only tolerate that if there's also
+-	// a version, otherwise we don't know if it's a version separator or part of the file path
+-	lastVersionSplit := strings.LastIndex(arg, versionSplit)
+-	if lastVersionSplit < 0 {
+-		module = arg
+-	} else {
+-		module, version = arg[:lastVersionSplit], arg[lastVersionSplit+1:]
+-	}
+-
+-	if module == "" {
+-		err = fmt.Errorf("module name is required")
+-	}
+-
+-	return module, version, err
+-}
+-
+-func cmdAddPackage(fl Flags) (int, error) {
+-	if len(fl.Args()) == 0 {
+-		return caddy.ExitCodeFailedStartup, fmt.Errorf("at least one package name must be specified")
+-	}
+-	_, nonstandard, _, err := getModules()
+-	if err != nil {
+-		return caddy.ExitCodeFailedStartup, fmt.Errorf("unable to enumerate installed plugins: %v", err)
+-	}
+-	pluginPkgs, err := getPluginPackages(nonstandard)
+-	if err != nil {
+-		return caddy.ExitCodeFailedStartup, err
+-	}
+-
+-	for _, arg := range fl.Args() {
+-		module, version, err := splitModule(arg)
+-		if err != nil {
+-			return caddy.ExitCodeFailedStartup, fmt.Errorf("invalid module name: %v", err)
+-		}
+-		// only allow a version to be specified if it's different from the existing version
+-		if _, ok := pluginPkgs[module]; ok && (version == "" || pluginPkgs[module].Version == version) {
+-			return caddy.ExitCodeFailedStartup, fmt.Errorf("package is already added")
+-		}
+-		pluginPkgs[module] = pluginPackage{Version: version, Path: module}
+-	}
+-
+-	return upgradeBuild(pluginPkgs, fl)
+-}
+-
+-func cmdRemovePackage(fl Flags) (int, error) {
+-	if len(fl.Args()) == 0 {
+-		return caddy.ExitCodeFailedStartup, fmt.Errorf("at least one package name must be specified")
+-	}
+-	_, nonstandard, _, err := getModules()
+-	if err != nil {
+-		return caddy.ExitCodeFailedStartup, fmt.Errorf("unable to enumerate installed plugins: %v", err)
+-	}
+-	pluginPkgs, err := getPluginPackages(nonstandard)
+-	if err != nil {
+-		return caddy.ExitCodeFailedStartup, err
+-	}
+-
+-	for _, arg := range fl.Args() {
+-		module, _, err := splitModule(arg)
+-		if err != nil {
+-			return caddy.ExitCodeFailedStartup, fmt.Errorf("invalid module name: %v", err)
+-		}
+-		if _, ok := pluginPkgs[module]; !ok {
+-			// package does not exist
+-			return caddy.ExitCodeFailedStartup, fmt.Errorf("package is not added")
+-		}
+-		delete(pluginPkgs, arg)
+-	}
+-
+-	return upgradeBuild(pluginPkgs, fl)
+-}
+-
+-func upgradeBuild(pluginPkgs map[string]pluginPackage, fl Flags) (int, error) {
+-	l := caddy.Log()
+-
+-	thisExecPath, err := os.Executable()
+-	if err != nil {
+-		return caddy.ExitCodeFailedStartup, fmt.Errorf("determining current executable path: %v", err)
+-	}
+-	thisExecStat, err := os.Stat(thisExecPath)
+-	if err != nil {
+-		return caddy.ExitCodeFailedStartup, fmt.Errorf("retrieving current executable permission bits: %v", err)
+-	}
+-	if thisExecStat.Mode()&os.ModeSymlink == os.ModeSymlink {
+-		symSource := thisExecPath
+-		// we are a symlink; resolve it
+-		thisExecPath, err = filepath.EvalSymlinks(thisExecPath)
+-		if err != nil {
+-			return caddy.ExitCodeFailedStartup, fmt.Errorf("resolving current executable symlink: %v", err)
+-		}
+-		l.Info("this executable is a symlink", zap.String("source", symSource), zap.String("target", thisExecPath))
+-	}
+-	l.Info("this executable will be replaced", zap.String("path", thisExecPath))
+-
+-	// build the request URL to download this custom build
+-	qs := url.Values{
+-		"os":   {runtime.GOOS},
+-		"arch": {runtime.GOARCH},
+-	}
+-	for _, pkgInfo := range pluginPkgs {
+-		qs.Add("p", pkgInfo.String())
+-	}
+-
+-	// initiate the build
+-	resp, err := downloadBuild(qs)
+-	if err != nil {
+-		return caddy.ExitCodeFailedStartup, fmt.Errorf("download failed: %v", err)
+-	}
+-	defer resp.Body.Close()
+-
+-	// back up the current binary, in case something goes wrong we can replace it
+-	backupExecPath := thisExecPath + ".tmp"
+-	l.Info("build acquired; backing up current executable",
+-		zap.String("current_path", thisExecPath),
+-		zap.String("backup_path", backupExecPath))
+-	err = os.Rename(thisExecPath, backupExecPath)
+-	if err != nil {
+-		return caddy.ExitCodeFailedStartup, fmt.Errorf("backing up current binary: %v", err)
+-	}
+-	defer func() {
+-		if err != nil {
+-			err2 := os.Rename(backupExecPath, thisExecPath)
+-			if err2 != nil {
+-				l.Error("restoring original executable failed; will need to be restored manually",
+-					zap.String("backup_path", backupExecPath),
+-					zap.String("original_path", thisExecPath),
+-					zap.Error(err2))
+-			}
+-		}
+-	}()
+-
+-	// download the file; do this in a closure to close reliably before we execute it
+-	err = writeCaddyBinary(thisExecPath, &resp.Body, thisExecStat)
+-	if err != nil {
+-		return caddy.ExitCodeFailedStartup, err
+-	}
+-
+-	l.Info("download successful; displaying new binary details", zap.String("location", thisExecPath))
+-
+-	// use the new binary to print out version and module info
+-	fmt.Print("\nModule versions:\n\n")
+-	if err = listModules(thisExecPath); err != nil {
+-		return caddy.ExitCodeFailedStartup, fmt.Errorf("download succeeded, but unable to execute 'caddy list-modules': %v", err)
+-	}
+-	fmt.Println("\nVersion:")
+-	if err = showVersion(thisExecPath); err != nil {
+-		return caddy.ExitCodeFailedStartup, fmt.Errorf("download succeeded, but unable to execute 'caddy version': %v", err)
+-	}
+-	fmt.Println()
+-
+-	// clean up the backup file
+-	if !fl.Bool("keep-backup") {
+-		if err = removeCaddyBinary(backupExecPath); err != nil {
+-			return caddy.ExitCodeFailedStartup, fmt.Errorf("download succeeded, but unable to clean up backup binary: %v", err)
+-		}
+-	} else {
+-		l.Info("skipped cleaning up the backup file", zap.String("backup_path", backupExecPath))
+-	}
+-
+-	l.Info("upgrade successful; please restart any running Caddy instances", zap.String("executable", thisExecPath))
+-
+-	return caddy.ExitCodeSuccess, nil
+-}
+ 
+ func getModules() (standard, nonstandard, unknown []moduleInfo, err error) {
+ 	bi, ok := debug.ReadBuildInfo()
+@@ -262,93 +72,3 @@
+ 	}
+ 	return standard, nonstandard, unknown, err
+ }
+-
+-func listModules(path string) error {
+-	cmd := exec.Command(path, "list-modules", "--versions", "--skip-standard")
+-	cmd.Stdout = os.Stdout
+-	cmd.Stderr = os.Stderr
+-	return cmd.Run()
+-}
+-
+-func showVersion(path string) error {
+-	cmd := exec.Command(path, "version")
+-	cmd.Stdout = os.Stdout
+-	cmd.Stderr = os.Stderr
+-	return cmd.Run()
+-}
+-
+-func downloadBuild(qs url.Values) (*http.Response, error) {
+-	l := caddy.Log()
+-	l.Info("requesting build",
+-		zap.String("os", qs.Get("os")),
+-		zap.String("arch", qs.Get("arch")),
+-		zap.Strings("packages", qs["p"]))
+-	resp, err := http.Get(fmt.Sprintf("%s?%s", downloadPath, qs.Encode()))
+-	if err != nil {
+-		return nil, fmt.Errorf("secure request failed: %v", err)
+-	}
+-	if resp.StatusCode >= 400 {
+-		var details struct {
+-			StatusCode int `json:"status_code"`
+-			Error      struct {
+-				Message string `json:"message"`
+-				ID      string `json:"id"`
+-			} `json:"error"`
+-		}
+-		err2 := json.NewDecoder(resp.Body).Decode(&details)
+-		if err2 != nil {
+-			return nil, fmt.Errorf("download and error decoding failed: HTTP %d: %v", resp.StatusCode, err2)
+-		}
+-		return nil, fmt.Errorf("download failed: HTTP %d: %s (id=%s)", resp.StatusCode, details.Error.Message, details.Error.ID)
+-	}
+-	return resp, nil
+-}
+-
+-func getPluginPackages(modules []moduleInfo) (map[string]pluginPackage, error) {
+-	pluginPkgs := make(map[string]pluginPackage)
+-	for _, mod := range modules {
+-		if mod.goModule.Replace != nil {
+-			return nil, fmt.Errorf("cannot auto-upgrade when Go module has been replaced: %s => %s",
+-				mod.goModule.Path, mod.goModule.Replace.Path)
+-		}
+-		pluginPkgs[mod.goModule.Path] = pluginPackage{Version: mod.goModule.Version, Path: mod.goModule.Path}
+-	}
+-	return pluginPkgs, nil
+-}
+-
+-func writeCaddyBinary(path string, body *io.ReadCloser, fileInfo os.FileInfo) error {
+-	l := caddy.Log()
+-	destFile, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileInfo.Mode())
+-	if err != nil {
+-		return fmt.Errorf("unable to open destination file: %v", err)
+-	}
+-	defer destFile.Close()
+-
+-	l.Info("downloading binary", zap.String("destination", path))
+-
+-	_, err = io.Copy(destFile, *body)
+-	if err != nil {
+-		return fmt.Errorf("unable to download file: %v", err)
+-	}
+-
+-	err = destFile.Sync()
+-	if err != nil {
+-		return fmt.Errorf("syncing downloaded file to device: %v", err)
+-	}
+-
+-	return nil
+-}
+-
+-const downloadPath = "https://caddyserver.com/api/download"
+-
+-type pluginPackage struct {
+-	Version string
+-	Path    string
+-}
+-
+-func (p pluginPackage) String() string {
+-	if p.Version == "" {
+-		return p.Path
+-	}
+-	return p.Path + "@" + p.Version
+-}
+diff --git a/cmd/removebinary.go b/cmd/removebinary.go
+deleted file mode 100644
+--- a/cmd/removebinary.go
++++ /dev/null
+@@ -1,29 +0,0 @@
+-// Copyright 2015 Matthew Holt and The Caddy Authors
+-//
+-// Licensed under the Apache License, Version 2.0 (the "License");
+-// you may not use this file except in compliance with the License.
+-// You may obtain a copy of the License at
+-//
+-//     http://www.apache.org/licenses/LICENSE-2.0
+-//
+-// Unless required by applicable law or agreed to in writing, software
+-// distributed under the License is distributed on an "AS IS" BASIS,
+-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-// See the License for the specific language governing permissions and
+-// limitations under the License.
+-
+-//go:build !windows
+-
+-package caddycmd
+-
+-import (
+-	"os"
+-)
+-
+-// removeCaddyBinary removes the Caddy binary at the given path.
+-//
+-// On any non-Windows OS, this simply calls os.Remove, since they should
+-// probably not exhibit any issue with processes deleting themselves.
+-func removeCaddyBinary(path string) error {
+-	return os.Remove(path)
+-}
+diff --git a/cmd/removebinary_windows.go b/cmd/removebinary_windows.go
+deleted file mode 100644
+--- a/cmd/removebinary_windows.go
++++ /dev/null
+@@ -1,39 +0,0 @@
+-// Copyright 2015 Matthew Holt and The Caddy Authors
+-//
+-// Licensed under the Apache License, Version 2.0 (the "License");
+-// you may not use this file except in compliance with the License.
+-// You may obtain a copy of the License at
+-//
+-//     http://www.apache.org/licenses/LICENSE-2.0
+-//
+-// Unless required by applicable law or agreed to in writing, software
+-// distributed under the License is distributed on an "AS IS" BASIS,
+-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-// See the License for the specific language governing permissions and
+-// limitations under the License.
+-
+-package caddycmd
+-
+-import (
+-	"os"
+-	"path/filepath"
+-	"syscall"
+-)
+-
+-// removeCaddyBinary removes the Caddy binary at the given path.
+-//
+-// On Windows, this uses a syscall to indirectly remove the file,
+-// because otherwise we get an "Access is denied." error when trying
+-// to delete the binary while Caddy is still running and performing
+-// the upgrade. "cmd.exe /C" executes a command specified by the
+-// following arguments, i.e. "del" which will run as a separate process,
+-// which avoids the "Access is denied." error.
+-func removeCaddyBinary(path string) error {
+-	var sI syscall.StartupInfo
+-	var pI syscall.ProcessInformation
+-	argv, err := syscall.UTF16PtrFromString(filepath.Join(os.Getenv("windir"), "system32", "cmd.exe") + " /C del " + path)
+-	if err != nil {
+-		return err
+-	}
+-	return syscall.CreateProcess(nil, argv, nil, nil, true, 0, nil, nil, &sI, &pI)
+-}
+diff --git a/cmd/commands_test.go b/cmd/commands_test.go
+deleted file mode 100644
+--- a/cmd/commands_test.go
++++ /dev/null
+@@ -1,39 +0,0 @@
+-package caddycmd
+-
+-import (
+-	"maps"
+-	"reflect"
+-	"slices"
+-	"testing"
+-)
+-
+-func TestCommandsAreAvailable(t *testing.T) {
+-	// trigger init, and build the default factory, so that
+-	// all commands from this package are available
+-	cmd := defaultFactory.Build()
+-	if cmd == nil {
+-		t.Fatal("default factory failed to build")
+-	}
+-
+-	// check that the default factory has 17 commands; it doesn't
+-	// include the commands registered through calls to init in
+-	// other packages
+-	cmds := Commands()
+-	if len(cmds) != 17 {
+-		t.Errorf("expected 17 commands, got %d", len(cmds))
+-	}
+-
+-	commandNames := slices.Collect(maps.Keys(cmds))
+-	slices.Sort(commandNames)
+-
+-	expectedCommandNames := []string{
+-		"adapt", "add-package", "build-info", "completion",
+-		"environ", "fmt", "list-modules", "manpage",
+-		"reload", "remove-package", "run", "start",
+-		"stop", "storage", "upgrade", "validate", "version",
+-	}
+-
+-	if !reflect.DeepEqual(expectedCommandNames, commandNames) {
+-		t.Errorf("expected %v, got %v", expectedCommandNames, commandNames)
+-	}
+-}
