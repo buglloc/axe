@@ -27,6 +27,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `bwrap` | Run commands in isolated Linux namespaces | `aarch64-linux`, `x86_64-linux` |
 | `caddy` | Serve HTTP and reverse proxy traffic with automatic HTTPS | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `capsh` | Inspect and change Linux capabilities | `aarch64-linux`, `x86_64-linux` |
+| `cek` | Inspect, copy, and compare files in OCI images without a container runtime | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `curl` | Transfer data over HTTPS with Mozilla CAs | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `dbus-monitor` | Monitor D-Bus messages | `aarch64-linux`, `x86_64-linux` |
 | `dig` | Query DNS records with the BIND client | `aarch64-linux`, `x86_64-linux` |
@@ -118,6 +119,8 @@ The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinn
 `caddy` includes the standard modules for HTTP serving, reverse proxying, and automatic HTTPS. It embeds edition CA roots as a fallback for outgoing TLS connections. Explicit trust pools remain available. Certificate and configuration state needs a writable directory. Binary-replacement commands (`upgrade`, `add-package`, and `remove-package`) are excluded; additional DNS-provider plugins are not bundled.
 
 `layerx` reads Docker-save and OCI archives without a daemon. Live image inspection uses a Docker-compatible Docker or Podman API; `build` also needs the selected engine's CLI on `PATH`. It provides a terminal UI, JSON analysis, efficiency gates with `ci`, and image comparisons with `compare`.
+
+`cek` reads images directly from registries or a local Docker-compatible daemon. It supports merged-filesystem inspection, file extraction, content-aware comparisons, and OCI exports. Registry authentication uses Docker configuration; configured credential helpers must be on `PATH`. It embeds edition CA roots as a fallback when system trust is unavailable, and honors `SSL_CERT_FILE`.
 
 `bwrap` is Bubblewrap's standalone executable. Unprivileged sandboxing requires user namespaces permitted by the host kernel and security policy.
 

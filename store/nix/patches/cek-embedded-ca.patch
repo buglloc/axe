@@ -1,0 +1,27 @@
+diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -1,7 +1,22 @@
+ package main
+ 
+-import "github.com/bschaatsbergen/cek/internal/command"
++import (
++	"crypto/x509"
++	_ "embed"
++
++	"github.com/bschaatsbergen/cek/internal/command"
++)
++
++//go:embed axe-ca-bundle.pem
++var axeCABundle []byte
+ 
+ func main() {
++	roots := x509.NewCertPool()
++	if !roots.AppendCertsFromPEM(axeCABundle) {
++		panic("embedded AXE CA bundle is empty or invalid")
++	}
++
++	x509.SetFallbackRoots(roots)
++
+ 	command.Execute()
+ }

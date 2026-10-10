@@ -244,6 +244,7 @@
       install -Dm755 ${source.path} "$out/bin/podman"
     '';
 in {
+  cek = import ./containers/cek.nix helpers;
   layerx = import ./containers/layerx.nix helpers;
 
   bwrap = mkNixpkgsBinary {
