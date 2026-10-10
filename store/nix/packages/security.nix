@@ -74,6 +74,24 @@
   in
     binwalkMinimal packageSet compressionSet;
 
+  agePackageFor = target: targetPkgs:
+    (
+      if target == "aarch64-darwin"
+      then
+        goDarwin {
+          package = "age";
+          subPackage = "./cmd/age";
+        }
+      else (packageSetFor target targetPkgs).age
+    ).overrideAttrs
+    (old: {
+      outputs = ["out"];
+      subPackages = ["cmd/age"];
+      env = (old.env or {}) // {CGO_ENABLED = 0;};
+      ldflags = (old.ldflags or []) ++ ["-linkmode=internal"];
+      preInstall = "";
+    });
+
   gobusterPackageFor = target: targetPkgs:
     (
       if target == "aarch64-darwin"
@@ -158,6 +176,13 @@
       fi
     '';
 in {
+  age = mkNixpkgsBinary {
+    name = "age";
+    synopsis = "Encrypt and decrypt files with explicit keys or passphrases";
+    systems = portableSystems;
+    packageFor = agePackageFor;
+  };
+
   openssl = mkNixpkgsBinary {
     name = "openssl";
     synopsis = "Inspect certificates and perform cryptographic operations";
