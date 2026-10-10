@@ -34,7 +34,12 @@ Commands:
   killall [OPTIONS] NAME ...        Linux bundled exact-name process signalling
                                    -s/-SIGNAL/-NUM, -I, -u, -l, -q, -v;
                                    names use the kernel's 15-byte comm field
-  vzik [collect]                   bounded host/systemd/D-Bus JSONL collection
+  vzik --version                    print the Vzik version without collecting
+  vzik overview [--details]         passive host context as JSONL
+  vzik collect                      security baseline as JSONL
+  vzik process inspect PID         bounded detail for one visible process
+  vzik capture COMMAND --output-dir DIR
+                                   seal evidence in a new private directory
   sshd --daemon [--log-file FILE]    supervised SSH service; restarts failed workers
                                    Store mode: auto, cache-only, or off
                                    SSH certificates only; edition-specific

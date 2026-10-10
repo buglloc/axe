@@ -6,6 +6,7 @@ mod discovery;
 pub mod environment;
 #[cfg(target_os = "linux")]
 mod inventory;
+mod overview;
 #[cfg(target_os = "linux")]
 pub mod procfs;
 mod protocol;
@@ -209,7 +210,7 @@ pub(crate) fn write_telemetry(
     details: Value,
 ) {
     let record = json!({
-        "schema_version": 3,
+        "schema_version": protocol::SCHEMA_VERSION,
         "level": "error",
         "event": code,
         "code": code,
@@ -257,6 +258,10 @@ mod tests {
 
             assert_eq!(terminal["outcome"], "unavailable");
             assert_eq!(terminal["coverage"]["skipped"], 1);
+            assert_eq!(records.last().expect("stream end")["truncated"], false);
+            let stream_end = records.last().expect("stream end");
+            assert_eq!(stream_end["collection_outcome"], "degraded");
+            assert!(stream_end.get("outcome").is_none());
             let diagnostic = records
                 .iter()
                 .find(|record| record["type"] == "diagnostic")
@@ -318,8 +323,10 @@ mod tests {
         assert_eq!(status, 0, "stderr: {}", String::from_utf8_lossy(&stderr));
         let result: serde_json::Value =
             serde_json::from_slice(&stdout).expect("capture summary JSON");
-        assert_eq!(result["schema_version"], 3);
-        assert_eq!(result["outcome"], "complete");
+        assert_eq!(result["schema_version"], 4);
+        assert_eq!(result["collection_outcome"], "complete");
+        assert!(result.get("outcome").is_none());
+        assert!(result["coverage_summary"].get("stream_outcome").is_none());
         assert_eq!(result["command_id"], "filesystem.unix_sockets");
         assert_eq!(result["capture"], capture_path.to_string_lossy().as_ref());
         assert_eq!(result["receipt"], receipt_path.to_string_lossy().as_ref());
@@ -332,7 +339,13 @@ mod tests {
             serde_json::from_slice(&fs::read(&receipt_path).expect("read receipt"))
                 .expect("receipt JSON");
         assert_eq!(receipt["schema"], "raskop/vzik-capture-receipt");
-        assert_eq!(receipt["schema_version"], 3);
+        assert_eq!(receipt["schema_version"], 4);
+        assert_eq!(
+            receipt["capture"]["collection_outcome"],
+            result["collection_outcome"]
+        );
+        assert!(receipt["capture"].get("outcome").is_none());
+        assert!(receipt["capture"].get("stream_outcome").is_none());
         assert_eq!(
             receipt["capture"]["started_capabilities"],
             serde_json::json!(["filesystem.unix_sockets"])
@@ -342,6 +355,34 @@ mod tests {
 
         let capture = fs::read_to_string(&capture_path).expect("read capture");
         assert!(capture.contains("\"data_kind\":\"filesystem_unix_socket\""));
+        let terminal: serde_json::Value =
+            serde_json::from_str(capture.lines().last().expect("stream end"))
+                .expect("stream end JSON");
+        assert_eq!(terminal["collection_outcome"], result["collection_outcome"]);
+        assert!(terminal.get("outcome").is_none());
+
+        let mut summary_stdout = Vec::new();
+        let summary_status = run(
+            [
+                OsString::from("vzik"),
+                OsString::from("summarize"),
+                capture_path.as_os_str().to_owned(),
+            ],
+            &mut summary_stdout,
+            &mut stderr,
+        );
+        assert_eq!(summary_status, 0);
+        let summary: serde_json::Value =
+            serde_json::from_slice(&summary_stdout).expect("stream summary JSON");
+        assert_eq!(
+            summary["stream"]["collection_outcome"],
+            result["collection_outcome"]
+        );
+        assert!(summary["stream"].get("outcome").is_none());
+        assert_eq!(
+            summary["capabilities"]["by_outcome"]["complete"],
+            serde_json::json!(["filesystem.unix_sockets"])
+        );
         fs::remove_dir_all(&root).expect("remove fixture directory");
     }
 }

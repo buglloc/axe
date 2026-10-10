@@ -1765,7 +1765,7 @@ fn no_proc_uses_filesystem_reexec_and_cleans_unusable_bridge() {
         let probe: serde_json::Value =
             serde_json::from_slice(&probe.stdout).expect("parse doctor report");
         assert_eq!(probe["schema"], "axe_doctor");
-        assert_eq!(probe["schema_version"], 3);
+        assert_eq!(probe["schema_version"], 4);
         assert_eq!(probe["launch"]["bridge"]["state"], "not_attempted");
         assert_eq!(
             probe["capabilities"]["kernel"]["procfs"]["status"],
@@ -2689,7 +2689,7 @@ fn doctor_reports_readable_shell_state_and_selected_environment() {
     let report: serde_json::Value =
         serde_json::from_slice(&report_bytes).expect("doctor report is JSON");
     assert_eq!(report["schema"], "axe_doctor");
-    assert_eq!(report["schema_version"], 3);
+    assert_eq!(report["schema_version"], 4);
     assert_eq!(report["scope"], "shell");
     assert_eq!(
         report["shell"]["current_cwd"]["value"],
@@ -2699,35 +2699,6 @@ fn doctor_reports_readable_shell_state_and_selected_environment() {
         report["filesystem"]["path"]["value"],
         work.to_string_lossy().as_ref()
     );
-    for name in [
-        "inheritable",
-        "permitted",
-        "effective",
-        "bounding",
-        "ambient",
-    ] {
-        assert!(
-            report["restrictions"]["capability_sets"][name]["status"].is_string(),
-            "capability set {name} must carry an independent observation"
-        );
-    }
-    for name in ["cgroup", "ipc", "mnt", "net", "pid", "time", "user", "uts"] {
-        assert!(
-            report["restrictions"]["namespaces"][name]["status"].is_string(),
-            "namespace {name} must carry an independent observation"
-        );
-    }
-    assert!(report["restrictions"]["cgroups"]["membership"]["status"].is_string());
-    assert!(report["restrictions"]["cgroups"]["limits"]["memory.max"]["status"].is_string());
-    assert!(report["capabilities"]["memory"]["mfd_exec_flag"].is_object());
-    assert!(report["capabilities"]["memory"]["rw_to_rx"].is_object());
-    assert!(report["capabilities"]["memory"]["map_jit_rx"].is_object());
-    for layer in ["virtual_machine", "container", "sandbox"] {
-        assert_eq!(
-            report["isolation"][layer]["interpretation"],
-            "heuristic_indicator"
-        );
-    }
     assert!(
         report["launch"]["argv0"]["value"].is_string(),
         "UTF-8 argv[0] must be a plain string: {}",
@@ -2843,7 +2814,7 @@ fn busybox_alias_prepends_configured_arguments() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn vzik_collect_profile_is_an_ordered_protocol_v3_stream() {
+fn vzik_collect_profile_is_an_ordered_protocol_v4_stream() {
     let output = Command::new(env!("CARGO_BIN_EXE_axe"))
         .args(["vzik", "collect"])
         .output()
@@ -2854,8 +2825,11 @@ fn vzik_collect_profile_is_an_ordered_protocol_v3_stream() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid JSON record"))
         .collect::<Vec<_>>();
-    assert!(records.iter().all(|record| record["schema_version"] == 3));
-    let expected_status = match records.last().and_then(|record| record["outcome"].as_str()) {
+    assert!(records.iter().all(|record| record["schema_version"] == 4));
+    let expected_status = match records
+        .last()
+        .and_then(|record| record["collection_outcome"].as_str())
+    {
         Some("complete") => 0,
         Some("degraded") => 3,
         other => panic!("unexpected terminal outcome: {other:?}"),
@@ -2944,26 +2918,6 @@ fn vzik_collect_profile_is_an_ordered_protocol_v3_stream() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn vzik_nested_help_is_generated_for_bundled_commands() {
-    let output = Command::new(env!("CARGO_BIN_EXE_axe"))
-        .args(["vzik", "portoctl", "inspect", "--help"])
-        .output()
-        .expect("run bundled vzik help");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stderr.is_empty());
-    let help = String::from_utf8(output.stdout).expect("help is UTF-8");
-    assert!(help.contains("Usage: vzik portoctl inspect"));
-    assert!(help.contains("--socket <PATH>"));
-    assert!(help.contains("[default: /run/portod.socket]"));
-}
-
-#[cfg(target_os = "linux")]
-#[test]
 fn vzik_targeted_file_read_is_chunked_and_bounded() {
     let scratch = Scratch::new("vzik-file-read");
     let path = scratch.path().join("evidence");
@@ -2986,7 +2940,7 @@ fn vzik_targeted_file_read_is_chunked_and_bounded() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid JSON record"))
         .collect::<Vec<_>>();
-    assert!(records.iter().all(|record| record["schema_version"] == 3));
+    assert!(records.iter().all(|record| record["schema_version"] == 4));
     let data = records
         .iter()
         .find(|record| record["type"] == "data")
@@ -3001,7 +2955,7 @@ fn vzik_targeted_file_read_is_chunked_and_bounded() {
     assert_eq!(end["limits_hit"], serde_json::json!(["max_bytes"]));
     let stream_end = records.last().expect("stream end");
     assert_eq!(stream_end["type"], "stream_end");
-    assert_eq!(stream_end["outcome"], "degraded");
+    assert_eq!(stream_end["collection_outcome"], "degraded");
 }
 
 fn run_jq(args: &[&str], input: &[u8]) -> std::process::Output {

@@ -29,9 +29,16 @@ pub fn run<W: Write>(
     deadline: ExecutionContext<'_>,
 ) -> Result<CapabilityReport, ProtocolError> {
     match invocation.capability {
+        CapabilityId::Overview => {
+            let Request::Overview { details } = invocation.request else {
+                return Err(ProtocolError::Internal("overview request mismatch".into()));
+            };
+            crate::overview::run(sink, deadline, details)
+        }
         CapabilityId::HostInfo
         | CapabilityId::KernelInfo
         | CapabilityId::ProcessList
+        | CapabilityId::ProcessInspect
         | CapabilityId::MountList
         | CapabilityId::NetworkResolvers
         | CapabilityId::FileStat

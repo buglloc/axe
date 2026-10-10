@@ -56,7 +56,10 @@ fn interfaces<W: Write>(
     let root = Path::new("/sys/class/net");
     let entries = match sorted_entries(root) {
         Ok(entries) => entries,
-        Err(_) => return interfaces_procfs(sink, deadline, max_items, coverage),
+        Err(error) => {
+            source_failure(sink, capability, root, &error, &mut coverage)?;
+            return interfaces_procfs(sink, deadline, max_items, coverage);
+        }
     };
 
     for path in entries {
@@ -155,7 +158,7 @@ fn interfaces_procfs<W: Write>(
 
     Ok(finish(
         coverage,
-        truncated,
+        true,
         truncated.then_some("max_source_bytes"),
     ))
 }

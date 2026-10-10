@@ -15,7 +15,7 @@ use super::{
     unavailable,
 };
 use crate::cli::{CapabilityId, Invocation, Request};
-use crate::procfs::malformed;
+use crate::procfs::{hex_u64, malformed, parse_u64};
 use crate::protocol::{
     CapabilityReport, Coverage, ExecutionContext, Outcome, ProtocolError, RecordSink,
     check_deadline,
@@ -23,6 +23,7 @@ use crate::protocol::{
 
 const FIXED_SOURCE_BYTES: u64 = 512 << 10;
 const PROCESS_SOURCE_BYTES: u64 = 64 << 10;
+const PROCESS_DETAIL_VALUE_BYTES: usize = (crate::cli::MAX_LINE_BYTES / 32) as usize;
 const MOUNT_SOURCE_BYTES: u64 = 16 << 20;
 const RESOLVER_SOURCE_BYTES: u64 = 256 << 10;
 const FILE_CHUNK_BYTES: usize = 48 << 10;
@@ -42,6 +43,14 @@ pub fn run<W: Write>(
                 ));
             };
             process_list(sink, deadline, *max_items)
+        }
+        CapabilityId::ProcessInspect => {
+            let Request::ProcessInspect { pid } = &invocation.request else {
+                return Err(ProtocolError::Internal(
+                    "process.inspect request mismatch".into(),
+                ));
+            };
+            process_inspect(sink, deadline, *pid)
         }
         CapabilityId::MountList => {
             let Request::ItemLimit { max_items } = &invocation.request else {
@@ -279,12 +288,7 @@ fn process_summary(pid: u32, is_self: bool) -> io::Result<(Value, bool)> {
     }
     let (parsed_pid, name, state, ppid) = parse_proc_stat(&stat)?;
 
-    let mut data = Map::new();
-    data.insert("pid".into(), json!(parsed_pid));
-    data.insert("ppid".into(), json!(ppid));
-    data.insert("name".into(), text(name));
-    data.insert("state".into(), text(state));
-    data.insert("is_self".into(), json!(is_self));
+    let mut data = process_summary_fields(parsed_pid, text(name), text(state), ppid, is_self);
     let mut complete = true;
 
     match read_bounded(&root.join("status"), PROCESS_SOURCE_BYTES) {
@@ -294,24 +298,18 @@ fn process_summary(pid: u32, is_self: bool) -> io::Result<(Value, bool)> {
 
     match read_bounded(&root.join("cmdline"), PROCESS_SOURCE_BYTES) {
         Ok((cmdline, false)) => {
-            data.insert(
-                "cmdline".into(),
-                Value::Array(
-                    cmdline
-                        .split(|byte| *byte == 0)
-                        .filter(|value| !value.is_empty())
-                        .map(text)
-                        .collect(),
-                ),
-            );
+            data.insert("cmdline".into(), process_cmdline(&cmdline));
         }
         _ => complete = false,
     }
 
     match read_bounded(&root.join("cgroup"), PROCESS_SOURCE_BYTES) {
-        Ok((cgroup, false)) => {
-            data.insert("cgroup".into(), text(cgroup.trim_ascii()));
-        }
+        Ok((cgroup, false)) => match process_cgroup_membership(&cgroup, usize::MAX) {
+            Ok((value, _)) => {
+                data.insert("cgroup_membership".into(), value);
+            }
+            Err(_) => complete = false,
+        },
         _ => complete = false,
     }
 
@@ -338,6 +336,440 @@ fn process_summary(pid: u32, is_self: bool) -> io::Result<(Value, bool)> {
     data.insert("security_context_complete".into(), json!(complete));
 
     Ok((Value::Object(data), complete))
+}
+
+fn process_summary_fields(
+    pid: u32,
+    name: Value,
+    state: Value,
+    ppid: u32,
+    is_self: bool,
+) -> Map<String, Value> {
+    let mut data = Map::new();
+    data.insert("pid".into(), json!(pid));
+    data.insert("ppid".into(), json!(ppid));
+    data.insert("name".into(), name);
+    data.insert("state".into(), state);
+    data.insert("is_self".into(), json!(is_self));
+    data
+}
+
+fn process_cmdline(bytes: &[u8]) -> Value {
+    Value::Array(
+        bytes
+            .split(|byte| *byte == 0)
+            .filter(|value| !value.is_empty())
+            .map(text)
+            .collect(),
+    )
+}
+
+#[derive(Default)]
+struct ProcessDetailCoverage {
+    coverage: Coverage,
+    sources: Map<String, Value>,
+    limits_hit: Vec<&'static str>,
+}
+
+impl ProcessDetailCoverage {
+    fn report(self, outcome: Outcome) -> CapabilityReport {
+        CapabilityReport {
+            outcome,
+            coverage: self.coverage,
+            limits_hit: self.limits_hit,
+        }
+    }
+
+    fn partial(&self) -> bool {
+        self.sources
+            .values()
+            .any(|source| source["availability"] != "available")
+    }
+}
+
+fn process_inspect<W: Write>(
+    sink: &mut RecordSink<'_, W>,
+    deadline: ExecutionContext<'_>,
+    pid: u32,
+) -> Result<CapabilityReport, ProtocolError> {
+    let capability = CapabilityId::ProcessInspect;
+    let root = PathBuf::from(format!("/proc/{pid}"));
+    let stat_path = root.join("stat");
+    let mut detail = ProcessDetailCoverage::default();
+    let Some(stat_bytes) = read_process_source(sink, deadline, "stat", &stat_path, &mut detail)?
+    else {
+        return Ok(detail.report(Outcome::Unavailable));
+    };
+    let Some(stat) = process_source_result(
+        sink,
+        "stat",
+        &stat_path,
+        parse_process_detail_stat(&stat_bytes),
+        &mut detail,
+    )?
+    else {
+        return Ok(detail.report(Outcome::Unavailable));
+    };
+    if stat.pid != pid {
+        return process_raced(sink, &stat_path, detail);
+    }
+    let Some(resources) = process_source_result(
+        sink,
+        "stat",
+        &stat_path,
+        process_resources(
+            &stat,
+            rustix::param::page_size() as u64,
+            rustix::param::clock_ticks_per_second(),
+        ),
+        &mut detail,
+    )?
+    else {
+        return Ok(detail.report(Outcome::Unavailable));
+    };
+
+    let (name, name_truncated) = process_detail_text(stat.name);
+    let mut data = process_summary_fields(
+        pid,
+        name,
+        text(stat.state),
+        stat.ppid,
+        pid == std::process::id(),
+    );
+    if name_truncated {
+        process_detail_limit(sink, "stat", &stat_path, "max_line_bytes", &mut detail)?;
+    }
+    data.insert("scope".into(), json!("collector_visible"));
+    data.insert("resources".into(), resources);
+    let mut security_context_complete = !name_truncated;
+
+    let status_path = root.join("status");
+    if let Some(bytes) = read_process_source(sink, deadline, "status", &status_path, &mut detail)? {
+        if process_source_result(
+            sink,
+            "status",
+            &status_path,
+            validate_process_status(&bytes),
+            &mut detail,
+        )?
+        .is_some()
+        {
+            if add_process_status_limited(&mut data, &bytes, PROCESS_DETAIL_VALUE_BYTES / 16) {
+                security_context_complete = false;
+                process_detail_limit(sink, "status", &status_path, "max_line_bytes", &mut detail)?;
+            }
+        } else {
+            security_context_complete = false;
+        }
+    } else {
+        security_context_complete = false;
+    }
+
+    let cmdline_path = root.join("cmdline");
+    if let Some(bytes) = read_process_source(sink, deadline, "cmdline", &cmdline_path, &mut detail)?
+    {
+        if let Some((cmdline, truncated)) = process_source_result(
+            sink,
+            "cmdline",
+            &cmdline_path,
+            process_detail_cmdline(&bytes),
+            &mut detail,
+        )? {
+            data.insert("cmdline".into(), cmdline);
+            if truncated {
+                security_context_complete = false;
+                process_detail_limit(
+                    sink,
+                    "cmdline",
+                    &cmdline_path,
+                    "max_line_bytes",
+                    &mut detail,
+                )?;
+            }
+        } else {
+            security_context_complete = false;
+        }
+    } else {
+        security_context_complete = false;
+    }
+
+    let cgroup_path = root.join("cgroup");
+    if let Some(bytes) = read_process_source(sink, deadline, "cgroup", &cgroup_path, &mut detail)? {
+        if let Some((value, truncated)) = process_source_result(
+            sink,
+            "cgroup",
+            &cgroup_path,
+            process_cgroup_membership(&bytes, PROCESS_DETAIL_VALUE_BYTES),
+            &mut detail,
+        )? {
+            data.insert("cgroup_membership".into(), value);
+            if truncated {
+                security_context_complete = false;
+                process_detail_limit(sink, "cgroup", &cgroup_path, "max_line_bytes", &mut detail)?;
+            }
+        } else {
+            security_context_complete = false;
+        }
+    } else {
+        security_context_complete = false;
+    }
+
+    for source in ["exe", "cwd", "root"] {
+        let path = root.join(source);
+        check_deadline(deadline)?;
+        if let Some(target) =
+            process_source_result(sink, source, &path, fs::read_link(&path), &mut detail)?
+        {
+            let (value, truncated) = process_detail_text(target.as_os_str().as_bytes());
+            data.insert(source.into(), value);
+            if truncated {
+                security_context_complete = false;
+                process_detail_limit(sink, source, &path, "max_line_bytes", &mut detail)?;
+            }
+        } else {
+            security_context_complete = false;
+        }
+    }
+
+    let mut namespaces = Map::new();
+    for name in NAMESPACES {
+        let source = format!("ns.{name}");
+        let path = root.join("ns").join(name);
+        check_deadline(deadline)?;
+        if let Some(target) =
+            process_source_result(sink, &source, &path, fs::read_link(&path), &mut detail)?
+        {
+            let (value, truncated) = process_detail_text(target.as_os_str().as_bytes());
+            namespaces.insert(name.into(), value);
+            if truncated {
+                security_context_complete = false;
+                process_detail_limit(sink, &source, &path, "max_line_bytes", &mut detail)?;
+            }
+        } else {
+            security_context_complete = false;
+        }
+    }
+    data.insert("namespaces".into(), Value::Object(namespaces));
+    data.insert(
+        "security_context_complete".into(),
+        json!(security_context_complete),
+    );
+
+    let limits_path = root.join("limits");
+    if let Some(bytes) = read_process_source(sink, deadline, "limits", &limits_path, &mut detail)?
+        && let Some((limits, truncated)) = process_source_result(
+            sink,
+            "limits",
+            &limits_path,
+            parse_process_limits(&bytes),
+            &mut detail,
+        )?
+    {
+        data.insert("rlimits".into(), limits);
+        if truncated {
+            process_detail_limit(sink, "limits", &limits_path, "max_line_bytes", &mut detail)?;
+        }
+    }
+
+    let io_path = root.join("io");
+    if let Some(bytes) = read_process_source(sink, deadline, "io", &io_path, &mut detail)?
+        && let Some(value) =
+            process_source_result(sink, "io", &io_path, parse_process_io(&bytes), &mut detail)?
+    {
+        data.insert("io".into(), value);
+    }
+
+    let Some(final_stat) = read_process_source(sink, deadline, "stat", &stat_path, &mut detail)?
+    else {
+        return Ok(detail.report(Outcome::Unavailable));
+    };
+    let Some(matches) = process_source_result(
+        sink,
+        "stat",
+        &stat_path,
+        process_stat_matches(pid, stat.start_ticks, &final_stat),
+        &mut detail,
+    )?
+    else {
+        return Ok(detail.report(Outcome::Unavailable));
+    };
+    if !matches {
+        return process_raced(sink, &stat_path, detail);
+    }
+    if name_truncated {
+        detail.sources["stat"]["availability"] = json!("truncated");
+    }
+
+    let partial = detail.partial();
+    data.insert(
+        "sources".into(),
+        Value::Object(std::mem::take(&mut detail.sources)),
+    );
+    check_deadline(deadline)?;
+    if !emit(sink, capability, Value::Object(data), &mut detail.coverage)? {
+        return Ok(output_limit(detail.coverage));
+    }
+    Ok(detail.report(if partial {
+        Outcome::Partial
+    } else {
+        Outcome::Complete
+    }))
+}
+
+fn read_process_source<W: Write>(
+    sink: &mut RecordSink<'_, W>,
+    deadline: ExecutionContext<'_>,
+    name: &str,
+    path: &Path,
+    detail: &mut ProcessDetailCoverage,
+) -> Result<Option<Vec<u8>>, ProtocolError> {
+    check_deadline(deadline)?;
+    match read_bounded(path, PROCESS_SOURCE_BYTES) {
+        Ok((bytes, truncated)) => {
+            detail.coverage.scanned += bytes.len() as u64;
+            if truncated {
+                process_detail_limit(sink, name, path, "max_source_bytes", detail)?;
+                Ok(None)
+            } else {
+                process_source_result(sink, name, path, Ok(bytes), detail)
+            }
+        }
+        Err(error) => process_source_result(sink, name, path, Err(error), detail),
+    }
+}
+
+fn process_source_result<W: Write, T>(
+    sink: &mut RecordSink<'_, W>,
+    name: &str,
+    path: &Path,
+    result: io::Result<T>,
+    detail: &mut ProcessDetailCoverage,
+) -> Result<Option<T>, ProtocolError> {
+    let availability = match &result {
+        Ok(_) => "available",
+        Err(error) => match error.kind() {
+            io::ErrorKind::NotFound => "not_found",
+            io::ErrorKind::PermissionDenied => "permission_denied",
+            io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput => "malformed",
+            _ => "io_error",
+        },
+    };
+    detail.sources.insert(
+        name.into(),
+        json!({"source":path_value(path), "availability":availability}),
+    );
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) => {
+            source_failure(
+                sink,
+                CapabilityId::ProcessInspect,
+                path,
+                &error,
+                &mut detail.coverage,
+            )?;
+            Ok(None)
+        }
+    }
+}
+
+fn process_detail_limit<W: Write>(
+    sink: &mut RecordSink<'_, W>,
+    name: &str,
+    path: &Path,
+    limit: &'static str,
+    detail: &mut ProcessDetailCoverage,
+) -> Result<(), ProtocolError> {
+    detail.coverage.truncated = true;
+    if !detail.limits_hit.contains(&limit) {
+        detail.limits_hit.push(limit);
+    }
+    detail.sources.insert(
+        name.into(),
+        json!({"source":path_value(path), "availability":"truncated"}),
+    );
+    sink.diagnostic(
+        CapabilityId::ProcessInspect.id(),
+        "limit",
+        "limit_reached",
+        "limit_reached",
+        path_value(path),
+        if limit == "max_source_bytes" {
+            "process source exceeds its bounded read limit"
+        } else {
+            "process source was shortened to fit its JSONL line budget"
+        },
+        1,
+    )
+}
+
+fn process_raced<W: Write>(
+    sink: &mut RecordSink<'_, W>,
+    path: &Path,
+    mut detail: ProcessDetailCoverage,
+) -> Result<CapabilityReport, ProtocolError> {
+    detail.coverage.skipped += 1;
+    sink.diagnostic(
+        CapabilityId::ProcessInspect.id(),
+        "source",
+        "raced",
+        "source_raced",
+        path_value(path),
+        "process changed while its sources were being read; snapshot discarded",
+        1,
+    )?;
+    Ok(detail.report(Outcome::Unavailable))
+}
+
+fn process_detail_text(bytes: &[u8]) -> (Value, bool) {
+    // Non-UTF-8 display escaping plus base64 needs less than seven bytes per input byte.
+    let maximum = PROCESS_DETAIL_VALUE_BYTES.saturating_sub(128) / 7;
+    let length = bytes.len().min(maximum);
+    (text(&bytes[..length]), length < bytes.len())
+}
+
+#[derive(Default)]
+struct JsonBytes(usize);
+
+impl Write for JsonBytes {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn json_bytes(value: &Value) -> io::Result<usize> {
+    let mut writer = JsonBytes::default();
+    serde_json::to_writer(&mut writer, value).map_err(io::Error::other)?;
+    Ok(writer.0)
+}
+
+fn process_detail_cmdline(bytes: &[u8]) -> io::Result<(Value, bool)> {
+    let mut values = Vec::new();
+    let mut size = 2;
+    let mut truncated = false;
+    for argument in bytes
+        .split(|byte| *byte == 0)
+        .filter(|value| !value.is_empty())
+    {
+        let (value, shortened) = process_detail_text(argument);
+        let added = json_bytes(&value)? + usize::from(!values.is_empty());
+        if size + added > PROCESS_DETAIL_VALUE_BYTES {
+            truncated = true;
+            break;
+        }
+        size += added;
+        values.push(value);
+        truncated |= shortened;
+        if shortened {
+            break;
+        }
+    }
+    Ok((Value::Array(values), truncated))
 }
 
 fn mount_list<W: Write>(
@@ -744,6 +1176,17 @@ fn parse_os_release(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
 }
 
 fn parse_proc_stat(bytes: &[u8]) -> io::Result<(u32, &[u8], &[u8], u32)> {
+    let (pid, name, fields) = proc_stat_parts(bytes)?;
+    let mut fields = fields
+        .split(|byte| byte.is_ascii_whitespace())
+        .filter(|field| !field.is_empty());
+    let state = fields.next().ok_or_else(invalid_data)?;
+    let ppid = parse_ascii_u32(fields.next().ok_or_else(invalid_data)?)?;
+    fields.next().ok_or_else(invalid_data)?;
+    Ok((pid, name, state, ppid))
+}
+
+fn proc_stat_parts(bytes: &[u8]) -> io::Result<(u32, &[u8], &[u8])> {
     let open = bytes
         .iter()
         .position(|byte| *byte == b'(')
@@ -758,20 +1201,302 @@ fn parse_proc_stat(bytes: &[u8]) -> io::Result<(u32, &[u8], &[u8], u32)> {
     }
 
     let pid = parse_ascii_u32(bytes[..open].trim_ascii())?;
-    let fields = bytes[close + 2..]
-        .split(|byte| byte.is_ascii_whitespace())
-        .filter(|field| !field.is_empty())
-        .collect::<Vec<_>>();
+    Ok((pid, &bytes[open + 1..close], &bytes[close + 2..]))
+}
 
-    if fields.len() < 3 {
+struct ProcessStat<'a> {
+    pid: u32,
+    name: &'a [u8],
+    state: &'a [u8],
+    ppid: u32,
+    start_ticks: u64,
+    cpu_user_ticks: u64,
+    cpu_system_ticks: u64,
+    threads: u64,
+    virtual_size_bytes: u64,
+    rss_pages: u64,
+}
+
+fn parse_process_detail_stat(bytes: &[u8]) -> io::Result<ProcessStat<'_>> {
+    let (pid, name, fields) = proc_stat_parts(bytes)?;
+    let mut input = fields
+        .split(|byte| byte.is_ascii_whitespace())
+        .filter(|field| !field.is_empty());
+    let mut fields = [b"".as_slice(); 22];
+    for field in &mut fields {
+        *field = input.next().ok_or_else(invalid_data)?;
+    }
+    if pid == 0 || fields[0].len() != 1 || !fields[0][0].is_ascii_alphabetic() {
         return Err(invalid_data());
     }
+    Ok(ProcessStat {
+        pid,
+        name,
+        state: fields[0],
+        ppid: parse_ascii_u32(fields[1])?,
+        start_ticks: parse_u64(fields[19])?,
+        cpu_user_ticks: parse_u64(fields[11])?,
+        cpu_system_ticks: parse_u64(fields[12])?,
+        threads: parse_u64(fields[17])?,
+        virtual_size_bytes: parse_u64(fields[20])?,
+        rss_pages: parse_u64(fields[21])?,
+    })
+}
 
-    let ppid = parse_ascii_u32(fields[1])?;
-    Ok((pid, &bytes[open + 1..close], fields[0], ppid))
+fn process_resources(
+    stat: &ProcessStat<'_>,
+    page_size_bytes: u64,
+    clock_ticks_per_second: u64,
+) -> io::Result<Value> {
+    if page_size_bytes == 0 || clock_ticks_per_second == 0 {
+        return Err(invalid_data());
+    }
+    let rss_bytes = stat
+        .rss_pages
+        .checked_mul(page_size_bytes)
+        .ok_or_else(invalid_data)?;
+    Ok(json!({
+        "rss_bytes":rss_bytes,
+        "virtual_size_bytes":stat.virtual_size_bytes,
+        "threads":stat.threads,
+        "cpu_user_ticks":stat.cpu_user_ticks,
+        "cpu_system_ticks":stat.cpu_system_ticks,
+        "clock_ticks_per_second":clock_ticks_per_second,
+    }))
+}
+
+fn process_cgroup_membership(bytes: &[u8], budget: usize) -> io::Result<(Value, bool)> {
+    let entries = crate::environment::parse_cgroup_membership(bytes)?;
+    let mut values = Vec::new();
+    let mut size = 2;
+    for entry in entries {
+        let mut fields = Map::new();
+        match entry.hierarchy {
+            crate::environment::CgroupHierarchy::Unified => {
+                fields.insert("hierarchy_kind".into(), Value::String("unified".into()));
+            }
+            crate::environment::CgroupHierarchy::Legacy {
+                hierarchy_id,
+                controllers,
+            } => {
+                fields.insert("hierarchy_kind".into(), Value::String("legacy".into()));
+                fields.insert("hierarchy_id".into(), Value::from(hierarchy_id));
+                fields.insert(
+                    "controllers".into(),
+                    Value::Array(controllers.into_iter().map(Value::String).collect()),
+                );
+            }
+        }
+        fields.insert(
+            "namespace_relative_path".into(),
+            entry.namespace_relative_path,
+        );
+        let value = Value::Object(fields);
+        if budget != usize::MAX {
+            let added = json_bytes(&value)? + usize::from(!values.is_empty());
+            if size + added > budget {
+                return Ok((Value::Array(values), true));
+            }
+            size += added;
+        }
+        values.push(value);
+    }
+    Ok((Value::Array(values), false))
+}
+
+fn process_stat_matches(pid: u32, start_ticks: u64, bytes: &[u8]) -> io::Result<bool> {
+    let current = parse_process_detail_stat(bytes)?;
+    Ok(current.pid == pid && current.start_ticks == start_ticks)
+}
+
+fn validate_process_status(bytes: &[u8]) -> io::Result<()> {
+    let mut uid = false;
+    let mut gid = false;
+    for line in bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        let separator = line
+            .iter()
+            .position(|byte| *byte == b':')
+            .ok_or_else(invalid_data)?;
+        let key = &line[..separator];
+        let value = line[separator + 1..].trim_ascii();
+        match key {
+            b"Uid" | b"Gid" => {
+                let mut count = 0;
+                for field in value
+                    .split(|byte| byte.is_ascii_whitespace())
+                    .filter(|field| !field.is_empty())
+                {
+                    parse_ascii_u32(field)?;
+                    count += 1;
+                }
+                if count != 4 {
+                    return Err(invalid_data());
+                }
+                uid |= key == b"Uid";
+                gid |= key == b"Gid";
+            }
+            b"Groups" => {
+                for field in value
+                    .split(|byte| byte.is_ascii_whitespace())
+                    .filter(|field| !field.is_empty())
+                {
+                    parse_ascii_u32(field)?;
+                }
+            }
+            b"CapInh" | b"CapPrm" | b"CapEff" | b"CapBnd" | b"CapAmb" => {
+                if value.len() > 16 {
+                    return Err(invalid_data());
+                }
+                hex_u64(value)?;
+            }
+            b"NoNewPrivs" if !matches!(value, b"0" | b"1") => {
+                return Err(invalid_data());
+            }
+            b"Seccomp" | b"Seccomp_filters" => {
+                parse_ascii_u32(value)?;
+            }
+            b"Umask"
+                if value.is_empty()
+                    || value.len() > 4
+                    || value.iter().any(|byte| !(b'0'..=b'7').contains(byte)) =>
+            {
+                return Err(invalid_data());
+            }
+            _ => {}
+        }
+    }
+    if !uid || !gid {
+        return Err(invalid_data());
+    }
+    Ok(())
+}
+
+fn parse_process_limits(bytes: &[u8]) -> io::Result<(Value, bool)> {
+    let mut lines = bytes
+        .split(|byte| *byte == b'\n')
+        .map(<[u8]>::trim_ascii)
+        .filter(|line| !line.is_empty());
+    let header = lines.next().ok_or_else(invalid_data)?;
+    let expected: &[&[u8]] = &[b"Limit", b"Soft", b"Limit", b"Hard", b"Limit", b"Units"];
+    if !header
+        .split(|byte| byte.is_ascii_whitespace())
+        .filter(|field| !field.is_empty())
+        .eq(expected.iter().copied())
+    {
+        return Err(invalid_data());
+    }
+    let mut values = Vec::new();
+    let mut size = 2;
+    let mut truncated = false;
+    let mut output_full = false;
+    let mut count = 0;
+    for line in lines {
+        let (before, last) = last_proc_field(line)?;
+        let (before, hard, units) = if last == b"unlimited" || last.iter().all(u8::is_ascii_digit) {
+            (before, last, None)
+        } else {
+            let (before, hard) = last_proc_field(before)?;
+            (before, hard, Some(last))
+        };
+        let (name, soft) = last_proc_field(before)?;
+        let soft = parse_process_limit_value(soft)?;
+        let hard = parse_process_limit_value(hard)?;
+        count += 1;
+        if output_full {
+            continue;
+        }
+        let (name, name_truncated) = process_detail_text(name);
+        let mut value = Map::new();
+        value.insert("name".into(), name);
+        value.insert("soft".into(), soft);
+        value.insert("hard".into(), hard);
+        truncated |= name_truncated;
+        if let Some(units) = units {
+            let (units, units_truncated) = process_detail_text(units);
+            value.insert("units".into(), units);
+            truncated |= units_truncated;
+        }
+        let value = Value::Object(value);
+        let added = json_bytes(&value)? + usize::from(!values.is_empty());
+        if size + added > PROCESS_DETAIL_VALUE_BYTES {
+            output_full = true;
+            truncated = true;
+            continue;
+        }
+        size += added;
+        values.push(value);
+    }
+    if count == 0 {
+        return Err(invalid_data());
+    }
+    Ok((Value::Array(values), truncated))
+}
+
+fn last_proc_field(bytes: &[u8]) -> io::Result<(&[u8], &[u8])> {
+    let separator = bytes
+        .iter()
+        .rposition(|byte| byte.is_ascii_whitespace())
+        .ok_or_else(invalid_data)?;
+    let before = bytes[..separator].trim_ascii_end();
+    let last = &bytes[separator + 1..];
+    if before.is_empty() || last.is_empty() {
+        return Err(invalid_data());
+    }
+    Ok((before, last))
+}
+
+fn parse_process_limit_value(bytes: &[u8]) -> io::Result<Value> {
+    if bytes == b"unlimited" {
+        Ok(json!("unlimited"))
+    } else {
+        parse_u64(bytes).map(Value::from)
+    }
+}
+
+fn parse_process_io(bytes: &[u8]) -> io::Result<Value> {
+    let mut data = Map::new();
+    for line in bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        let separator = line
+            .iter()
+            .position(|byte| *byte == b':')
+            .ok_or_else(invalid_data)?;
+        let key = match &line[..separator] {
+            b"rchar" => "read_interface_bytes",
+            b"wchar" => "write_interface_bytes",
+            b"syscr" => "read_calls",
+            b"syscw" => "write_calls",
+            b"read_bytes" => "accounted_storage_read_bytes",
+            b"write_bytes" => "accounted_storage_write_bytes",
+            b"cancelled_write_bytes" => "accounted_cancelled_storage_write_bytes",
+            _ => continue,
+        };
+        if data.contains_key(key) {
+            return Err(invalid_data());
+        }
+        data.insert(key.into(), json!(parse_u64(&line[separator + 1..])?));
+    }
+    if data.len() != 7 {
+        return Err(invalid_data());
+    }
+    Ok(Value::Object(data))
 }
 
 fn add_process_status(data: &mut Map<String, Value>, bytes: &[u8]) {
+    add_process_status_limited(data, bytes, usize::MAX);
+}
+
+fn add_process_status_limited(
+    data: &mut Map<String, Value>,
+    bytes: &[u8],
+    max_groups: usize,
+) -> bool {
+    let mut truncated = false;
     for line in bytes.split(|byte| *byte == b'\n') {
         let Some(separator) = line.iter().position(|byte| *byte == b':') else {
             continue;
@@ -795,22 +1520,16 @@ fn add_process_status(data: &mut Map<String, Value>, bytes: &[u8]) {
                             "filesystem":values[3],
                         }),
                     );
-                    if key == b"Uid" {
-                        data.insert("uid".into(), json!(values[0]));
-                    }
                 }
             }
             b"Groups" => {
-                data.insert(
-                    "groups".into(),
-                    Value::Array(
-                        value
-                            .split(|byte| byte.is_ascii_whitespace())
-                            .filter_map(|value| parse_ascii_u32(value).ok())
-                            .map(Value::from)
-                            .collect(),
-                    ),
-                );
+                let mut groups = value
+                    .split(|byte| byte.is_ascii_whitespace())
+                    .filter_map(|value| parse_ascii_u32(value).ok())
+                    .map(Value::from);
+                let values = groups.by_ref().take(max_groups).collect();
+                truncated |= groups.next().is_some();
+                data.insert("groups".into(), Value::Array(values));
             }
             b"CapInh" | b"CapPrm" | b"CapEff" | b"CapBnd" | b"CapAmb" => {
                 let name = match key {
@@ -844,6 +1563,7 @@ fn add_process_status(data: &mut Map<String, Value>, bytes: &[u8]) {
             _ => {}
         }
     }
+    truncated
 }
 
 fn parse_mountinfo(line: &[u8], namespace: Option<Value>) -> Result<Value, ()> {
@@ -963,6 +1683,213 @@ mod tests {
             (pid, name, state, ppid),
             (42, b"worker ) name".as_slice(), b"S".as_slice(), 7)
         );
+    }
+
+    fn process_detail_stat(pid: u32, start_ticks: u64, rss_pages: &str) -> Vec<u8> {
+        format!(
+            "{pid} (worker ) name) S 7 0 0 0 0 0 0 0 0 0 31 17 0 0 20 0 3 0 {start_ticks} 65536 {rss_pages}"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn process_detail_parses_tick_counters_and_checked_memory_units() {
+        let bytes = process_detail_stat(42, 99, "8");
+        let stat = parse_process_detail_stat(&bytes).expect("parse process detail");
+        assert_eq!(
+            (stat.pid, stat.name, stat.state, stat.ppid),
+            (42, b"worker ) name".as_slice(), b"S".as_slice(), 7),
+        );
+        assert_eq!(
+            process_resources(&stat, 4096, 100).expect("resource units"),
+            json!({
+                "rss_bytes":32768,
+                "virtual_size_bytes":65536,
+                "threads":3,
+                "cpu_user_ticks":31,
+                "cpu_system_ticks":17,
+                "clock_ticks_per_second":100,
+            }),
+        );
+        assert!(parse_process_detail_stat(&process_detail_stat(42, 99, "-1")).is_err());
+        assert!(parse_process_detail_stat(b"42 (gone) S 7").is_err());
+        let bytes = process_detail_stat(42, 99, &u64::MAX.to_string());
+        let stat = parse_process_detail_stat(&bytes).expect("parse large RSS");
+        assert!(process_resources(&stat, 4096, 100).is_err());
+    }
+
+    #[test]
+    fn process_detail_rejects_reused_pid_but_accepts_changed_counters() {
+        assert!(
+            process_stat_matches(42, 99, &process_detail_stat(42, 99, "12"))
+                .expect("same process with changed RSS"),
+        );
+        assert!(
+            !process_stat_matches(42, 99, &process_detail_stat(42, 100, "8")).expect("reused PID"),
+        );
+        assert!(
+            !process_stat_matches(42, 99, &process_detail_stat(43, 99, "8"))
+                .expect("different PID"),
+        );
+        assert!(process_stat_matches(42, 99, b"").is_err());
+    }
+
+    #[test]
+    fn process_limits_preserve_unlimited_zero_and_unitless_priorities() {
+        let (value, truncated) = parse_process_limits(
+            b"Limit Soft Limit Hard Limit Units\n\
+              Max cpu time unlimited unlimited seconds\n\
+              Max open files 0 18446744073709551615 files\n\
+              Max nice priority 0 0\n",
+        )
+        .expect("parse limits");
+        assert!(!truncated);
+        assert_eq!(
+            value,
+            json!([
+                {"name":{"display":"Max cpu time"}, "soft":"unlimited", "hard":"unlimited", "units":{"display":"seconds"}},
+                {"name":{"display":"Max open files"}, "soft":0, "hard":u64::MAX, "units":{"display":"files"}},
+                {"name":{"display":"Max nice priority"}, "soft":0, "hard":0},
+            ]),
+        );
+        for bytes in [
+            b"Limit Soft Limit Hard Limit Units\n".as_slice(),
+            b"wrong header\nMax open files 1 2 files\n",
+            b"Limit Soft Limit Hard Limit Units\nMax open files -1 2 files\n",
+            b"Limit Soft Limit Hard Limit Units\nMax open files 1 18446744073709551616 files\n",
+            b"Limit Soft Limit Hard Limit Units\nMax open files 1 unknown files\n",
+        ] {
+            assert!(parse_process_limits(bytes).is_err(), "{bytes:?}");
+        }
+    }
+
+    #[test]
+    fn process_membership_budget_retains_only_complete_entries() {
+        let first = json!([{
+            "hierarchy_kind":"unified",
+            "namespace_relative_path":{"display":"/visible:name"},
+        }]);
+        let budget = serde_json::to_vec(&first)
+            .expect("serialize expected membership")
+            .len();
+        let source = b"0::/visible:name\n2:cpu,cpuacct:/other\n";
+        assert_eq!(
+            process_cgroup_membership(source, budget).expect("bounded membership"),
+            (first, true),
+        );
+        assert_eq!(
+            process_cgroup_membership(source, budget - 1).expect("omit oversized entry"),
+            (json!([]), true),
+        );
+        assert!(process_cgroup_membership(b"0::/visible:name\ninvalid\n", budget).is_err());
+    }
+
+    #[test]
+    fn process_io_rejects_missing_duplicate_negative_and_overflow_counters() {
+        let bytes = b"rchar: 0\nwchar: 2\nsyscr: 3\nsyscw: 4\nread_bytes: 5\nwrite_bytes: 6\ncancelled_write_bytes: 18446744073709551615\n";
+        assert_eq!(
+            parse_process_io(bytes).expect("parse IO"),
+            json!({
+                "read_interface_bytes":0,
+                "write_interface_bytes":2,
+                "read_calls":3,
+                "write_calls":4,
+                "accounted_storage_read_bytes":5,
+                "accounted_storage_write_bytes":6,
+                "accounted_cancelled_storage_write_bytes":u64::MAX,
+            }),
+        );
+        assert!(parse_process_io(b"rchar: 0\n").is_err());
+        let valid = std::str::from_utf8(bytes).expect("ASCII IO fixture");
+        for malformed in [
+            format!("{valid}rchar: 1\n"),
+            valid.replace("read_bytes: 5", "read_bytes: -1"),
+            valid.replace("write_bytes: 6", "write_bytes: 18446744073709551616"),
+        ] {
+            assert!(
+                parse_process_io(malformed.as_bytes()).is_err(),
+                "{malformed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn process_status_does_not_silently_drop_malformed_security_values() {
+        let valid = b"Uid: 1 2 3 4\nGid: 5 6 7 8\nGroups: 5 9\nCapEff: 00000000000000ff\nNoNewPrivs: 1\nSeccomp: 2\nUmask: 0022\n";
+        validate_process_status(valid).expect("valid process status");
+        for suffix in [
+            b"Uid: 1 invalid 3 4\n".as_slice(),
+            b"Groups: 5 invalid\n",
+            b"CapEff: not-hex\n",
+            b"NoNewPrivs: 2\n",
+            b"Seccomp: unknown\n",
+            b"Umask: 0088\n",
+        ] {
+            let mut malformed = valid.to_vec();
+            malformed.extend_from_slice(suffix);
+            assert!(validate_process_status(&malformed).is_err(), "{suffix:?}");
+        }
+        assert!(validate_process_status(b"Name: worker\n").is_err());
+    }
+
+    #[test]
+    fn process_detail_bounds_groups_without_losing_visible_credentials() {
+        let status = format!(
+            "Uid: 1 2 3 4\nGid: 5 6 7 8\nGroups: {}\n",
+            "4294967295 ".repeat(4096),
+        );
+        validate_process_status(status.as_bytes()).expect("large but valid status");
+        let mut data = Map::new();
+        assert!(add_process_status_limited(
+            &mut data,
+            status.as_bytes(),
+            PROCESS_DETAIL_VALUE_BYTES / 16,
+        ));
+        let value = Value::Object(data);
+        assert!(json_bytes(&value).expect("encoded status length") <= PROCESS_DETAIL_VALUE_BYTES);
+        assert_eq!(
+            value["uids"],
+            json!({"real":1, "effective":2, "saved":3, "filesystem":4}),
+        );
+        let groups = value["groups"].as_array().expect("bounded groups");
+        assert!(!groups.is_empty());
+        assert!(groups.len() < 4096);
+        assert!(groups.iter().all(|group| group == &Value::from(u32::MAX)));
+    }
+
+    #[test]
+    fn process_detail_bounds_encoded_arguments_and_binary_prefixes() {
+        let bytes = vec![0xff; PROCESS_SOURCE_BYTES as usize];
+        let (value, truncated) = process_detail_text(&bytes);
+        assert!(truncated);
+        assert!(json_bytes(&value).expect("encoded binary length") <= PROCESS_DETAIL_VALUE_BYTES);
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(value["raw_base64"].as_str().expect("raw binary prefix"))
+            .expect("decode binary prefix");
+        assert!(!raw.is_empty());
+        assert_eq!(raw, bytes[..raw.len()]);
+
+        let bytes = b"x\0".repeat(PROCESS_SOURCE_BYTES as usize / 2);
+        let (arguments, truncated) = process_detail_cmdline(&bytes).expect("bounded arguments");
+        assert!(truncated);
+        assert!(
+            json_bytes(&arguments).expect("encoded argument length") <= PROCESS_DETAIL_VALUE_BYTES
+        );
+        let arguments = arguments.as_array().expect("argument array");
+        assert!(!arguments.is_empty());
+        assert!(arguments.len() < bytes.len() / 2);
+        assert!(
+            arguments
+                .iter()
+                .all(|argument| argument == &json!({"display":"x"}))
+        );
+
+        let mut limits = b"Limit Soft Limit Hard Limit Units\n".to_vec();
+        limits.extend_from_slice(&b"Max open files 1 2 files\n".repeat(1024));
+        let (value, truncated) = parse_process_limits(&limits).expect("bounded limits");
+        assert!(truncated);
+        assert!(json_bytes(&value).expect("encoded limits length") <= PROCESS_DETAIL_VALUE_BYTES);
+        assert!(!value.as_array().expect("limit array").is_empty());
     }
 
     #[test]

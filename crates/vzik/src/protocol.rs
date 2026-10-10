@@ -11,7 +11,7 @@ use crate::cli::{Execution, GlobalLimits, Invocation};
 
 const TERMINAL_BYTE_RESERVE: u64 = 64 << 10;
 const TERMINAL_RECORD_RESERVE: u64 = 16;
-const PROTOCOL_VERSION: u64 = 3;
+pub(crate) const SCHEMA_VERSION: u64 = 4;
 pub(crate) const DEGRADED_EXIT_CODE: i32 = 3;
 
 /// Encodes Linux bytes as display text plus base64 when they are not UTF-8.
@@ -73,6 +73,7 @@ impl CollectionCompletion {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Coverage {
     pub observed: u64,
+    #[serde(skip_serializing)]
     pub scanned: u64,
     pub skipped: u64,
     pub denied: u64,
@@ -232,14 +233,20 @@ pub(crate) fn execute_controlled(
     )?;
 
     let mut degraded = false;
-    let mut total = Coverage::default();
+    let mut stream_truncated = false;
     let mut next_unstarted = 0;
     for (index, invocation) in execution.invocations.iter().enumerate() {
         if let Err(error) = check_deadline(context) {
             abort_stream(&mut sink, &error, None)?;
             return Err(error);
         }
-        match run_capability(&mut sink, invocation, context, &mut degraded, &mut total) {
+        match run_capability(
+            &mut sink,
+            invocation,
+            context,
+            &mut degraded,
+            &mut stream_truncated,
+        ) {
             Ok(CapabilityRun::Continue) => next_unstarted = index + 1,
             Ok(CapabilityRun::StopAfter) => {
                 next_unstarted = index + 1;
@@ -264,6 +271,7 @@ pub(crate) fn execute_controlled(
 
     let not_started_capabilities = &planned_capabilities[next_unstarted..];
     degraded |= !not_started_capabilities.is_empty();
+    stream_truncated |= !not_started_capabilities.is_empty();
     let outcome = if degraded {
         StreamOutcome::Degraded
     } else {
@@ -274,9 +282,9 @@ pub(crate) fn execute_controlled(
     sink.emit(
         json!({
             "type":"stream_end",
-            "outcome":outcome,
+            "collection_outcome":outcome,
             "counters":before_end,
-            "coverage":total,
+            "truncated":stream_truncated,
             "not_started_capabilities":not_started_capabilities,
         }),
         Priority::Terminal,
@@ -298,7 +306,7 @@ fn run_capability<W: Write>(
     invocation: &Invocation,
     context: ExecutionContext<'_>,
     degraded: &mut bool,
-    total: &mut Coverage,
+    stream_truncated: &mut bool,
 ) -> Result<CapabilityRun, ProtocolError> {
     let start = json!({
         "type":"capability_start",
@@ -309,8 +317,6 @@ fn run_capability<W: Write>(
     match sink.emit(start, Priority::Data) {
         Ok(()) => {}
         Err(error) if error.is_acquisition_limit() => {
-            *degraded = true;
-            total.truncated = true;
             return Ok(CapabilityRun::StopBefore);
         }
         Err(error) => return Err(error),
@@ -319,18 +325,18 @@ fn run_capability<W: Write>(
     #[cfg(target_os = "linux")]
     let report = crate::inventory::run(invocation, sink, context)?;
     #[cfg(not(target_os = "linux"))]
-    let report = CapabilityReport::unsupported();
+    let report = match (&invocation.capability, &invocation.request) {
+        (crate::cli::CapabilityId::Overview, crate::cli::Request::Overview { details }) => {
+            crate::overview::run(sink, context, *details)?
+        }
+        _ => CapabilityReport::unsupported(),
+    };
     check_deadline(context)?;
     if report.outcome != Outcome::Complete {
         *degraded = true;
     }
 
-    total.observed = total.observed.saturating_add(report.coverage.observed);
-    total.scanned = total.scanned.saturating_add(report.coverage.scanned);
-    total.skipped = total.skipped.saturating_add(report.coverage.skipped);
-    total.denied = total.denied.saturating_add(report.coverage.denied);
-    total.vanished = total.vanished.saturating_add(report.coverage.vanished);
-    total.truncated |= report.coverage.truncated;
+    *stream_truncated |= report.coverage.truncated;
 
     let global_limit_reached = report.limits_hit.contains(&"max_output_bytes_or_records");
     for limit in &report.limits_hit {
@@ -353,7 +359,6 @@ fn run_capability<W: Write>(
             "outcome":report.outcome,
             "counters":counters,
             "coverage":report.coverage,
-            "truncated":report.coverage.truncated,
             "limits_hit":report.limits_hit,
         }),
         Priority::Terminal,
@@ -397,7 +402,6 @@ pub struct RecordSink<'a, W> {
     limits: GlobalLimits,
     seq: u64,
     bytes: u64,
-    records: u64,
 }
 
 impl<'a, W: Write> RecordSink<'a, W> {
@@ -407,7 +411,6 @@ impl<'a, W: Write> RecordSink<'a, W> {
             limits,
             seq: 0,
             bytes: 0,
-            records: 0,
         }
     }
 
@@ -489,7 +492,7 @@ impl<'a, W: Write> RecordSink<'a, W> {
     }
 
     fn emit(&mut self, mut value: Value, priority: Priority) -> Result<(), ProtocolError> {
-        value["schema_version"] = json!(PROTOCOL_VERSION);
+        value["schema_version"] = json!(SCHEMA_VERSION);
         value["seq"] = json!(self.seq);
         let mut line = serde_json::to_vec(&value).map_err(ProtocolError::Encode)?;
         line.push(b'\n');
@@ -514,20 +517,19 @@ impl<'a, W: Write> RecordSink<'a, W> {
             return Err(ProtocolError::OutputLimit);
         }
 
-        if self.records.saturating_add(1) > record_limit {
+        if self.seq.saturating_add(1) > record_limit {
             return Err(ProtocolError::RecordLimit);
         }
 
         self.writer.write_all(&line).map_err(ProtocolError::Write)?;
         self.bytes += line.len() as u64;
-        self.records += 1;
         self.seq += 1;
 
         Ok(())
     }
 
     fn counters(&self) -> Value {
-        json!({"records":self.records, "jsonl_bytes":self.bytes})
+        json!({"jsonl_bytes":self.bytes})
     }
 
     fn flush(&mut self) -> Result<(), ProtocolError> {
@@ -649,13 +651,16 @@ mod tests {
             Some("stream_end")
         );
         assert_eq!(
-            records.last().and_then(|value| value["outcome"].as_str()),
+            records
+                .last()
+                .and_then(|value| value["collection_outcome"].as_str()),
             Some("degraded")
         );
+        assert!(records.last().expect("stream end").get("outcome").is_none());
         assert_eq!(
             records
                 .last()
-                .and_then(|value| value["coverage"]["truncated"].as_bool()),
+                .and_then(|value| value["truncated"].as_bool()),
             Some(true)
         );
     }

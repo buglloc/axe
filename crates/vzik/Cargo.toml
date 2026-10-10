@@ -26,7 +26,7 @@ signal-hook.workspace = true
 zbus = { version = "5.19", default-features = false, features = ["async-io", "blocking-api"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-rustix = { version = "1.1", features = ["fs"] }
+rustix = { version = "1.1", features = ["fs", "param"] }
 nix = { version = "0.30", features = ["net", "socket"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]

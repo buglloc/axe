@@ -8,6 +8,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::cli::MAX_LINE_BYTES;
+use crate::protocol::SCHEMA_VERSION;
 
 const OUTCOMES: [&str; 4] = ["complete", "partial", "unavailable", "unsupported"];
 const STREAM_OUTCOMES: [&str; 2] = ["complete", "degraded"];
@@ -74,7 +75,6 @@ pub(crate) struct CapabilitySummary {
     pub id: String,
     pub outcome: String,
     pub coverage: Value,
-    pub truncated: bool,
     pub limits_hit: Vec<String>,
 }
 
@@ -88,7 +88,7 @@ pub(crate) struct Summary {
     pub collector: Value,
     pub global_limits: Value,
     pub stream_outcome: String,
-    pub coverage: Value,
+    pub stream_truncated: bool,
     pub planned_capabilities: Vec<String>,
     pub not_started_capabilities: Vec<String>,
     pub capabilities: Vec<CapabilitySummary>,
@@ -104,7 +104,7 @@ pub fn validate(path: &Path, output: &mut impl Write) -> Result<(), Error> {
     write_document(
         output,
         &json!({
-            "schema_version": 3,
+            "schema_version": SCHEMA_VERSION,
             "valid": true,
             "records": summary.records,
             "jsonl_bytes": summary.bytes,
@@ -117,7 +117,7 @@ pub fn summarize(path: &Path, output: &mut impl Write) -> Result<(), Error> {
     let started = summary
         .capabilities
         .iter()
-        .map(|capability| capability.id.clone())
+        .map(|capability| capability.id.as_str())
         .collect::<Vec<_>>();
 
     let counts = json!({
@@ -129,13 +129,13 @@ pub fn summarize(path: &Path, output: &mut impl Write) -> Result<(), Error> {
     write_document(
         output,
         &json!({
-            "schema_version": 3,
+            "schema_version": SCHEMA_VERSION,
             "command_id": summary.command_id,
             "stream": {
-                "outcome": summary.stream_outcome,
+                "collection_outcome": summary.stream_outcome,
                 "records": summary.records,
                 "jsonl_bytes": summary.bytes,
-                "coverage": summary.coverage,
+                "truncated": summary.stream_truncated,
             },
             "capabilities": {
                 "planned": summary.planned_capabilities,
@@ -159,7 +159,7 @@ pub(crate) fn inspect(path: &Path) -> Result<Summary, Error> {
 }
 
 fn write_document(output: &mut impl Write, value: &Value) -> Result<(), Error> {
-    serde_json::to_writer(&mut *output, value)
+    serde_json::to_writer_pretty(&mut *output, value)
         .map_err(|error| Error::Write(io::Error::other(error)))?;
     output.write_all(b"\n").map_err(Error::Write)
 }
@@ -205,8 +205,11 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
             .as_object()
             .ok_or_else(|| invalid_error(line_number, "record must be a JSON object"))?;
 
-        if object.get("schema_version").and_then(Value::as_u64) != Some(3) {
-            return invalid(line_number, "schema_version must be 3");
+        if object.get("schema_version").and_then(Value::as_u64) != Some(SCHEMA_VERSION) {
+            return invalid(
+                line_number,
+                format!("schema_version must be {SCHEMA_VERSION}"),
+            );
         }
         if object.get("seq").and_then(Value::as_u64) != Some(expected_seq) {
             return invalid(line_number, format!("seq must be {expected_seq}"));
@@ -318,12 +321,7 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
             "capability_end" => {
                 let capability =
                     require_capability(object, open_capability.as_deref(), line_number)?;
-                verify_counters(
-                    object.get("counters"),
-                    expected_seq,
-                    bytes_before,
-                    line_number,
-                )?;
+                verify_counters(object.get("counters"), bytes_before, line_number)?;
                 let outcome = valid_capability_outcome(object.get("outcome"), line_number)?;
                 let coverage = object
                     .get("coverage")
@@ -332,11 +330,14 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                     .ok_or_else(|| {
                         invalid_error(line_number, "capability_end.coverage must be an object")
                     })?;
-                let truncated = object
+                let truncated = coverage
                     .get("truncated")
                     .and_then(Value::as_bool)
                     .ok_or_else(|| {
-                        invalid_error(line_number, "capability_end.truncated must be a boolean")
+                        invalid_error(
+                            line_number,
+                            "capability_end.coverage.truncated must be a boolean",
+                        )
                     })?;
                 let limits_hit = object
                     .get("limits_hit")
@@ -360,11 +361,11 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                     .get_mut(outcome)
                     .expect("all valid outcomes initialized")
                     .push(capability.to_string());
+                summary.stream_truncated |= truncated;
                 summary.capabilities.push(CapabilitySummary {
                     id: capability.to_string(),
                     outcome: outcome.to_string(),
                     coverage,
-                    truncated,
                     limits_hit,
                 });
                 open_capability = None;
@@ -374,20 +375,14 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                 if open_capability.is_some() {
                     return invalid(line_number, "stream_end precedes capability_end");
                 }
-                verify_counters(
-                    object.get("counters"),
-                    expected_seq,
-                    bytes_before,
-                    line_number,
-                )?;
+                verify_counters(object.get("counters"), bytes_before, line_number)?;
                 summary.stream_outcome =
-                    valid_stream_outcome(object.get("outcome"), line_number)?.into();
-                summary.coverage = object
-                    .get("coverage")
-                    .filter(|value| value.is_object())
-                    .cloned()
+                    valid_stream_outcome(object.get("collection_outcome"), line_number)?.into();
+                let truncated = object
+                    .get("truncated")
+                    .and_then(Value::as_bool)
                     .ok_or_else(|| {
-                        invalid_error(line_number, "stream_end.coverage must be an object")
+                        invalid_error(line_number, "stream_end.truncated must be a boolean")
                     })?;
                 summary.not_started_capabilities = required_string_array(
                     object.get("not_started_capabilities"),
@@ -395,14 +390,13 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                     "not_started_capabilities",
                 )?;
 
-                let mut observed_plan = summary
+                let observed_plan = summary
                     .capabilities
                     .iter()
-                    .map(|capability| capability.id.clone())
-                    .collect::<Vec<_>>();
-                observed_plan.extend(summary.not_started_capabilities.iter().cloned());
+                    .map(|capability| capability.id.as_str())
+                    .chain(summary.not_started_capabilities.iter().map(String::as_str));
 
-                if observed_plan != summary.planned_capabilities {
+                if !observed_plan.eq(summary.planned_capabilities.iter().map(String::as_str)) {
                     return invalid(
                         line_number,
                         "started and not-started capabilities do not match the declared plan",
@@ -423,19 +417,21 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                 if summary.stream_outcome != expected_outcome {
                     return invalid(
                         line_number,
-                        format!("stream outcome must be {expected_outcome}"),
+                        format!("stream_end.collection_outcome must be {expected_outcome}"),
+                    );
+                }
+                summary.stream_truncated |= !summary.not_started_capabilities.is_empty();
+                if truncated != summary.stream_truncated {
+                    return invalid(
+                        line_number,
+                        format!("stream_end.truncated must be {}", summary.stream_truncated),
                     );
                 }
                 saw_end = true;
             }
             "stream_abort" => {
                 require_started(saw_start, line_number)?;
-                verify_counters(
-                    object.get("counters"),
-                    expected_seq,
-                    bytes_before,
-                    line_number,
-                )?;
+                verify_counters(object.get("counters"), bytes_before, line_number)?;
                 if object.get("complete").and_then(Value::as_bool) != Some(false) {
                     return invalid(line_number, "stream_abort.complete must be false");
                 }
@@ -525,19 +521,11 @@ fn require_capability<'a>(
     }
 }
 
-fn verify_counters(
-    counters: Option<&Value>,
-    records: u64,
-    bytes: u64,
-    line: u64,
-) -> Result<(), Error> {
+fn verify_counters(counters: Option<&Value>, bytes: u64, line: u64) -> Result<(), Error> {
     let counters = counters
         .and_then(Value::as_object)
         .ok_or_else(|| invalid_error(line, "counters must be an object"))?;
 
-    if counters.get("records").and_then(Value::as_u64) != Some(records) {
-        return invalid(line, format!("counters.records must be {records}"));
-    }
     if counters.get("jsonl_bytes").and_then(Value::as_u64) != Some(bytes) {
         return invalid(line, format!("counters.jsonl_bytes must be {bytes}"));
     }
@@ -573,7 +561,7 @@ fn valid_capability_outcome(value: Option<&Value>, line: u64) -> Result<&str, Er
 }
 
 fn valid_stream_outcome(value: Option<&Value>, line: u64) -> Result<&str, Error> {
-    valid_enum(value, line, "outcome", &STREAM_OUTCOMES)
+    valid_enum(value, line, "collection_outcome", &STREAM_OUTCOMES)
 }
 
 fn valid_enum<'a>(
@@ -607,7 +595,7 @@ mod tests {
 
     use super::*;
 
-    fn stream_fixture() -> Vec<u8> {
+    fn stream_fixture() -> Vec<Value> {
         let mut records = vec![json!({
             "type":"stream_start",
             "command_id":"fixture",
@@ -647,32 +635,40 @@ mod tests {
                 "type":"capability_end",
                 "capability":capability,
                 "outcome":outcome,
-                "coverage":{"observed":1},
-                "truncated":false,
+                "coverage":{
+                    "observed":1,
+                    "skipped":0,
+                    "denied":0,
+                    "vanished":0,
+                    "truncated":false,
+                },
                 "limits_hit":[],
             }));
         }
         records.push(json!({
             "type":"stream_end",
-            "outcome":"degraded",
-            "coverage":{"observed":4},
+            "collection_outcome":"degraded",
+            "truncated":false,
             "not_started_capabilities":[],
         }));
 
+        records
+    }
+
+    fn encode_fixture(records: &mut [Value]) -> Vec<u8> {
         let mut output = Vec::new();
-        for (seq, mut record) in records.into_iter().enumerate() {
-            record["schema_version"] = json!(3);
+        for (seq, record) in records.iter_mut().enumerate() {
+            record["schema_version"] = json!(SCHEMA_VERSION);
             record["seq"] = json!(seq);
             if matches!(
                 record["type"].as_str(),
                 Some("capability_end" | "stream_end")
             ) {
                 record["counters"] = json!({
-                    "records": seq,
                     "jsonl_bytes": output.len(),
                 });
             }
-            serde_json::to_writer(&mut output, &record).expect("encode fixture record");
+            serde_json::to_writer(&mut output, &*record).expect("encode fixture record");
             output.push(b'\n');
         }
         output
@@ -680,7 +676,7 @@ mod tests {
 
     #[test]
     fn validates_complete_protocol_structure_and_counters() {
-        let fixture = stream_fixture();
+        let fixture = encode_fixture(&mut stream_fixture());
         let summary = scan(Cursor::new(&fixture)).expect("validate fixture");
 
         assert_eq!(summary.records, 11);
@@ -692,7 +688,8 @@ mod tests {
 
     #[test]
     fn summarizes_every_capability_outcome_and_diagnostics() {
-        let summary = scan(Cursor::new(stream_fixture())).expect("summarize fixture");
+        let summary =
+            scan(Cursor::new(encode_fixture(&mut stream_fixture()))).expect("summarize fixture");
 
         for outcome in OUTCOMES {
             assert_eq!(
@@ -702,6 +699,7 @@ mod tests {
             );
         }
         assert_eq!(summary.stream_outcome, "degraded");
+        assert!(!summary.stream_truncated);
         assert_eq!(summary.diagnostic_records, 1);
         assert_eq!(summary.diagnostic_count, 2);
         assert_eq!(summary.diagnostics_by_status["permission_denied"], 2);
@@ -709,18 +707,120 @@ mod tests {
     }
 
     #[test]
-    fn rejects_sequence_gaps() {
-        let mut fixture = stream_fixture();
-        let needle = b"\"seq\":1";
-        let start = fixture
-            .windows(needle.len())
-            .position(|window| window == needle)
-            .expect("find second sequence");
-        fixture[start..start + needle.len()].copy_from_slice(b"\"seq\":9");
+    fn rejects_collection_outcome_inconsistent_with_capabilities() {
+        for expected in ["complete", "degraded"] {
+            let mut records = stream_fixture();
+            if expected == "complete" {
+                let terminal = records.pop().expect("stream end");
+                records.truncate(3);
+                records.push(terminal);
+                records[0]["planned_capabilities"] = json!(["fixture.complete"]);
+            }
+            records.last_mut().expect("stream end")["collection_outcome"] = json!(expected);
+            let summary = scan(Cursor::new(encode_fixture(&mut records)))
+                .expect("honest collection outcome validates");
+            assert_eq!(summary.stream_outcome, expected);
 
-        let error = scan(Cursor::new(fixture))
-            .err()
-            .expect("reject sequence gap");
-        assert!(error.to_string().contains("seq must be 1"));
+            records.last_mut().expect("stream end")["collection_outcome"] =
+                json!(if expected == "complete" {
+                    "degraded"
+                } else {
+                    "complete"
+                });
+            let error = scan(Cursor::new(encode_fixture(&mut records)))
+                .err()
+                .expect("reject inconsistent collection outcome");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("stream_end.collection_outcome must be {expected}"))
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_missing_collection_outcome_even_with_old_outcome_key() {
+        for old_outcome in [None, Some("degraded")] {
+            let mut records = stream_fixture();
+            let terminal = records
+                .last_mut()
+                .expect("stream end")
+                .as_object_mut()
+                .expect("terminal object");
+            terminal.remove("collection_outcome");
+            if let Some(outcome) = old_outcome {
+                terminal.insert("outcome".into(), json!(outcome));
+            }
+            let error = scan(Cursor::new(encode_fixture(&mut records)))
+                .err()
+                .expect("collection outcome is required without legacy fallback");
+            assert!(
+                error
+                    .to_string()
+                    .contains("collection_outcome must be a string")
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_terminal_truncation_inconsistent_with_acquisition() {
+        for (capability_truncated, not_started) in [(false, false), (true, false), (false, true)] {
+            let mut records = stream_fixture();
+            let partial = records
+                .iter_mut()
+                .find(|record| {
+                    record["type"] == "capability_end" && record["capability"] == "fixture.partial"
+                })
+                .expect("partial capability");
+            partial["coverage"]["truncated"] = json!(capability_truncated);
+            if capability_truncated {
+                partial["limits_hit"] = json!(["max_items"]);
+            }
+            if not_started {
+                records[0]["planned_capabilities"]
+                    .as_array_mut()
+                    .expect("planned capabilities")
+                    .push(json!("fixture.not_started"));
+                records.last_mut().expect("stream end")["not_started_capabilities"] =
+                    json!(["fixture.not_started"]);
+            }
+            let expected_truncated = capability_truncated || not_started;
+            records.last_mut().expect("stream end")["truncated"] = json!(expected_truncated);
+            let summary = scan(Cursor::new(encode_fixture(&mut records)))
+                .expect("honest acquisition state validates");
+            assert_eq!(summary.stream_truncated, expected_truncated);
+
+            records.last_mut().expect("stream end")["truncated"] = json!(!expected_truncated);
+            let error = scan(Cursor::new(encode_fixture(&mut records)))
+                .err()
+                .expect("reject inconsistent terminal truncation");
+            assert!(error.to_string().contains(&format!(
+                "stream_end.truncated must be {expected_truncated}"
+            )));
+        }
+    }
+
+    #[test]
+    fn rejects_schema_mismatches_and_sequence_gaps() {
+        for (needle, replacement, message) in [
+            (
+                &b"\"schema_version\":4"[..],
+                &b"\"schema_version\":3"[..],
+                "schema_version must be 4",
+            ),
+            (&b"\"seq\":1"[..], &b"\"seq\":9"[..], "seq must be 1"),
+        ] {
+            let mut fixture = encode_fixture(&mut stream_fixture());
+            let start = fixture
+                .windows(needle.len())
+                .position(|window| window == needle)
+                .expect("find record field");
+            fixture[start..start + needle.len()].copy_from_slice(replacement);
+
+            let error = scan(Cursor::new(fixture))
+                .err()
+                .expect("reject invalid record");
+            assert!(error.to_string().contains(message));
+        }
     }
 }

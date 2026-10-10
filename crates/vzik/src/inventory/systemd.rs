@@ -41,7 +41,7 @@ type ListedUnit = (
 
 #[derive(Clone)]
 pub(super) struct ManagerTarget {
-    pub(super) scope: &'static str,
+    pub(super) selection_scope: &'static str,
     pub(super) user: Option<Vec<u8>>,
     pub(super) uid: Option<u32>,
     pub(super) socket: PathBuf,
@@ -279,12 +279,17 @@ pub(super) fn manager_targets(
 ) -> io::Result<(Vec<ManagerTarget>, Option<io::Error>)> {
     if let Some(user) = user {
         let uid = resolve_user(user)?;
+        let selection_scope = if socket.is_some() {
+            "explicit_socket"
+        } else {
+            "user"
+        };
         let socket = socket
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from(format!("/run/user/{uid}/bus")));
         return Ok((
             vec![ManagerTarget {
-                scope: "user",
+                selection_scope,
                 user: Some(user.as_bytes().to_vec()),
                 uid: Some(uid),
                 socket,
@@ -296,7 +301,7 @@ pub(super) fn manager_targets(
     if let Some(socket) = socket {
         return Ok((
             vec![ManagerTarget {
-                scope: "system",
+                selection_scope: "explicit_socket",
                 user: None,
                 uid: None,
                 socket: socket.to_path_buf(),
@@ -306,7 +311,7 @@ pub(super) fn manager_targets(
     }
 
     let mut targets = vec![ManagerTarget {
-        scope: "system",
+        selection_scope: "system",
         user: None,
         uid: None,
         socket: PathBuf::from(SYSTEM_BUS_SOCKET),
@@ -359,7 +364,7 @@ fn discover_user_managers() -> (Vec<ManagerTarget>, Option<io::Error>) {
         }
 
         targets.push(ManagerTarget {
-            scope: "user",
+            selection_scope: "user",
             user: users.remove(&uid),
             uid: Some(uid),
             socket,
@@ -487,7 +492,7 @@ fn listed_unit_data(target: &ManagerTarget, unit: &ListedUnit) -> Map<String, Va
     data.insert("following".into(), json!(unit.5));
     data.insert("object_path".into(), json!(unit.6.as_str()));
     data.insert("unit_type".into(), json!(unit_type(&unit.0)));
-    data.insert("manager_scope".into(), json!(target.scope));
+    data.insert("selection_scope".into(), json!(target.selection_scope));
     data.insert("socket".into(), path_value(&target.socket));
     if let Some(user) = target.user.as_deref() {
         data.insert("manager_user".into(), text(user));

@@ -55,9 +55,11 @@ Bundled commands are built into `axe`; Store commands are signed on-demand artif
 | Filesystem | `inotifywait`, `inotifywatch`, `tree`, `which` | File events, directory trees, and executable lookup |
 | AXE control | `commands`, `doctor`, `clean-tools`, `refresh-tools` | Command inventory, diagnostics, and AXE Store cache |
 | Services | `sshd` | Certificate-only SSH/SFTP server |
-| Evidence | `vzik` | Bounded host/container evidence in JSONL |
+| Evidence | `vzik` | Passive host overview, targeted process inspection, bounded security evidence in JSONL, and sealed private captures |
 
 For the bundled HTTP applet, see [HTTP requests](http.md).
+
+For passive host context and targeted evidence, see [Vzik](vzik.md).
 
 ## Process and network compatibility
 

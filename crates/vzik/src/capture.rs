@@ -3,18 +3,17 @@ use std::fmt::{self, Write as _};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::cli::CaptureExecution;
+use crate::cli::{CaptureDestination, CaptureExecution};
 use crate::{protocol, stream};
 
 const RECEIPT_SCHEMA: &str = "raskop/vzik-capture-receipt";
-const RECEIPT_SCHEMA_VERSION: u64 = 3;
 
 #[derive(Debug)]
 pub enum Error {
@@ -107,11 +106,32 @@ pub fn execute(
 ) -> Result<protocol::CollectionCompletion, Error> {
     let CaptureExecution {
         execution,
-        output: capture_requested,
-        receipt: receipt_requested,
-        stderr,
+        destination,
     } = request;
-    let stderr_requested = stderr.unwrap_or_else(|| append_suffix(&capture_requested, ".stderr"));
+    let (capture_requested, receipt_requested, stderr_requested) = match destination {
+        CaptureDestination::Directory(directory) => {
+            let directory = prepare_path(&directory)?;
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            builder.mode(0o700);
+            builder
+                .create(&directory)
+                .map_err(|source| io_path_error("create capture directory", &directory, source))?;
+            (
+                directory.join("capture.jsonl"),
+                directory.join("receipt.json"),
+                directory.join("stderr.jsonl"),
+            )
+        }
+        CaptureDestination::Files {
+            output,
+            receipt,
+            stderr,
+        } => {
+            let stderr = stderr.unwrap_or_else(|| append_suffix(&output, ".stderr"));
+            (output, receipt, stderr)
+        }
+    };
     let capture_path = prepare_path(&capture_requested)?;
     let receipt_path = prepare_path(&receipt_requested)?;
     let stderr_path = prepare_path(&stderr_requested)?;
@@ -164,16 +184,15 @@ pub fn execute(
 
     let capture = &receipt["capture"];
     let result = json!({
-        "schema_version": 3,
-        "outcome": completion.outcome,
+        "schema_version": protocol::SCHEMA_VERSION,
+        "collection_outcome": completion.outcome,
         "artifact_status": "sealed",
-        "receipt": receipt_requested,
-        "capture": capture_requested,
-        "stderr": stderr_requested,
+        "receipt": path_value(&receipt_requested),
+        "capture": path_value(&capture_requested),
+        "stderr": path_value(&stderr_requested),
         "command_id": capture["command_id"],
         "coverage_summary": {
-            "stream_outcome": capture["stream_outcome"],
-            "stream_coverage": capture["stream_coverage"],
+            "stream_truncated": capture["stream_truncated"],
             "planned_capabilities": capture["planned_capabilities"],
             "started_capabilities": capture["started_capabilities"],
             "not_started_capabilities": capture["not_started_capabilities"],
@@ -182,7 +201,7 @@ pub fn execute(
             "diagnostics": capture["diagnostics"],
         },
     });
-    serde_json::to_writer(&mut *stdout, &result)
+    serde_json::to_writer_pretty(&mut *stdout, &result)
         .map_err(|source| io_error("write summary", io::Error::other(source)))?;
     stdout
         .write_all(b"\n")
@@ -203,7 +222,6 @@ fn build_receipt(capture_path: &Path, stderr_path: &Path) -> Result<Value, strea
                 "id": capability.id,
                 "outcome": capability.outcome,
                 "coverage": capability.coverage,
-                "truncated": capability.truncated,
                 "limits_hit": capability.limits_hit,
             })
         })
@@ -223,10 +241,10 @@ fn build_receipt(capture_path: &Path, stderr_path: &Path) -> Result<Value, strea
 
     Ok(json!({
         "schema": RECEIPT_SCHEMA,
-        "schema_version": RECEIPT_SCHEMA_VERSION,
+        "schema_version": protocol::SCHEMA_VERSION,
         "expected_command": summary.command_id,
         "capture": {
-            "path": capture_path,
+            "path": path_value(capture_path),
             "sha256": capture_sha256,
             "bytes": capture_bytes,
             "records": summary.records,
@@ -235,8 +253,8 @@ fn build_receipt(capture_path: &Path, stderr_path: &Path) -> Result<Value, strea
             "invocation_kind": summary.invocation_kind,
             "collector": summary.collector,
             "global_limits": summary.global_limits,
-            "stream_outcome": summary.stream_outcome,
-            "stream_coverage": summary.coverage,
+            "collection_outcome": summary.stream_outcome,
+            "stream_truncated": summary.stream_truncated,
             "planned_capabilities": summary.planned_capabilities,
             "started_capabilities": started_capabilities,
             "capability_counts": capability_counts,
@@ -250,7 +268,7 @@ fn build_receipt(capture_path: &Path, stderr_path: &Path) -> Result<Value, strea
             },
         },
         "stderr": {
-            "path": stderr_path,
+            "path": path_value(stderr_path),
             "sha256": stderr_sha256,
             "bytes": stderr_bytes,
         },
@@ -260,7 +278,7 @@ fn build_receipt(capture_path: &Path, stderr_path: &Path) -> Result<Value, strea
 fn write_receipt(path: &Path, requested_path: &Path, receipt: &Value) -> Result<(), Error> {
     let mut file = create_new(path, requested_path, "create receipt")?;
     let result = (|| {
-        serde_json::to_writer(&mut file, receipt)
+        serde_json::to_writer_pretty(&mut file, receipt)
             .map_err(|source| io_error("encode receipt", io::Error::other(source)))?;
         file.write_all(b"\n")
             .map_err(|source| io_error("write receipt", source))?;
@@ -318,6 +336,13 @@ fn hash_file(path: &Path) -> io::Result<(String, u64)> {
         write!(encoded, "{byte:02x}").expect("writing to String cannot fail");
     }
     Ok((encoded, bytes))
+}
+
+fn path_value(path: &Path) -> Value {
+    match path.to_str() {
+        Some(path) => json!(path),
+        None => crate::cli::linux_path(path),
+    }
 }
 
 fn prepare_path(path: &Path) -> Result<PathBuf, Error> {

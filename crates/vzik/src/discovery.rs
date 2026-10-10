@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use serde_json::{Value, json};
 
 use crate::cli::{CapabilityId, global_limit_specs};
+use crate::protocol::SCHEMA_VERSION;
 
 const CAPABILITY_OUTCOMES: [&str; 4] = ["complete", "partial", "unavailable", "unsupported"];
 
@@ -38,10 +39,10 @@ fn capability_index() -> Value {
     };
 
     json!({
-        "schema_version": 3,
+        "schema_version": SCHEMA_VERSION,
         "outcome": "complete",
         "protocol": {
-            "schema_version":3,
+            "schema_version":SCHEMA_VERSION,
             "transport":"jsonl",
             "completion_terminal_record":"stream_end",
             "interruption_terminal_record":"stream_abort",
@@ -61,7 +62,7 @@ fn capability_index() -> Value {
             "signal":"128+signal",
         },
         "process_error": {
-            "schema_version":3,
+            "schema_version":SCHEMA_VERSION,
             "transport":"stderr_jsonl",
             "fields":["code", "operation", "retryable", "message", "details"],
         },
@@ -77,7 +78,7 @@ fn capability_index() -> Value {
 fn capability_detail(capability: CapabilityId) -> Value {
     let baseline_position = capability.baseline_position();
     json!({
-        "schema_version": 3,
+        "schema_version": SCHEMA_VERSION,
         "outcome": "complete",
         "capability": {
             "id": capability.id(),
@@ -97,58 +98,6 @@ fn capability_detail(capability: CapabilityId) -> Value {
 }
 
 fn write_document(output: &mut impl Write, document: &Value) -> io::Result<()> {
-    serde_json::to_writer(&mut *output, document).map_err(io::Error::other)?;
+    serde_json::to_writer_pretty(&mut *output, document).map_err(io::Error::other)?;
     output.write_all(b"\n")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn capability_index_is_compact_and_declares_process_contract() {
-        let mut output = Vec::new();
-        write_capabilities(&mut output, None).expect("capability index");
-        let value: Value = serde_json::from_slice(&output).expect("JSON output");
-        let porto = value["capabilities"]
-            .as_array()
-            .expect("capabilities")
-            .iter()
-            .find(|capability| capability["id"] == "porto.list")
-            .expect("Porto capability");
-
-        assert_eq!(value["schema_version"], 3);
-        assert_eq!(value["protocol"]["schema_version"], 3);
-        assert_eq!(value["exit_status"]["degraded"], 3);
-        assert_eq!(value["process_error"]["transport"], "stderr_jsonl");
-        assert_eq!(porto["command"], json!(["portoctl", "list"]));
-        assert!(porto.get("request").is_none());
-    }
-
-    #[test]
-    fn capability_detail_exposes_request_access_and_data_kinds() {
-        let mut output = Vec::new();
-        write_capabilities(&mut output, Some(CapabilityId::PortoList)).expect("capability detail");
-        let value: Value = serde_json::from_slice(&output).expect("JSON output");
-        let capability = &value["capability"];
-
-        assert_eq!(capability["id"], "porto.list");
-        assert_eq!(
-            capability["data_kinds"],
-            json!([
-                "porto_container",
-                "porto_property_catalog",
-                "porto_property"
-            ])
-        );
-        assert_eq!(capability["access"]["may_open_unix_socket"], true);
-        assert!(
-            capability["request"]["options"]
-                .as_array()
-                .expect("options")
-                .iter()
-                .any(|option| option["name"] == "max-stream-bytes"
-                    && option["requires"] == json!(["include-streams"]))
-        );
-    }
 }

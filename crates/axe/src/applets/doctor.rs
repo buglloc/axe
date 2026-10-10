@@ -8,8 +8,9 @@ use base64::Engine as _;
 use brush_shell::bundled::{InProcessInvocation, ShellSnapshot};
 use serde::Serialize;
 use vzik::environment::{
-    Failure, HostObservation, IsolationObservation, KernelObservation, MemoryObservation,
-    Observation, ObservationStatus, RestrictionObservation,
+    Confidence, Failure, HostObservation, IdMapRange, IsolationDetection, IsolationObservation,
+    IsolationVerdict, KernelObservation, MemoryObservation, Observation, ObservationStatus,
+    ResourceObservation, RestrictionObservation, SubsystemObservation,
 };
 
 use crate::executable::{ExecutableObservation, RelayObservation, SelfExecProbe};
@@ -22,7 +23,7 @@ Report the current AXE process, shell, host, isolation indicators, restrictions,
 Options:\n\
   --path DIR  use DIR for filesystem probes\n\
   --verbose   include full observations, probe stages, and empty sections\n\
-  --json      emit one compact, complete axe_doctor schema v3 document\n\
+  --json      emit one compact, complete axe_doctor schema v4 document\n\
   -h, --help  display this help and exit\n";
 const REPORTED_ENVIRONMENT_NAMES: &[&str] = &[
     "HOME",
@@ -135,6 +136,8 @@ pub(crate) struct HostSection {
     pub distro: Observation<vzik::environment::DistroObservation>,
     pub kernel: KernelObservation,
     pub memory: MemoryObservation,
+    pub resources: ResourceObservation,
+    pub subsystems: SubsystemObservation,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -348,7 +351,7 @@ fn collect_report(options: &Options, scope: ScopeInput) -> DoctorReport {
 
     DoctorReport {
         schema: "axe_doctor",
-        schema_version: 3,
+        schema_version: 4,
         scope: scope_name,
         axe: AxeSection {
             version: crate::VERSION.to_owned(),
@@ -369,6 +372,8 @@ fn collect_report(options: &Options, scope: ScopeInput) -> DoctorReport {
             distro,
             kernel: passive.kernel,
             memory: passive.memory,
+            resources: passive.resources,
+            subsystems: passive.subsystems,
         },
         environment: EnvironmentSection {
             description: "selected exported environment variables",
@@ -1245,6 +1250,16 @@ fn render_human(report: &DoctorReport, verbose: bool) -> String {
         "Available memory",
         &bytes_text(&report.host.memory.available_bytes),
     );
+    fact(
+        &mut output,
+        "Online CPUs",
+        &observation_text(&report.host.resources.cpu_online),
+    );
+    fact(
+        &mut output,
+        "Load average (1/5/15 min)",
+        &observation_text(&report.host.resources.load_average),
+    );
     if verbose {
         fact(
             &mut output,
@@ -1256,6 +1271,38 @@ fn render_human(report: &DoctorReport, verbose: bool) -> String {
             "Physical memory",
             &bytes_text(&report.host.memory.physical_bytes),
         );
+        fact(
+            &mut output,
+            "Allowed CPUs",
+            &observation_text(&report.host.resources.cpu_allowed_list),
+        );
+        fact(
+            &mut output,
+            "Uptime seconds",
+            &observation_text(&report.host.resources.uptime_seconds),
+        );
+        fact(
+            &mut output,
+            "Available swap",
+            &bytes_text(&report.host.memory.swap_free_bytes),
+        );
+        for (name, observation) in [
+            ("CPU pressure", &report.host.resources.pressure.cpu),
+            ("Memory pressure", &report.host.resources.pressure.memory),
+            ("I/O pressure", &report.host.resources.pressure.io),
+        ] {
+            fact(&mut output, name, &observation_text(observation));
+        }
+        for (name, observation) in [
+            ("procfs visible", &report.host.subsystems.procfs),
+            ("sysfs visible", &report.host.subsystems.sysfs),
+            ("cgroup v2 visible", &report.host.subsystems.cgroup_v2),
+            ("systemd marker", &report.host.subsystems.systemd),
+            ("D-Bus socket", &report.host.subsystems.dbus),
+            ("Porto socket", &report.host.subsystems.porto),
+        ] {
+            fact(&mut output, name, &observation_text(observation));
+        }
     }
 
     section(&mut output, "Isolation indicators");
@@ -1313,12 +1360,12 @@ fn render_human(report: &DoctorReport, verbose: bool) -> String {
         fact(
             &mut output,
             "UID mapping",
-            &observation_text(&report.restrictions.uid_map),
+            &id_map_text(&report.restrictions.uid_map),
         );
         fact(
             &mut output,
             "GID mapping",
-            &observation_text(&report.restrictions.gid_map),
+            &id_map_text(&report.restrictions.gid_map),
         );
     }
 
@@ -1679,6 +1726,32 @@ fn capability_set_summary_text(capabilities: &Observation<Vec<String>>) -> Strin
     }
 }
 
+fn id_map_text(observation: &Observation<Vec<IdMapRange>>) -> String {
+    use std::fmt::Write as _;
+
+    match (&observation.status, &observation.value) {
+        (ObservationStatus::Available, Some(ranges)) if ranges.is_empty() => {
+            "no IDs mapped to the parent namespace".into()
+        }
+        (ObservationStatus::Available, Some(ranges)) => {
+            let mut output = String::new();
+            for (index, range) in ranges.iter().enumerate() {
+                if index != 0 {
+                    output.push_str("; ");
+                }
+                write!(
+                    output,
+                    "current namespace {} -> parent namespace {} (length {})",
+                    range.namespace_start, range.parent_namespace_start, range.length
+                )
+                .expect("write mapping to string");
+            }
+            output
+        }
+        _ => observation_text(observation),
+    }
+}
+
 fn section(output: &mut String, title: &str) {
     output.push('\n');
     output.push_str(title);
@@ -1752,22 +1825,24 @@ fn distro_text(observation: &Observation<vzik::environment::DistroObservation>) 
     }
 }
 
-fn isolation_text(layer: &vzik::environment::IsolationLayer) -> String {
-    let mut value = match layer.verdict.status {
-        ObservationStatus::Available => "heuristic match".into(),
-        ObservationStatus::Unknown => "unknown".into(),
-        _ => observation_text(&layer.verdict),
-    };
-    if layer.provider.status == ObservationStatus::Available {
-        value.push_str(" — ");
-        value.push_str(&observation_text(&layer.provider));
+fn isolation_text(observation: &Observation<IsolationDetection>) -> String {
+    match (&observation.status, &observation.value) {
+        (ObservationStatus::Available, Some(detection)) => {
+            let verdict = match detection.verdict {
+                IsolationVerdict::IndicatorPresent => "heuristic match",
+            };
+            let confidence = match detection.confidence {
+                Confidence::Low => "low",
+                Confidence::Medium => "medium",
+                Confidence::High => "high",
+            };
+            format!(
+                "{verdict} — {} ({confidence} confidence)",
+                escape_human(&detection.provider)
+            )
+        }
+        _ => observation_text(observation),
     }
-    if layer.confidence.status == ObservationStatus::Available {
-        value.push_str(" (");
-        value.push_str(&observation_text(&layer.confidence));
-        value.push_str(" confidence)");
-    }
-    value
 }
 
 fn bytes_text(observation: &Observation<u64>) -> String {

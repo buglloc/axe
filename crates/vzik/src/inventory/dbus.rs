@@ -421,7 +421,7 @@ fn bus_summary(proxy: &DBusProxy<'_>, target: &ManagerTarget) -> (Map<String, Va
 fn manager_data(target: &ManagerTarget, record_type: &'static str) -> Map<String, Value> {
     let mut data = Map::new();
     data.insert("record_type".into(), json!(record_type));
-    data.insert("manager_scope".into(), json!(target.scope));
+    data.insert("selection_scope".into(), json!(target.selection_scope));
     data.insert("socket".into(), path_value(&target.socket));
     if let Some(user) = target.user.as_deref() {
         data.insert("manager_user".into(), text(user));

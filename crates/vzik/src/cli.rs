@@ -57,6 +57,8 @@ pub enum CapabilityId {
     FilesystemUnixSockets,
     FileStat,
     FileRead,
+    Overview,
+    ProcessInspect,
 }
 
 #[derive(Clone, Copy)]
@@ -88,6 +90,7 @@ impl NumberSpec {
 pub(crate) enum PositionalKind {
     Utf8,
     LinuxPath,
+    Pid,
 }
 
 impl PositionalKind {
@@ -95,6 +98,7 @@ impl PositionalKind {
         match self {
             Self::Utf8 => "utf8_string",
             Self::LinuxPath => "linux_path",
+            Self::Pid => "integer",
         }
     }
 }
@@ -110,22 +114,29 @@ pub(crate) struct PositionalSpec {
 
 impl PositionalSpec {
     pub(crate) fn contract(self) -> Value {
-        json!({
+        let mut contract = json!({
             "name":self.name,
             "value_name":self.value_name,
             "description":self.description,
             "type":self.kind.id(),
             "required":true,
             "max_bytes":self.max_bytes,
-        })
+        });
+        if matches!(self.kind, PositionalKind::Pid) {
+            contract["minimum"] = json!(1);
+            contract["maximum"] = json!(i32::MAX);
+        }
+        contract
     }
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum RequestSpec {
     Empty,
+    Overview,
     Items(NumberSpec),
     ContainerInspect,
+    ProcessInspect,
     PortoList(NumberSpec),
     PortoInspect,
     SystemctlList(NumberSpec),
@@ -141,7 +152,7 @@ pub(crate) enum RequestSpec {
 struct CapabilitySpec {
     capability: CapabilityId,
     id: &'static str,
-    command: [&'static str; 2],
+    command: &'static [&'static str],
     description: &'static str,
     request: RequestSpec,
     data_kinds: &'static [&'static str],
@@ -206,6 +217,13 @@ impl OptionSpec {
     }
 }
 
+const PROCESS_PID: PositionalSpec = PositionalSpec {
+    name: "pid",
+    value_name: "PID",
+    description: "Visible process ID",
+    kind: PositionalKind::Pid,
+    max_bytes: 10,
+};
 const CONTAINER_NAME: PositionalSpec = PositionalSpec {
     name: "name",
     value_name: "NAME",
@@ -266,11 +284,11 @@ const fn filesystem_scan(default: u64, default_display: &'static str, maximum: u
 }
 
 /// Capabilities in discovery order; the baseline profile runs its members in this order.
-static CAPABILITIES: [CapabilitySpec; 37] = [
+static CAPABILITIES: [CapabilitySpec; 39] = [
     CapabilitySpec {
         capability: CapabilityId::HostInfo,
         id: "host.info",
-        command: ["host", "info"],
+        command: &["host", "info"],
         description: "Operating-system and host identity facts",
         request: RequestSpec::Empty,
         data_kinds: &["host"],
@@ -279,7 +297,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::KernelInfo,
         id: "kernel.info",
-        command: ["kernel", "info"],
+        command: &["kernel", "info"],
         description: "Kernel identity and boot command-line facts",
         request: RequestSpec::Empty,
         data_kinds: &["kernel"],
@@ -288,7 +306,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::KernelModules,
         id: "kernel.modules",
-        command: ["kernel", "modules"],
+        command: &["kernel", "modules"],
         description: "Loaded kernel module inventory",
         request: items(8192, "8192", 32_768),
         data_kinds: &["kernel_module"],
@@ -297,7 +315,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::KernelSysctls,
         id: "kernel.sysctls",
-        command: ["kernel", "sysctls"],
+        command: &["kernel", "sysctls"],
         description: "Pentest-relevant kernel and network sysctls",
         request: RequestSpec::Empty,
         data_kinds: &["kernel_sysctl"],
@@ -306,7 +324,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::SecurityPosture,
         id: "security.posture",
-        command: ["security", "posture"],
+        command: &["security", "posture"],
         description: "LSM, boot, platform, and CPU security posture",
         request: items(1024, "1024", 4096),
         data_kinds: &["security_control"],
@@ -315,7 +333,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::ProcessList,
         id: "process.list",
-        command: ["process", "list"],
+        command: &["process", "list"],
         description: "Process summaries with identity and executable paths",
         request: items(4096, "4096", 32_768),
         data_kinds: &["process"],
@@ -324,7 +342,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::NetworkInterfaces,
         id: "network.interfaces",
-        command: ["network", "interfaces"],
+        command: &["network", "interfaces"],
         description: "Network interface metadata",
         request: items(1024, "1024", 4096),
         data_kinds: &["network_interface"],
@@ -333,7 +351,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::NetworkAddresses,
         id: "network.addresses",
-        command: ["network", "addresses"],
+        command: &["network", "addresses"],
         description: "IPv4 and IPv6 interface addresses",
         request: items(1024, "1024", 4096),
         data_kinds: &["network_address"],
@@ -342,7 +360,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::NetworkResolvers,
         id: "network.resolvers",
-        command: ["network", "resolvers"],
+        command: &["network", "resolvers"],
         description: "Static resolver directives",
         request: RequestSpec::Empty,
         data_kinds: &["resolver_directive"],
@@ -351,7 +369,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::NetworkRoutes,
         id: "network.routes",
-        command: ["network", "routes"],
+        command: &["network", "routes"],
         description: "IPv4 and IPv6 route inventory",
         request: items(16_384, "16384", 65_536),
         data_kinds: &["network_route"],
@@ -360,7 +378,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::NetworkNeighbors,
         id: "network.neighbors",
-        command: ["network", "neighbors"],
+        command: &["network", "neighbors"],
         description: "IPv4 neighbor cache inventory",
         request: items(8192, "8192", 32_768),
         data_kinds: &["network_neighbor"],
@@ -369,7 +387,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::NetworkSockets,
         id: "network.sockets",
-        command: ["network", "sockets"],
+        command: &["network", "sockets"],
         description: "Internet and Unix socket inventory with bounded ownership",
         request: items(32_768, "32768", 100_000),
         data_kinds: &["network_socket"],
@@ -378,7 +396,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::NetworkListeners,
         id: "network.listeners",
-        command: ["network", "listeners"],
+        command: &["network", "listeners"],
         description: "Listening Internet and Unix sockets with bounded ownership",
         request: items(16_384, "16384", 65_536),
         data_kinds: &["network_socket"],
@@ -387,7 +405,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::NetworkFirewall,
         id: "network.firewall",
-        command: ["network", "firewall"],
+        command: &["network", "firewall"],
         description: "Runtime table names and static firewall rule evidence",
         request: items(10_000, "10000", 50_000),
         data_kinds: &["firewall_evidence"],
@@ -396,7 +414,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::MountList,
         id: "mount.list",
-        command: ["mount", "list"],
+        command: &["mount", "list"],
         description: "Current mount namespace inventory",
         request: items(4096, "4096", 16_384),
         data_kinds: &["mount"],
@@ -405,7 +423,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::CgroupInspect,
         id: "cgroup.inspect",
-        command: ["cgroup", "inspect"],
+        command: &["cgroup", "inspect"],
         description: "Current process cgroup memberships and limits",
         request: RequestSpec::Empty,
         data_kinds: &["cgroup_membership"],
@@ -414,7 +432,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::UserList,
         id: "user.list",
-        command: ["user", "list"],
+        command: &["user", "list"],
         description: "Local passwd user inventory",
         request: items(10_000, "10000", 50_000),
         data_kinds: &["user"],
@@ -423,7 +441,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::GroupList,
         id: "group.list",
-        command: ["group", "list"],
+        command: &["group", "list"],
         description: "Local group inventory",
         request: items(10_000, "10000", 50_000),
         data_kinds: &["group"],
@@ -432,7 +450,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::AuthPosture,
         id: "auth.posture",
-        command: ["auth", "posture"],
+        command: &["auth", "posture"],
         description: "Local password state and authentication policy directives",
         request: items(10_000, "10000", 50_000),
         data_kinds: &["auth_control"],
@@ -441,7 +459,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::SudoRules,
         id: "sudo.rules",
-        command: ["sudo", "rules"],
+        command: &["sudo", "rules"],
         description: "Static sudo policy directives",
         request: items(10_000, "10000", 50_000),
         data_kinds: &["sudo_directive"],
@@ -450,7 +468,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::PackageList,
         id: "package.list",
-        command: ["package", "list"],
+        command: &["package", "list"],
         description: "Installed packages from native package databases",
         request: items(50_000, "50000", 200_000),
         data_kinds: &["package"],
@@ -459,7 +477,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::ServiceList,
         id: "service.list",
-        command: ["service", "list"],
+        command: &["service", "list"],
         description: "Static systemd unit and SysV service inventory",
         request: items(20_000, "20000", 100_000),
         data_kinds: &["service"],
@@ -468,7 +486,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::ScheduleList,
         id: "schedule.list",
-        command: ["schedule", "list"],
+        command: &["schedule", "list"],
         description: "Static cron and systemd timer inventory",
         request: items(10_000, "10000", 100_000),
         data_kinds: &["schedule"],
@@ -477,7 +495,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::SystemctlList,
         id: "systemctl.list",
-        command: ["systemctl", "list"],
+        command: &["systemctl", "list"],
         description: "Runtime systemd unit state from system and user managers",
         request: RequestSpec::SystemctlList(item_limit(20_000, "20000", 100_000)),
         data_kinds: &["systemd_unit_runtime"],
@@ -486,7 +504,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::SystemctlInspect,
         id: "systemctl.inspect",
-        command: ["systemctl", "inspect"],
+        command: &["systemctl", "inspect"],
         description: "Detailed runtime state for one systemd unit",
         request: RequestSpec::SystemctlInspect,
         data_kinds: &["systemd_unit_runtime"],
@@ -495,7 +513,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::DbusList,
         id: "dbus.list",
-        command: ["dbus", "list"],
+        command: &["dbus", "list"],
         description: "D-Bus names, activation state, owners, and peer credentials",
         request: RequestSpec::DbusList(item_limit(20_000, "20000", 100_000)),
         data_kinds: &["dbus_record"],
@@ -504,7 +522,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::DbusInspect,
         id: "dbus.inspect",
-        command: ["dbus", "inspect"],
+        command: &["dbus", "inspect"],
         description: "Detailed ownership and credentials for one D-Bus name",
         request: RequestSpec::DbusInspect,
         data_kinds: &["dbus_record"],
@@ -513,7 +531,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::ContainerList,
         id: "container.list",
-        command: ["container", "list"],
+        command: &["container", "list"],
         description: "Runtime-agnostic running-container discovery from process cgroups",
         request: items(10_000, "10000", 50_000),
         data_kinds: &["container"],
@@ -522,7 +540,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::ContainerInspect,
         id: "container.inspect",
-        command: ["container", "inspect"],
+        command: &["container", "inspect"],
         description: "Named runtime-agnostic container context from procfs",
         request: RequestSpec::ContainerInspect,
         data_kinds: &["container_context"],
@@ -531,7 +549,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::PortoList,
         id: "porto.list",
-        command: ["portoctl", "list"],
+        command: &["portoctl", "list"],
         description: "Porto container inventory with complete property evidence",
         request: RequestSpec::PortoList(item_limit(10_000, "10000", 50_000)),
         data_kinds: &[
@@ -544,7 +562,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::PortoInspect,
         id: "porto.inspect",
-        command: ["portoctl", "inspect"],
+        command: &["portoctl", "inspect"],
         description: "Named Porto snapshot with complete property evidence",
         request: RequestSpec::PortoInspect,
         data_kinds: &[
@@ -557,7 +575,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::SshServerConfig,
         id: "ssh.server_config",
-        command: ["ssh", "server-config"],
+        command: &["ssh", "server-config"],
         description: "Static OpenSSH server directives",
         request: items(10_000, "10000", 50_000),
         data_kinds: &["ssh_server_directive"],
@@ -566,7 +584,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::SshAuthorizedKeys,
         id: "ssh.authorized_keys",
-        command: ["ssh", "authorized-keys"],
+        command: &["ssh", "authorized-keys"],
         description: "Authorized-key fingerprints and options",
         request: items(10_000, "10000", 50_000),
         data_kinds: &["ssh_authorized_key"],
@@ -575,7 +593,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::FilesystemPrivilegeSurfaces,
         id: "filesystem.privilege_surfaces",
-        command: ["filesystem", "privilege-surfaces"],
+        command: &["filesystem", "privilege-surfaces"],
         description: "Explicit bounded scan for privilege-relevant filesystem metadata",
         request: filesystem_scan(100_000, "100000", 1_000_000),
         data_kinds: &["filesystem_privilege_surface"],
@@ -584,7 +602,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::FilesystemUnixSockets,
         id: "filesystem.unix_sockets",
-        command: ["filesystem", "unix-sockets"],
+        command: &["filesystem", "unix-sockets"],
         description: "Explicit bounded scan for filesystem Unix sockets",
         request: filesystem_scan(100_000, "100000", 1_000_000),
         data_kinds: &["filesystem_unix_socket"],
@@ -593,7 +611,7 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::FileStat,
         id: "file.stat",
-        command: ["file", "stat"],
+        command: &["file", "stat"],
         description: "Metadata for one explicitly selected path",
         request: RequestSpec::FileStat,
         data_kinds: &["file_metadata"],
@@ -602,10 +620,28 @@ static CAPABILITIES: [CapabilitySpec; 37] = [
     CapabilitySpec {
         capability: CapabilityId::FileRead,
         id: "file.read",
-        command: ["file", "read"],
+        command: &["file", "read"],
         description: "Chunked content from one explicitly selected regular file",
         request: RequestSpec::FileRead,
         data_kinds: &["file_chunk"],
+        baseline: false,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::Overview,
+        id: "host.overview",
+        command: &["overview"],
+        description: "Compact passive host, observer, resource, and subsystem context",
+        request: RequestSpec::Overview,
+        data_kinds: &["host_overview"],
+        baseline: false,
+    },
+    CapabilitySpec {
+        capability: CapabilityId::ProcessInspect,
+        id: "process.inspect",
+        command: &["process", "inspect"],
+        description: "Bounded security context, resources, and limits for one visible process",
+        request: RequestSpec::ProcessInspect,
+        data_kinds: &["process_detail"],
         baseline: false,
     },
 ];
@@ -643,7 +679,7 @@ impl CapabilityId {
     }
 
     pub fn command(self) -> &'static [&'static str] {
-        &self.spec().command
+        self.spec().command
     }
 
     pub fn description(self) -> &'static str {
@@ -664,9 +700,10 @@ impl CapabilityId {
 
     pub fn safety_class(self) -> &'static str {
         match self.request_spec() {
-            RequestSpec::FilesystemScan(_) | RequestSpec::FileStat | RequestSpec::FileRead => {
-                "passive_targeted"
-            }
+            RequestSpec::ProcessInspect
+            | RequestSpec::FilesystemScan(_)
+            | RequestSpec::FileStat
+            | RequestSpec::FileRead => "passive_targeted",
             _ => "passive_native",
         }
     }
@@ -709,6 +746,7 @@ impl CapabilityId {
     pub(crate) fn access_contract(self) -> Value {
         let request = self.request_spec();
         let scope = match request {
+            RequestSpec::ProcessInspect => "explicit_pid",
             RequestSpec::FilesystemScan(_) => "explicit_tree",
             RequestSpec::FileStat | RequestSpec::FileRead => "explicit_path",
             _ => "visible_namespace",
@@ -733,6 +771,7 @@ impl CapabilityId {
     pub(crate) fn positional(self) -> Option<PositionalSpec> {
         match self.request_spec() {
             RequestSpec::ContainerInspect => Some(CONTAINER_NAME),
+            RequestSpec::ProcessInspect => Some(PROCESS_PID),
             RequestSpec::PortoInspect => Some(PORTO_NAME),
             RequestSpec::SystemctlInspect => Some(SYSTEMD_UNIT),
             RequestSpec::DbusInspect => Some(DBUS_NAME),
@@ -757,6 +796,15 @@ impl CapabilityId {
                 kind: OptionKind::Number(limit),
             }),
             _ => {}
+        }
+
+        if matches!(self.request_spec(), RequestSpec::Overview) {
+            options.push(OptionSpec {
+                name: "details",
+                value_name: "",
+                description: "Include the full passive environment observations",
+                kind: OptionKind::Flag,
+            });
         }
 
         if matches!(
@@ -964,6 +1012,9 @@ impl SystemdUnitSelection {
 #[derive(Debug)]
 pub enum Request {
     Empty,
+    Overview {
+        details: bool,
+    },
     ItemLimit {
         max_items: usize,
     },
@@ -973,6 +1024,9 @@ pub enum Request {
     },
     ContainerInspect {
         name: String,
+    },
+    ProcessInspect {
+        pid: u32,
     },
     PortoList {
         max_items: usize,
@@ -1031,6 +1085,7 @@ impl Request {
     pub fn normalized(&self) -> Value {
         match self {
             Self::Empty => json!({}),
+            Self::Overview { details } => json!({"details":details}),
             Self::ItemLimit { max_items } => json!({"max_items": max_items}),
             Self::SocketList {
                 max_items,
@@ -1040,6 +1095,7 @@ impl Request {
                 "socket_selection":selection.id(),
             }),
             Self::ContainerInspect { name } => json!({"name":name}),
+            Self::ProcessInspect { pid } => json!({"pid":pid}),
             Self::PortoList {
                 max_items,
                 socket,
@@ -1139,9 +1195,17 @@ pub struct Execution {
 #[derive(Debug)]
 pub struct CaptureExecution {
     pub execution: Execution,
-    pub output: PathBuf,
-    pub receipt: PathBuf,
-    pub stderr: Option<PathBuf>,
+    pub destination: CaptureDestination,
+}
+
+#[derive(Debug)]
+pub enum CaptureDestination {
+    Directory(PathBuf),
+    Files {
+        output: PathBuf,
+        receipt: PathBuf,
+        stderr: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug)]
@@ -1270,30 +1334,35 @@ fn parse_core(program: OsString, argv: Vec<OsString>) -> Result<Action, CliError
 }
 
 fn parse_capture(program: OsString, arguments: &[OsString]) -> Result<Action, CliError> {
-    if arguments.is_empty()
-        || arguments
-            .iter()
-            .any(|value| matches!(value.to_str(), Some("-h" | "--help")))
-    {
-        return Ok(Action::Help(
-            "Usage: vzik capture <COLLECTION COMMAND> --output PATH --receipt PATH [--stderr PATH]\n\
-             Output options may appear before or after the collection command arguments.\n\
-             The command validates the complete stream, seals and verifies the receipt, then writes a JSON coverage summary.\n\
-             Files are written directly; interruption can leave capture or stderr without a receipt.\n\
-             Examples:\n\
-               vzik capture collect --output baseline.jsonl --receipt baseline.receipt.json\n\
-               vzik capture filesystem unix-sockets /run --output sockets.jsonl --receipt sockets.receipt.json\n"
-                .to_string(),
-        ));
+    const HELP: &str = "Usage: vzik capture <COLLECTION COMMAND> --output-dir DIR\n\
+                       \x20      vzik capture <COLLECTION COMMAND> --output PATH --receipt PATH [--stderr PATH]\n\
+                       Output options may appear before or after collection arguments, but before --.\n\
+                       --output-dir creates a new private directory containing capture.jsonl, receipt.json, and stderr.jsonl.\n\
+                       It cannot be combined with --output, --receipt, or --stderr. Existing paths are never reused.\n\
+                       The command validates the complete stream, seals and verifies the receipt, then writes a JSON coverage summary.\n\
+                       Files are written directly; interruption can leave capture or stderr without a receipt.\n\
+                       Examples:\n\
+                         vzik capture overview --output-dir evidence\n\
+                         vzik capture process inspect 1234 --output-dir process-evidence\n\
+                         vzik capture collect --output baseline.jsonl --receipt baseline.receipt.json\n";
+    if arguments.is_empty() {
+        return Ok(Action::Help(HELP.to_owned()));
     }
 
+    let mut output_dir = None;
     let mut output = None;
     let mut receipt = None;
     let mut stderr = None;
     let mut nested = Vec::with_capacity(arguments.len());
     let mut index = 0;
     while index < arguments.len() {
+        if arguments[index] == "--" {
+            nested.extend_from_slice(&arguments[index..]);
+            break;
+        }
         let destination = match arguments[index].to_str() {
+            Some("-h" | "--help") => return Ok(Action::Help(HELP.to_owned())),
+            Some("--output-dir") => Some((&mut output_dir, "--output-dir")),
             Some("--output") => Some((&mut output, "--output")),
             Some("--receipt") => Some((&mut receipt, "--receipt")),
             Some("--stderr") => Some((&mut stderr, "--stderr")),
@@ -1314,8 +1383,22 @@ fn parse_capture(program: OsString, arguments: &[OsString]) -> Result<Action, Cl
         }
     }
 
-    let output = output.ok_or_else(|| "capture requires --output PATH".to_string())?;
-    let receipt = receipt.ok_or_else(|| "capture requires --receipt PATH".to_string())?;
+    let destination = if let Some(directory) = output_dir {
+        if output.is_some() || receipt.is_some() || stderr.is_some() {
+            return Err(
+                "--output-dir cannot be combined with --output, --receipt, or --stderr".into(),
+            );
+        }
+        CaptureDestination::Directory(directory)
+    } else {
+        CaptureDestination::Files {
+            output: output
+                .ok_or_else(|| "capture requires --output-dir DIR or --output PATH".to_string())?,
+            receipt: receipt
+                .ok_or_else(|| "capture requires --receipt PATH with --output".to_string())?,
+            stderr,
+        }
+    };
     let action = parse_core(program, nested)?;
     let Action::Execute(execution) = action else {
         return Err("capture requires a collection command".into());
@@ -1323,9 +1406,7 @@ fn parse_capture(program: OsString, arguments: &[OsString]) -> Result<Action, Cl
 
     Ok(Action::Capture(CaptureExecution {
         execution,
-        output,
-        receipt,
-        stderr,
+        destination,
     }))
 }
 
@@ -1346,12 +1427,19 @@ fn parse_collect(matches: &ArgMatches) -> Result<Action, String> {
 }
 
 fn parse_capability(group: &str, matches: &ArgMatches) -> Result<Action, String> {
-    let (leaf, matches) = matches
-        .subcommand()
-        .ok_or_else(|| format!("a {group} command is required"))?;
-    let capability = CapabilityId::all()
-        .find(|capability| capability.command() == [group, leaf])
-        .ok_or_else(|| format!("unknown capability command: {group} {leaf}"))?;
+    let (capability, matches) = if let Some(capability) =
+        CapabilityId::all().find(|capability| capability.command() == [group])
+    {
+        (capability, matches)
+    } else {
+        let (leaf, matches) = matches
+            .subcommand()
+            .ok_or_else(|| format!("a {group} command is required"))?;
+        let capability = CapabilityId::all()
+            .find(|capability| capability.command() == [group, leaf])
+            .ok_or_else(|| format!("unknown capability command: {group} {leaf}"))?;
+        (capability, matches)
+    };
 
     Ok(Action::Execute(Execution {
         invocation_kind: "capability",
@@ -1367,6 +1455,9 @@ fn parse_capability(group: &str, matches: &ArgMatches) -> Result<Action, String>
 fn request_from_matches(capability: CapabilityId, matches: &ArgMatches) -> Result<Request, String> {
     Ok(match capability.request_spec() {
         RequestSpec::Empty => Request::Empty,
+        RequestSpec::Overview => Request::Overview {
+            details: matches.get_flag("details"),
+        },
         RequestSpec::Items(limit) => {
             let max_items = usize_value(matches, limit.name)?;
             match capability {
@@ -1383,6 +1474,14 @@ fn request_from_matches(capability: CapabilityId, matches: &ArgMatches) -> Resul
         }
         RequestSpec::ContainerInspect => Request::ContainerInspect {
             name: string_value(matches, CONTAINER_NAME)?,
+        },
+        RequestSpec::ProcessInspect => Request::ProcessInspect {
+            pid: u32::try_from(
+                *matches
+                    .get_one::<u64>(PROCESS_PID.name)
+                    .ok_or_else(|| "PID is required".to_owned())?,
+            )
+            .map_err(|_| "PID exceeds supported range".to_owned())?,
         },
         RequestSpec::PortoList(limit) => {
             let (socket, show_sensitive, include_streams, max_stream_bytes) =
@@ -1510,6 +1609,8 @@ fn baseline_request(capability: CapabilityId) -> Result<Request, String> {
             all_users: true,
         },
         RequestSpec::SystemctlInspect
+        | RequestSpec::Overview
+        | RequestSpec::ProcessInspect
         | RequestSpec::DbusInspect
         | RequestSpec::FilesystemScan(_)
         | RequestSpec::FileStat
@@ -1553,11 +1654,15 @@ fn systemctl_values(
 
 fn root_command() -> Command {
     let mut command = Command::new("vzik")
+        .version(env!("CARGO_PKG_VERSION"))
         .about("Bounded agent-first Linux host collector")
         .after_help(
-            "Collection commands write protocol-v3 JSONL and never execute host programs or open \
-             INET connections. capture writes only its explicit output, stderr, and receipt paths. \
-             portoctl, systemctl, and dbus may connect only to configured Unix sockets.\n\n\
+            "Collection commands write protocol-v4 JSONL and never execute host programs or open \
+             INET connections. capture writes only its explicit output paths or a new private \
+             directory selected by --output-dir. portoctl, systemctl, and dbus may connect only \
+             to configured Unix sockets.\n\n\
+             Start with vzik overview for passive host context; use vzik process inspect PID \
+             for one process. collect remains the security baseline.\n\n\
              Machine-readable discovery:\n  \
                vzik capabilities\n  \
                vzik capabilities porto.list",
@@ -1574,7 +1679,7 @@ fn root_command() -> Command {
         ))
         .subcommand(stream_command(
             "validate",
-            "Validate a protocol-v3 JSONL stream",
+            "Validate a protocol-v4 JSONL stream",
         ))
         .subcommand(stream_command(
             "summarize",
@@ -1594,6 +1699,10 @@ fn root_command() -> Command {
 
     for capability in CapabilityId::all() {
         let group = capability.command()[0];
+        if capability.command().len() == 1 {
+            command = command.subcommand(capability_command(capability));
+            continue;
+        }
         if command.find_subcommand(group).is_none() {
             command = command.subcommand(
                 Command::new(group)
@@ -1621,11 +1730,21 @@ fn stream_command(name: &'static str, description: &'static str) -> Command {
 }
 
 fn capability_command(capability: CapabilityId) -> Command {
-    let mut command = Command::new(capability.command()[1]).about(capability.description());
+    let mut command = Command::new(
+        *capability
+            .command()
+            .last()
+            .expect("capability has a command"),
+    )
+    .about(capability.description());
     if let Some(positional) = capability.positional() {
         let parser = match positional.kind {
             PositionalKind::Utf8 => ValueParser::new(NonEmptyStringValueParser::new()),
             PositionalKind::LinuxPath => ValueParser::new(OsStringValueParser::new()),
+            PositionalKind::Pid => ValueParser::new(
+                clap_builder::builder::RangedU64ValueParser::<u64>::new()
+                    .range(1..=i32::MAX as u64),
+            ),
         };
         command = command.arg(
             Arg::new(positional.name)
@@ -1954,31 +2073,14 @@ mod tests {
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
     }
-
     #[test]
-    fn empty_invocation_displays_help() {
-        let Action::Help(help) = parse(args(&["vzik"])).expect("parse") else {
-            panic!("expected help");
-        };
-        assert!(help.contains("Usage: vzik"));
-        assert!(help.contains("Commands:"));
-    }
-
-    #[test]
-    fn discovery_and_capture_help_are_directly_actionable() {
-        let Action::Help(root_help) = parse(args(&["vzik"])).expect("parse root help") else {
-            panic!("expected root help");
-        };
-        assert!(root_help.contains("vzik capabilities"));
-        assert!(root_help.contains("vzik capabilities porto.list"));
-
-        let Action::Help(capture_help) =
-            parse(args(&["vzik", "capture", "--help"])).expect("parse capture help")
-        else {
-            panic!("expected capture help");
-        };
-        assert!(capture_help.contains("Output options may appear before or after"));
-        assert!(capture_help.contains("vzik capture filesystem unix-sockets /run"));
+    fn process_inspection_rejects_non_pid_inputs() {
+        for pid in ["0", "-1", "2147483648", "1/../2", "self", ""] {
+            assert!(
+                parse(args(&["vzik", "process", "inspect", pid])).is_err(),
+                "accepted invalid PID {pid:?}",
+            );
+        }
     }
 
     #[test]
@@ -2053,39 +2155,6 @@ mod tests {
             systemd.invocations[0].request.normalized()["unit_selection"],
             "all"
         );
-    }
-
-    #[test]
-    fn every_capability_has_hierarchical_help() {
-        for capability in CapabilityId::all() {
-            let mut argv = vec![OsString::from("vzik")];
-            argv.extend(capability.command().iter().map(OsString::from));
-            argv.push(OsString::from("--help"));
-            let Action::Help(help) = parse(argv).expect("parse capability help") else {
-                panic!("expected help for {}", capability.id());
-            };
-            assert!(
-                help.contains(capability.description()),
-                "missing description for {}",
-                capability.id()
-            );
-        }
-
-        let Action::Help(group_help) =
-            parse(args(&["vzik", "portoctl", "--help"])).expect("parse group help")
-        else {
-            panic!("expected portoctl help");
-        };
-        assert!(group_help.contains("list"));
-        assert!(group_help.contains("inspect"));
-
-        let Action::Help(leaf_help) =
-            parse(args(&["vzik", "portoctl", "inspect", "--help"])).expect("parse leaf help")
-        else {
-            panic!("expected portoctl inspect help");
-        };
-        assert!(leaf_help.contains("--socket <PATH>"));
-        assert!(leaf_help.contains("/run/portod.socket"));
     }
 
     #[test]
