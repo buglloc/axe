@@ -5,9 +5,50 @@
   portableSystems,
   staticSetFor,
   packageSetFor,
+  goDarwin,
+  targetStrip,
   ...
 }: let
   utilLinuxMinimal = system: pkgs: (staticSetFor system pkgs).util-linuxMinimal;
+
+  bubblewrapMinimal = staticSet:
+    staticSet.bubblewrap.overrideAttrs (old: {
+      outputs = ["out"];
+      nativeBuildInputs = [
+        buildPkgs.meson
+        buildPkgs.ninja
+        buildPkgs.pkg-config
+        buildPkgs.python3
+      ];
+      buildInputs = [
+        (staticSet.libcap.override {runtimeShell = "/bin/sh";})
+        staticSet.libselinux
+      ];
+      mesonFlags =
+        (old.mesonFlags or [])
+        ++ [
+          "--prefix=/usr"
+          "-Ddefault_library=static"
+          "-Dc_link_args=-static"
+          "-Dman=disabled"
+          "-Dbash_completion=disabled"
+          "-Dzsh_completion=disabled"
+          "-Dtests=false"
+        ];
+      buildPhase = ''
+        runHook preBuild
+        ninja bwrap
+        runHook postBuild
+      '';
+      installPhase = ''
+        runHook preInstall
+        install -Dm755 bwrap "$out/bin/bwrap"
+        ${targetStrip staticSet} -s "$out/bin/bwrap"
+        runHook postInstall
+      '';
+      postInstall = "";
+      postFixup = "";
+    });
 
   dockerMinimal = system: packageSet:
     (packageSet.docker-client.override {
@@ -106,6 +147,58 @@
       dontStrip = true;
     });
 
+  sternPackageFor = target: targetPkgs:
+    (
+      if target == "aarch64-darwin"
+      then
+        goDarwin {
+          package = "stern";
+          subPackage = ".";
+        }
+      else (packageSetFor target targetPkgs).stern
+    ).overrideAttrs
+    (old: {
+      outputs = ["out"];
+      env =
+        (old.env or {})
+        // {
+          CGO_ENABLED = 0;
+          GOFLAGS = (old.env.GOFLAGS or "") + " -tags=timetzdata";
+        };
+      ldflags = (old.ldflags or []) ++ ["-linkmode=internal"];
+      postInstall = "";
+    });
+
+  helmPackageFor = target: targetPkgs:
+    (
+      if target == "aarch64-darwin"
+      then
+        goDarwin {
+          package = "kubernetes-helm";
+          subPackage = "./cmd/helm";
+          binary = "helm";
+        }
+      else (packageSetFor target targetPkgs).kubernetes-helm
+    ).overrideAttrs
+    (old: {
+      outputs = ["out"];
+      env = (old.env or {}) // {CGO_ENABLED = 0;};
+      ldflags = (old.ldflags or []) ++ ["-linkmode=internal"];
+      buildPhase =
+        if target == "aarch64-darwin"
+        then ''
+          runHook preBuild
+          export GOCACHE="$TMPDIR/go-cache"
+          export GOTOOLCHAIN=local
+          go build -buildmode=exe -trimpath \
+            -ldflags "$ldflags" \
+            -o "$TMPDIR/helm" ./cmd/helm
+          runHook postBuild
+        ''
+        else old.buildPhase;
+      postInstall = "";
+    });
+
   podmanVersion = "6.1.2";
   podmanSources = {
     aarch64-darwin = {
@@ -151,6 +244,13 @@
       install -Dm755 ${source.path} "$out/bin/podman"
     '';
 in {
+  bwrap = mkNixpkgsBinary {
+    name = "bwrap";
+    synopsis = "Run commands in isolated Linux namespaces";
+    systems = linuxSystems;
+    packageFor = target: targetPkgs: bubblewrapMinimal (staticSetFor target targetPkgs);
+  };
+
   docker = mkNixpkgsBinary {
     name = "docker";
     synopsis = "Manage Docker containers through a remote daemon";
@@ -164,6 +264,20 @@ in {
     systems = portableSystems;
     packageFor = system: _: kubectlMinimal system buildPkgs.pkgsStatic;
     rewriteBuildConfigurationPaths = true;
+  };
+
+  stern = mkNixpkgsBinary {
+    name = "stern";
+    synopsis = "Tail logs from multiple Kubernetes pods and containers";
+    systems = portableSystems;
+    packageFor = sternPackageFor;
+  };
+
+  helm = mkNixpkgsBinary {
+    name = "helm";
+    synopsis = "Install and manage Kubernetes applications with Helm charts";
+    systems = portableSystems;
+    packageFor = helmPackageFor;
   };
 
   lsns = mkNixpkgsBinary {
