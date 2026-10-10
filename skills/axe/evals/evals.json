@@ -70,7 +70,7 @@
       "id": 6,
       "name": "doctor-rescue-remains-in-shell",
       "prompt": "В AXE Brush shell applet не запустился: `axe: failed to spawn` и ненулевой статус. Самостоятельный `doctor --json` доступен, но spawn новых программ может не работать. Как соберёшь доказательства?",
-      "expected_output": "Запускается нативный `doctor --json` без пайплайна или subshell, фиксируются schema axe_doctor v3 и состояния вложенных active probes; отсутствие procfs не объявляется доказательством noexec.",
+      "expected_output": "Запускается нативный `doctor --json` без пайплайна или subshell, фиксируются schema axe_doctor v4 и состояния вложенных active probes; отсутствие procfs не объявляется доказательством noexec.",
       "files": [],
       "expectations": [
         "Для rescue не помещает doctor в pipeline, substitution или replacement shell",

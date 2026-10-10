@@ -149,7 +149,7 @@ Use `doctor` for runtime evidence. Human output is concise by default: read
 and recovered or unrecovered degradations. Use `--verbose` for launch
 candidates, the full `Active checks` section, absent environment variables,
 empty detail sections, and individual probe stages. JSON is always the complete,
-versioned `axe_doctor` v3 schema:
+versioned `axe_doctor` v4 schema:
 
 ```sh
 doctor

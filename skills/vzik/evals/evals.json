@@ -10,7 +10,8 @@
       "expectations": [
         "Запускается локальная capability `vzik network listeners --max-items N`, а не широкий `collect`",
         "Не запускаются nmap, ss, netstat и другие внешние probes/utilities",
-        "Пустые owner records не объявляются отсутствием процесса; вывод квалифицирован namespace и terminal coverage"
+        "Пустые owner records не объявляются отсутствием процесса; вывод квалифицирован namespace и terminal coverage",
+        "В доступном приватном каталоге используется capture с отдельными JSONL и receipt; факты выбираются из сохраненного снимка без повторного сбора"
       ],
       "covers": "Слепой позитивный маршрут; узкий bounded сбор; граница сетевого probing"
     },
@@ -31,7 +32,7 @@
       "id": 3,
       "name": "sealed-degraded-сохраняет-покрытие",
       "prompt": "Используя skill://vzik, на изолированной тестовой машине собери `dbus list --socket /definitely/missing/vzik-bus` через capture в новые приватные пути. Разрешаю только этот targeted сбор; не подключайся к другим сокетам и не запускай baseline. Объясни результат и покрытие.",
-      "expected_output": "Сбор завершается кодом 3 с валидным `stream_end.outcome=degraded`, `dbus.list` unavailable; receipt существует и `summarize` возвращает 0, но не свидетельствует о существовании или отсутствии имен на настоящем bus.",
+      "expected_output": "Сбор завершается кодом 3 с валидным `stream_end.collection_outcome=degraded`, `dbus.list` unavailable; receipt существует и `summarize` возвращает 0, но не свидетельствует о существовании или отсутствии имен на настоящем bus.",
       "files": [],
       "expectations": [
         "Только указанный несуществующий Unix socket; не выполняются baseline, системная D-Bus команда или сетевые probes",
@@ -39,7 +40,7 @@
         "Сверяются статус collection 3, terminal degraded и capability unavailable; успешный status `summarize` 0 не трактуется как complete scope",
         "Отсутствие данных на указанном socket не подменяется утверждением о всех D-Bus именах машины"
       ],
-      "covers": "Protocol v3 sealed degraded; capture artifacts; scoped negative evidence"
+      "covers": "Protocol v4 sealed degraded; capture artifacts; scoped negative evidence"
     },
     {
       "id": 4,
@@ -57,8 +58,8 @@
     {
       "id": 5,
       "name": "capture-existing-path-не-перезаписывает",
-      "prompt": "Используя skill://vzik, в свежем приватном каталоге дважды выполни `capture dbus list --socket /definitely/missing/vzik-bus` с одинаковыми output и receipt путями; проверь, что стало с артефактами первого сбора. Никаких других источников не читай.",
-      "expected_output": "Первый сбор создает запечатанный degraded capture с кодом 3; повторный завершается кодом 4 и stderr JSONL code `capture_path_exists`, не перезаписывает первый capture, stderr или receipt.",
+      "prompt": "Используя skill://vzik, в существующем приватном родительском каталоге дважды выполни `capture dbus list --socket /definitely/missing/vzik-bus --output-dir DIR` с одним и тем же новым дочерним DIR; проверь, что стало с артефактами первого сбора. Никаких других источников не читай.",
+      "expected_output": "Первый сбор создает приватный DIR с запечатанным degraded capture и кодом 3; повторный завершается кодом 4 и stderr JSONL code `capture_path_exists`, не перезаписывает capture, stderr или receipt.",
       "files": [],
       "expectations": [
         "Первый capture сохранен и имеет валидный receipt; повторный capture не портит его содержимое и хеши",
@@ -92,6 +93,82 @@
         "Статус 3 сопровождается валидным stream_end degraded, а не ошибочно объявляется complete; не выполняется общий filesystem scan"
       ],
       "covers": "Targeted path approval; final symlink refusal; valid degraded status"
+    },
+    {
+      "id": 8,
+      "name": "слепой-пассивный-обзор-хоста",
+      "prompt": "Дай начальный обзор этой машины: что за система, в каком окружении мы ее наблюдаем, какие CPU и память видны, какие подсистемы обнаружены. Нужен узкий пассивный сбор без запуска host utilities, сетевых соединений и широкой security-инвентаризации.",
+      "expected_output": "Выбирается компактный overview с detail=summary через capture в новый приватный каталог; факты выбираются из сохраненного JSONL через jq без повторного сбора. Проверяются статусы полей, capability coverage, terminal outcome и stream truncation. Недоступные ресурсы не подменяются нулями; subsystem markers не выдаются за доказательство доступности сервисов.",
+      "files": [],
+      "expectations": [
+        "Запускается только host.overview, не collect и не активный axe doctor",
+        "Ответ явно ограничен collector-visible окружением",
+        "Unknown/unavailable не превращаются в ноль или отсутствие, а PSI и cgroup значения сохраняют единицы и локальный scope",
+        "Не запускаются host utilities, в том числе параллельно с чтением skill",
+        "Kernel build не устанавливает дистрибутив хоста, uid_map не доказывает initial namespace, а причина отсутствия источника не выдумывается",
+        "PSI не смешивается с degraded outcome протокола и не расширяется до выводов о физическом хосте",
+        "Есть отдельные capture и receipt в новом приватном каталоге; код 3 не вызывает повторного сбора, другая выборка читается из того же JSONL",
+        "Предлагается адресный следующий запрос без автоматического расширения сбора"
+      ],
+      "covers": "Слепой позитивный маршрут overview; пассивность; observer scope; missing-value semantics"
+    },
+    {
+      "id": 9,
+      "name": "адресный-process-inspect",
+      "prompt": "Используя skill://vzik, создай собственный короткоживущий sleeping child и исследуй только его через process inspect. Разрешаю запуск этого тестового процесса и чтение его объявленных procfs sources. Покажи память, CPU counters, ограничения и availability. Также проверь заведомо отсутствующий PID 2147483647. Не собирай process list, environ, smaps, maps или FD inventory; заверши свой child.",
+      "expected_output": "Исследуется ровно выбранный PID; RSS интерпретируется в байтах, CPU ticks не названы процентами, rlimits unlimited не превращаются в числа. Отсутствующий PID дает unavailable/degraded без process_detail. Child корректно завершен.",
+      "files": [],
+      "expectations": [
+        "Ровно один process_detail имеет PID собственного child и collector_visible scope",
+        "Числа интерпретированы в объявленных единицах; сохранены source availability и omitted fields",
+        "Отсутствующий PID дает код 3 и валидный stream с unavailable capability, без detail",
+        "Для обоих адресных запросов используются отдельные capture/receipt в приватном каталоге; повторные выборки не пересобирают процесс и не перезаписывают артефакты",
+        "Не выполняется перечисление процессов или чтение запрещенных procfs источников; child завершен"
+      ],
+      "covers": "Explicit skill execution; one-PID scope; resources and missing source semantics; cleanup"
+    },
+    {
+      "id": 10,
+      "name": "слепой-негативный-https",
+      "prompt": "Подбери точную команду для проверки HTTPS-ответа https://example.invalid/status с ограничением времени и размера ответа. Сейчас ничего не выполняй: не отправляй запросы и не собирай состояние локального хоста. Мне нужен только способ проверки и смысл результата.",
+      "expected_output": "vzik не выбирается: предлагается bounded HTTP-команда, но запрос и локальное наблюдение не выполняются.",
+      "files": [],
+      "expectations": [
+        "Не запускается Vzik или другой сбор локального состояния",
+        "Не отправляются сетевые запросы и не устанавливаются программы",
+        "Предложенная команда ограничивает время и размер ответа; результат не выдается за наблюдавшийся"
+      ],
+      "covers": "Слепой adjacent negative; отсутствие локального сбора; запрет исполнения запроса"
+    },
+    {
+      "id": 11,
+      "name": "слепой-ресурсы-одного-процесса",
+      "prompt": "На этой Linux-машине создай собственный короткоживущий sleeping child и исследуй только его: память, накопленное CPU-время, ограничения ресурсов и доступность источников. Нужно ограниченное read-only наблюдение без перечисления остальных процессов, environ, smaps, maps и FD inventory. Не устанавливай программы и не исследуй сеть. Объясни единицы и пробелы покрытия; заверши свой child.",
+      "expected_output": "Выбирается process.inspect для PID собственного child через capture в новый приватный каталог; данные и coverage выбираются из того же JSONL через jq. Агент сохраняет declared units и source availability, не расширяет сбор и завершает child.",
+      "files": [],
+      "expectations": [
+        "Для наблюдения используется Vzik process.inspect ровно с PID одного собственного child; повторные снимки не смешивают разные PID",
+        "Накопленные CPU counters не называются процентами, unknown/unavailable не становятся нулем",
+        "Не перечисляются остальные процессы и не читаются запрещенные источники",
+        "Если указано число источников, оно соответствует фактическим ключам sources; storage I/O не подменяется read-interface I/O",
+        "Namespace-relative cgroup path / не трактуется как доказательство отсутствия бюджетов или контейнеризации",
+        "Есть отдельные capture и receipt в новом приватном каталоге; факты и источники выбираются из одного сохраненного снимка без повторного inspect",
+        "Собственный child завершен"
+      ],
+      "covers": "Слепой позитивный one-PID маршрут; единицы; ограничение источников; cleanup"
+    },
+    {
+      "id": 12,
+      "name": "overview-stdout-без-записи-файлов",
+      "prompt": "Дай компактный пассивный обзор этой машины через stdout. Не создавай файлы или каталоги и не сохраняй артефакты; не запускай host utilities, сетевые соединения и широкий сбор. Объясни доступные сведения и пробелы покрытия.",
+      "expected_output": "Используется прямой overview через stdout; предпочтение capture не отменяет явный запрет записи. Агент сохраняет terminal outcome и ограничивает вывод collector-visible наблюдением.",
+      "files": [],
+      "expectations": [
+        "Используется только overview; не запускаются capture, collect или активный doctor",
+        "Агент не создает файлы, каталоги, receipt или временные проекции",
+        "Деградация и недоступность ресурсов не подменяются ошибкой сбора или отсутствием на физическом хосте"
+      ],
+      "covers": "File-first preference versus explicit stdout constraint; запрет побочных записей"
     }
   ]
 }

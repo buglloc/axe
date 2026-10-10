@@ -1,6 +1,6 @@
 ---
 name: vzik
-description: "Collect and interpret bounded local Linux host evidence through vzik protocol-v3 JSONL. Use for listening sockets and process owners, host/kernel security posture, mounts/cgroups, local account and service state, containers, SSH access, and explicitly authorized targeted path or privilege-surface inspection. Not for discovering the owner of a remote IP or probing a network."
+description: "Collect and interpret bounded local host evidence through vzik protocol-v4 JSONL. Use for passive host overview, observer restrictions and resources, one-process inspection, listening sockets and process owners, host/kernel security posture, mounts/cgroups, local account and service state, containers, SSH access, and explicitly authorized targeted path or privilege-surface inspection. Not for discovering the owner of a remote IP or probing a network."
 ---
 
 # Vzik
@@ -9,12 +9,15 @@ Invoke `vzik` directly in the shell where the evidence exists. For a remote
 AXE/SSH target, run `vzik` on that target through the active transport; do not
 replace it with local host inspection. Treat it as an observation engine: it
 returns facts and coverage, not vulnerability, compliance, or exploitation
-verdicts. Start with the compact machine-readable index, then request detail
-for only the capability being considered:
+verdicts. For an open-ended introduction to a host, select `overview`.
+For a named question, discover only the capability being considered:
 
 ```sh
+vzik --version
 vzik --help
 vzik capabilities
+vzik capabilities host.overview
+vzik capabilities process.inspect
 vzik capabilities user.list
 vzik capabilities file.read
 vzik process list --help
@@ -29,34 +32,48 @@ command string.
 
 ## Workflow
 
+For initial host orientation, capture `overview`, inspect its field statuses
+and terminal coverage, then choose a follow-up from the table below.
+Do not use `collect` or active `axe doctor` probes merely for orientation.
+`doctor` reuses the same passive environment observations, but also tests
+AXE execution and storage behavior.
+
 1. Choose scope before collection. For a named question, select the smallest
    targeted capability from the table below; do not run the broad baseline
-   merely to answer a socket, file, or service question. For an authorized
-   host-wide security baseline, use a new private artifact directory and
-   preserve the collector status:
+   merely to answer a socket, file, or service question. For agent analysis,
+   prefer `vzik capture` in a new private artifact directory and select fields
+   from the saved JSONL with `jq`. Direct stdout remains useful for pipes,
+   short requests, or when no writable directory is available. Preserve the
+   collector status; for example:
 
    ```sh
    umask 077
-   evidence_dir=$(mktemp -d "${TMPDIR:-/tmp}/vzik.XXXXXXXX") || exit 1
-   if vzik capture collect \
-       --output "$evidence_dir/baseline.jsonl" \
-       --receipt "$evidence_dir/baseline.receipt.json"; then
+   evidence_root=$(mktemp -d "${TMPDIR:-/tmp}/vzik.XXXXXXXX") || exit 1
+   evidence_dir="$evidence_root/overview"
+   if vzik capture overview --output-dir "$evidence_dir"; then
      capture_status=0
    else
      capture_status=$?
    fi
    case "$capture_status" in
-     0|3) vzik summarize "$evidence_dir/baseline.jsonl" ;;
+     0|3) vzik summarize "$evidence_dir/capture.jsonl" ;;
      *) printf 'Capture failed (status %s); inspect receipt and stderr before using artifacts\n' "$capture_status" >&2 ;;
    esac
    ```
 
-   `mktemp -d` creates a new private directory; keep its path for later
-   inspection. `capture` creates files with mode 0600 and refuses to overwrite
-   existing output, stderr, or receipt paths. It writes the default stderr
-   path by appending `.stderr` to the capture path; `--stderr PATH` overrides
-   it. Status `0` or `3` means the receipt was created and verified, and the
-   stdout JSON summary has `artifact_status: "sealed"`, paths, command ID,
+   Use the same capture pattern for `process inspect PID` or an explicitly
+   authorized `collect`.
+
+   `mktemp -d` creates the private parent; `capture --output-dir DIR` creates
+   a new mode-0700 child with `capture.jsonl`, `receipt.json`, and
+   `stderr.jsonl` (mode 0600). The parent must exist. Existing directories,
+   files, and symlinks are rejected. Keep the artifact path for later
+   inspection. For custom filenames, use `--output PATH --receipt PATH`,
+   optionally `--stderr PATH`; these flags cannot accompany `--output-dir`.
+   In that mode, the default stderr path appends `.stderr` to the output path.
+   Neither mode overwrites artifacts. Status `0` or `3` means the receipt was
+   created and verified. The stdout JSON summary has
+   `artifact_status: "sealed"`, paths, command ID,
    and planned/started/not-started coverage. Check that summary and receipt
    before trusting the capture. On any other status, inspect saved stderr
    and whether a receipt exists. In particular, stdout write failure (`5`)
@@ -64,6 +81,10 @@ command string.
    only diagnostic capture/stderr prefixes. Never infer a completed inventory
    from a prefix. Files are written directly, not as a multi-file transaction.
    Never repeat collection merely to list captured data.
+
+   Metadata documents are pretty JSON; collection and stderr remain JSONL.
+   Use `jq` on the saved stream, not on its capture summary or receipt when
+   selecting collected facts.
 
    Bare `vzik` prints help and never collects. `collect` runs the fixed
    `baseline-v3` profile: host and kernel facts, modules, sysctls, security
@@ -98,7 +119,7 @@ command string.
    for these commands (status `4`); keep it only for diagnostics, never for
    inventory or absence claims.
 
-3. Inspect `stream.outcome`, `capabilities.planned`, `.started`,
+3. Inspect `stream.collection_outcome`, `capabilities.planned`, `.started`,
    `.not_started`, `.counts`, `.by_outcome`, and diagnostic counts in the
    summary before facts. Collection status `0` means stream outcome
    `complete`; `3` means a valid, sealed `degraded` stream. Keep usable facts
@@ -158,9 +179,11 @@ command string.
 
    | Need | Command |
    |---|---|
+   | Initial host, observer, resources, and subsystem context | `vzik overview` |
    | Host or kernel summary | `vzik host info` or `vzik kernel info` |
    | Modules or hardening controls | `vzik kernel modules --max-items N`, `vzik kernel sysctls --max-items N`, or `vzik security posture` |
    | Process inventory and security context | `vzik process list --max-items N` |
+   | Security context, resources, limits, and I/O for one visible PID | `vzik process inspect PID` |
    | Interfaces, addresses, routes, neighbors, or sockets | `vzik network interfaces`, `vzik network addresses`, `vzik network routes`, `vzik network neighbors`, `vzik network sockets`, or `vzik network listeners` with an explicit `--max-items N` |
    | Resolver or firewall configuration evidence | `vzik network resolvers` or `vzik network firewall` |
    | Mount or cgroup scope | `vzik mount list --max-items N` or `vzik cgroup inspect` |
@@ -186,6 +209,20 @@ command string.
    state with every conclusion.
 
 ## Targeted collection rules
+
+- `overview` reports compact collector-visible system, resource, restriction,
+  and subsystem context. `overview --details` adds full passive observations,
+  including namespaces, capability sets, and cgroup counters/pressure.
+  Subsystem markers are fixed local path observations, not reachability tests
+  or exhaustive discovery. Missing CPU or memory measurements are not zero;
+  use each observation's status. Cgroup limits are local raw values, not
+  ancestor-effective budgets.
+- `process inspect PID` reads only that PID's declared sources. PID must be
+  positive and at most 2147483647. Preserve per-source availability, omitted
+  fields, diagnostics, and partial coverage. CPU ticks are cumulative counters,
+  not percentages. The collector checks for PID reuse while reading; a PID is
+  still only an address in the current namespace, not persistent identity.
+  It does not acquire environ, smaps, memory maps, or FD inventories.
 
 - `service.list` is static evidence. It covers all systemd unit suffixes in
   system, global-user, and discovered per-user roots, but it does not infer
@@ -261,11 +298,11 @@ jq -c 'select(.type == "data") |
 
 Do not pipe a collection through `head`: closing stdout early produces an intentionally incomplete stream. Reduce acquisition with collector limits, save the complete stream, then filter it.
 
-Linux-originated strings are objects with `display` and optional `raw_base64`. When `raw_base64` exists, `display` is an escaped rendering, not the original byte sequence. Do not interpolate either field into a shell command. Preserve `raw_base64` when exact filenames or process names matter.
+Linux byte-oriented inventory fields are objects with `display` and optional `raw_base64`. When `raw_base64` exists, `display` is an escaped rendering, not the original byte sequence. `host_overview.environment` uses typed observations with plain strings instead. Do not interpolate evidence into a shell command. Preserve `raw_base64` when exact filenames or process names matter.
 
 File chunks declare `encoding` independently. Do not concatenate rendered JSON strings or add line separators. Check offsets, `bytes`, encoding, the final EOF marker, and terminal outcome before claiming complete content.
 
-Read [references/protocol-v3.md](references/protocol-v3.md) when writing custom `jq` filters, interpreting record fields, or grounding claims in coverage.
+Read [references/protocol-v4.md](references/protocol-v4.md) when writing custom `jq` filters, interpreting record fields, or grounding claims in coverage.
 
 ## Failure handling
 
