@@ -66,7 +66,7 @@ Bundled commands are built into `axe`; Store commands are signed on-demand artif
 | System | `dmesg`, `hexdump`, `last`, `mountpoint` | Kernel log, hex dumps, login history, and mount points |
 | Text | `awk`, `grep`, `egrep`, `fgrep`, `rgrep`, `sed`, `find`, `xargs`, `diff`, `cmp`, `diff3` | Search, transform, and compare data |
 | Data | `jq` | JSON queries and transformations |
-| Archives | `tar`, `gzip`, `gunzip`, `zcat`, `gzcat`, `bzip2`, `bunzip2`, `bzcat`, `xz`, `unxz`, `xzcat` | Archives and compressed streams |
+| Archives | `tar`, `gzip`, `gunzip`, `zcat`, `gzcat`, `bzip2`, `bunzip2`, `bzcat`, `xz`, `unxz`, `xzcat`, `zstd` | Archives and compressed streams |
 | Binary inspection | `file`, `goblin`, `strings` | Identify and inspect binary formats |
 | Network | `http`, `arp`, `ifconfig`, `ip`, `ipaddr`, `iplink`, `ipneigh`, `iproute`, `iprule`, `ipcalc`, `host`, `nslookup`, `ping`, `ping6`, `traceroute`, `traceroute6` | Bounded HTTP requests, Linux networking, DNS, and connectivity |
 | Storage | `blkid`, `blockdev`, `mount` | Block devices and mounts; bundled `mount` is read-only |
@@ -79,6 +79,8 @@ Bundled commands are built into `axe`; Store commands are signed on-demand artif
 For the bundled HTTP applet, see [HTTP requests](http.md).
 
 For passive host context and targeted evidence, see [Vzik](vzik.md).
+
+The bundled `zstd` uses the linked Zstandard codec and keeps input files by default. It supports compression/decompression (`-d`), stdout (`-c`), explicit output (`-o FILE`), integrity checks (`-t`), overwrite (`-f`), input removal (`--rm`), levels 1–19, `--ultra` levels 20–22, `--fast[=N]`, and worker counts (`-T N`; zero selects available CPUs). Compression includes a checksum; decompression accepts concatenated frames. Run `axe zstd -- --help` for its supported CLI options.
 
 ## Process and network compatibility
 

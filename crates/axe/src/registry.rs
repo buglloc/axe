@@ -484,6 +484,7 @@ fn bundled_synopsis(name: &str) -> &'static str {
         "uniq" => "Report or remove adjacent duplicate lines",
         "unlink" => "Remove one filesystem name",
         "unxz" | "xz" | "xzcat" => "Compress or decompress xz data",
+        "zstd" => "Compress or decompress Zstandard data",
         "uptime" => "Report system uptime and load averages",
         "users" => "Print logged-in user names",
         "vmstat" => "Report virtual memory statistics",
@@ -588,6 +589,12 @@ pub fn build(
         for name in ["xz", "unxz", "xzcat"] {
             commands.insert_bundled(name, "compression", None, crate::applets::xz as BundledFn);
         }
+        commands.insert_bundled(
+            "zstd",
+            "compression",
+            None,
+            crate::applets::zstd as BundledFn,
+        );
     }
     commands.insert_bundled("http", "network", None, crate::applets::http as BundledFn);
     #[cfg(target_os = "linux")]

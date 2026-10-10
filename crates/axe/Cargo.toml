@@ -68,7 +68,7 @@ url.workspace = true
 webpki-root-certs.workspace = true
 vzik.workspace = true
 whoami = { version = "2.1.3" }
-zstd.workspace = true
+zstd = { workspace = true, features = ["zstdmt"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["fs", "term"] }

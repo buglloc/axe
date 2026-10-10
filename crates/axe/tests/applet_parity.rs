@@ -462,6 +462,84 @@ fn bzip2_and_xz_streams_interoperate_with_reference_tools() {
 }
 
 #[test]
+fn zstd_streams_interoperate_and_reject_damaged_frames() {
+    assert_compression_interoperability("zstd");
+    let scratch = Scratch::new("zstd-frames");
+    let first = run_reference("zstd", &["-c"], b"first frame\n", scratch.path());
+    let second = run_reference("zstd", &["-c"], b"second frame\n", scratch.path());
+    assert_success("first reference frame", &first);
+    assert_success("second reference frame", &second);
+    let mut frames = first.stdout;
+    frames.extend_from_slice(&second.stdout);
+    let decoded = run_applet("zstd", &["-dc"], &frames, scratch.path());
+    assert_success("concatenated zstd frames", &decoded);
+    assert_eq!(decoded.stdout, b"first frame\nsecond frame\n");
+
+    frames.pop();
+    let damaged = run_applet("zstd", &["-t"], &frames, scratch.path());
+    assert!(!damaged.status.success(), "truncated frame was accepted");
+}
+
+#[test]
+fn zstd_preserves_inputs_and_protects_explicit_output() {
+    let scratch = Scratch::new("zstd-files");
+    let payload = b"preserved input\n";
+    let source = scratch.path().join("payload");
+    fs::write(&source, payload).expect("write zstd input");
+    assert_success(
+        "zstd compression",
+        &run_applet("zstd", &["payload"], b"", scratch.path()),
+    );
+    assert_eq!(fs::read(&source).unwrap(), payload);
+
+    let overwrite = run_applet("zstd", &["-d", "payload.zst"], b"", scratch.path());
+    assert!(
+        !overwrite.status.success(),
+        "existing output was overwritten"
+    );
+    assert_eq!(fs::read(&source).unwrap(), payload);
+
+    fs::hard_link(&source, scratch.path().join("same-file")).unwrap();
+    let same_file = run_applet(
+        "zstd",
+        &["-f", "-o", "same-file", "payload"],
+        b"",
+        scratch.path(),
+    );
+    assert!(
+        !same_file.status.success(),
+        "hard-linked input was truncated"
+    );
+    assert_eq!(fs::read(&source).unwrap(), payload);
+
+    assert_success(
+        "zstd decompression with input removal",
+        &run_applet(
+            "zstd",
+            &["-d", "--rm", "-o", "decoded", "payload.zst"],
+            b"",
+            scratch.path(),
+        ),
+    );
+    assert_eq!(fs::read(scratch.path().join("decoded")).unwrap(), payload);
+    assert!(!scratch.path().join("payload.zst").exists());
+
+    fs::write(scratch.path().join("bad.zst"), b"not a zstd stream").unwrap();
+    let damaged = run_applet(
+        "zstd",
+        &["-d", "-o", "partial", "bad.zst"],
+        b"",
+        scratch.path(),
+    );
+    assert!(!damaged.status.success(), "invalid frame was accepted");
+    assert!(!scratch.path().join("partial").exists());
+    assert_eq!(
+        fs::read(scratch.path().join("bad.zst")).unwrap(),
+        b"not a zstd stream"
+    );
+}
+
+#[test]
 fn tar_lists_and_extracts_gnu_archives() {
     let scratch = Scratch::new("tar");
     let fixture = scratch.path().join("fixture");

@@ -90,6 +90,7 @@
             gzip
             jq
             xz
+            zstd
           ]
           ++ lib.optionals stdenv.hostPlatform.isLinux [
             iproute2

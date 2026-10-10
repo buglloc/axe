@@ -31,6 +31,7 @@ Commands:
   clean-tools                       remove metadata for the current Store identity
   refresh-tools                     fetch and verify the current signed Index
   axe APPLET -- --help             print applet-specific help
+  zstd [-cdfkt] [FILE ...]          Zstandard compression; keeps input files by default
   killall [OPTIONS] NAME ...        Linux bundled exact-name process signalling
                                    -s/-SIGNAL/-NUM, -I, -u, -l, -q, -v;
                                    names use the kernel's 15-byte comm field

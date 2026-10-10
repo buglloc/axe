@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -14,6 +15,7 @@ enum Format {
     Gzip,
     Bzip2,
     Xz,
+    Zstd,
 }
 
 impl Format {
@@ -22,6 +24,7 @@ impl Format {
             Self::Gzip => "gzip",
             Self::Bzip2 => "bzip2",
             Self::Xz => "xz",
+            Self::Zstd => "zstd",
         }
     }
 
@@ -29,6 +32,9 @@ impl Format {
         match self {
             Self::Gzip => "[-cdfkt] [FILE ...]",
             Self::Bzip2 | Self::Xz => "[-cdfktl] [-T THREADS] [-1..-9] [FILE ...]",
+            Self::Zstd => {
+                "[-cdfktqv] [-o FILE] [-T THREADS] [-1..-19] [--ultra -20..-22] [--fast[=N]] [--rm] [FILE ...]"
+            }
         }
     }
 }
@@ -43,6 +49,10 @@ pub fn bzip2(args: Vec<OsString>) -> i32 {
 
 pub fn xz(args: Vec<OsString>) -> i32 {
     entry(args, Format::Xz)
+}
+
+pub fn zstd(args: Vec<OsString>) -> i32 {
+    entry(args, Format::Zstd)
 }
 
 fn entry(args: Vec<OsString>, format: Format) -> i32 {
@@ -79,9 +89,11 @@ struct Options {
     list: bool,
     quiet: bool,
     verbose: bool,
-    level: u32,
+    level: i32,
     threads: u32,
     files: Vec<OsString>,
+    output: Option<PathBuf>,
+    ultra: bool,
 }
 
 impl Options {
@@ -100,15 +112,17 @@ impl Options {
             format,
             decompress,
             stdout,
-            keep: false,
+            keep: matches!(format, Format::Zstd),
             force: false,
             test: false,
             list: false,
             quiet: false,
             verbose: false,
-            level: 6,
+            level: if matches!(format, Format::Zstd) { 3 } else { 6 },
             threads: 1,
             files: Vec::new(),
+            output: None,
+            ultra: false,
         };
 
         let mut positional = false;
@@ -138,6 +152,19 @@ impl Options {
             }
         }
 
+        if matches!(format, Format::Zstd) {
+            if options.level > 19 && !options.ultra {
+                return Err(invalid("levels above 19 require --ultra"));
+            }
+            if options.output.is_some() && options.files.len() > 1 {
+                return Err(invalid("-o requires a single input"));
+            }
+            if options.output.as_deref() == Some(Path::new("-")) {
+                options.stdout = true;
+                options.output = None;
+            }
+        }
+
         Ok(options)
     }
 
@@ -147,6 +174,51 @@ impl Options {
         text: &str,
         args: &mut impl Iterator<Item = OsString>,
     ) -> io::Result<bool> {
+        if matches!(self.format, Format::Zstd) {
+            match text {
+                "--compress" => self.decompress = false,
+                "--decompress" => self.decompress = true,
+                "--stdout" => self.stdout = true,
+                "--force" => self.force = true,
+                "--keep" => self.keep = true,
+                "--rm" => self.keep = false,
+                "--test" => {
+                    self.test = true;
+                    self.decompress = true;
+                }
+                "--quiet" => self.quiet = true,
+                "--verbose" => self.verbose = true,
+                "--ultra" => self.ultra = true,
+                "--fast" => self.level = -1,
+                "-o" => {
+                    self.output = Some(
+                        args.next()
+                            .ok_or_else(|| invalid("-o requires an output file"))?
+                            .into(),
+                    );
+                }
+                _ => {
+                    if let Some(value) = text.strip_prefix("--fast=") {
+                        self.level = -value
+                            .parse::<i32>()
+                            .ok()
+                            .filter(|value| (1..=131_072).contains(value))
+                            .ok_or_else(|| invalid("invalid fast compression level"))?;
+                    } else if let Some(value) = text.strip_prefix('-').filter(|value| {
+                        !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit())
+                    }) {
+                        self.level = value
+                            .parse::<i32>()
+                            .ok()
+                            .filter(|value| (1..=22).contains(value))
+                            .ok_or_else(|| invalid("invalid zstd compression level"))?;
+                    } else {
+                        return self.thread_option(text, args);
+                    }
+                }
+            }
+            return Ok(true);
+        }
         match self.format {
             Format::Gzip => match text {
                 "--test" => {
@@ -162,28 +234,39 @@ impl Options {
                 _ => return Ok(false),
             },
             Format::Bzip2 | Format::Xz => {
-                if text == "-T" || text == "--threads" {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| invalid("-T requires a thread count"))?;
-                    self.threads = parse_threads(&value)?;
-                } else if let Some(value) = text.strip_prefix("--threads=") {
-                    self.threads = parse_threads(OsStr::new(value))?;
-                } else if let Some(value) =
-                    text.strip_prefix("-T").filter(|value| !value.is_empty())
-                {
-                    self.threads = parse_threads(OsStr::new(value))?;
-                } else if text == "--list" || text == "-l" {
+                if text == "--list" || text == "-l" {
                     if !matches!(self.format, Format::Xz) {
                         return Err(invalid("--list is only supported by xz"));
                     }
                     self.list = true;
                 } else {
-                    return Ok(false);
+                    return self.thread_option(text, args);
                 }
             }
+            Format::Zstd => unreachable!("zstd options are handled above"),
         }
 
+        Ok(true)
+    }
+
+    fn thread_option(
+        &mut self,
+        text: &str,
+        args: &mut impl Iterator<Item = OsString>,
+    ) -> io::Result<bool> {
+        if text == "-T" || text == "--threads" {
+            self.threads = parse_threads(
+                &args
+                    .next()
+                    .ok_or_else(|| invalid("-T requires a thread count"))?,
+            )?;
+        } else if let Some(value) = text.strip_prefix("--threads=") {
+            self.threads = parse_threads(OsStr::new(value))?;
+        } else if let Some(value) = text.strip_prefix("-T").filter(|value| !value.is_empty()) {
+            self.threads = parse_threads(OsStr::new(value))?;
+        } else {
+            return Ok(false);
+        }
         Ok(true)
     }
 
@@ -204,11 +287,13 @@ impl Options {
                 self.list = true;
                 self.decompress = true;
             }
-            (Format::Bzip2 | Format::Xz, 'z') => self.decompress = false,
+            (Format::Bzip2 | Format::Xz | Format::Zstd, 'z') => self.decompress = false,
             (Format::Bzip2 | Format::Xz, 'q' | 'v') => {}
+            (Format::Zstd, 'q') => self.quiet = true,
+            (Format::Zstd, 'v') => self.verbose = true,
             (Format::Xz, 'l') => self.list = true,
             (Format::Bzip2 | Format::Xz, '1'..='9') => {
-                self.level = flag.to_digit(10).expect("digit");
+                self.level = flag.to_digit(10).expect("digit") as i32;
             }
             _ => return Err(invalid(format!("unsupported option -{flag}"))),
         }
@@ -243,21 +328,17 @@ impl Options {
                 continue;
             }
 
-            let output_path = output_path(input_path, self.decompress, self.format)?;
+            let output_path = match &self.output {
+                Some(path) => {
+                    if same_file(&input, path)? {
+                        return Err(invalid("input and output must be different files"));
+                    }
+                    Cow::Borrowed(path.as_path())
+                }
+                None => Cow::Owned(output_path(input_path, self.decompress, self.format)?),
+            };
             let output = create_output(&output_path, self.force)?;
-            if let Err(error) = self.transcode(input, output) {
-                return match fs::remove_file(&output_path) {
-                    Ok(()) => Err(error),
-                    Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => Err(error),
-                    Err(cleanup) => Err(io::Error::new(
-                        error.kind(),
-                        format!(
-                            "{error}; cannot remove partial output {}: {cleanup}",
-                            output_path.display()
-                        ),
-                    )),
-                };
-            }
+            self.transcode_file(input, output, &output_path)?;
 
             if self.verbose && !self.quiet {
                 eprintln!("{}: done", input_path.display());
@@ -275,9 +356,31 @@ impl Options {
         let stdin = io::stdin().lock();
         if self.test {
             self.decode(stdin, io::sink()).map(drop)
+        } else if !self.stdout
+            && let Some(path) = &self.output
+        {
+            let output = create_output(path, self.force)?;
+            self.transcode_file(stdin, output, path)
         } else {
             self.transcode(stdin, io::stdout().lock())
         }
+    }
+
+    fn transcode_file(&self, input: impl Read, output: File, path: &Path) -> io::Result<()> {
+        if let Err(error) = self.transcode(input, output) {
+            return match fs::remove_file(path) {
+                Ok(()) => Err(error),
+                Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => Err(error),
+                Err(cleanup) => Err(io::Error::new(
+                    error.kind(),
+                    format!(
+                        "{error}; cannot remove partial output {}: {cleanup}",
+                        path.display()
+                    ),
+                )),
+            };
+        }
+        Ok(())
     }
 
     fn transcode(&self, input: impl Read, output: impl Write) -> io::Result<()> {
@@ -296,12 +399,12 @@ impl Options {
                 encoder.try_finish()
             }
             Format::Bzip2 => {
-                let mut encoder = BzEncoder::new(input, bzip2::Compression::new(self.level));
+                let mut encoder = BzEncoder::new(input, bzip2::Compression::new(self.level as u32));
                 io::copy(&mut encoder, &mut output)?;
                 output.flush()
             }
             Format::Xz => {
-                let options = XzOptions::with_preset(self.level);
+                let options = XzOptions::with_preset(self.level as u32);
                 let mut output = if self.threads == 1 {
                     let mut encoder = XzWriter::new(output, options).map_err(io::Error::other)?;
                     io::copy(&mut input, &mut encoder)?;
@@ -323,6 +426,20 @@ impl Options {
                 };
                 output.flush()
             }
+            Format::Zstd => {
+                let mut encoder = zstd::stream::write::Encoder::new(output, self.level)?;
+                encoder.include_checksum(true)?;
+                let workers = if self.threads == 0 {
+                    std::thread::available_parallelism().map_or(1, |count| count.get() as u32)
+                } else {
+                    self.threads
+                };
+                if workers > 1 {
+                    encoder.multithread(workers.min(256))?;
+                }
+                io::copy(&mut input, &mut encoder)?;
+                encoder.finish()?.flush()
+            }
         }
     }
 
@@ -332,6 +449,7 @@ impl Options {
             Format::Gzip => io::copy(&mut MultiGzDecoder::new(input), &mut output)?,
             Format::Bzip2 => io::copy(&mut MultiBzDecoder::new(input), &mut output)?,
             Format::Xz => io::copy(&mut XzReader::new(input, true), &mut output)?,
+            Format::Zstd => io::copy(&mut zstd::stream::read::Decoder::new(input)?, &mut output)?,
         };
         output.flush()?;
         Ok(decoded)
@@ -345,6 +463,7 @@ impl Options {
                 Format::Bzip2 | Format::Xz => {
                     "Strms  Blocks   Compressed Uncompressed  Ratio  Check   Filename"
                 }
+                Format::Zstd => unreachable!("zstd does not accept --list"),
             }
         );
 
@@ -364,6 +483,7 @@ impl Options {
                     .display()
                     .to_string(),
                 Format::Bzip2 | Format::Xz => file.to_string_lossy().into_owned(),
+                Format::Zstd => unreachable!("zstd does not accept --list"),
             };
             self.print_listing(&name, &compressed)?;
         }
@@ -389,6 +509,7 @@ impl Options {
                 uncompressed,
                 ratio(compressed.len() as f64 / uncompressed as f64)
             ),
+            Format::Zstd => unreachable!("zstd does not accept --list"),
         }
 
         Ok(())
@@ -406,6 +527,27 @@ fn parse_threads(value: &OsStr) -> io::Result<u32> {
         .to_str()
         .and_then(|value| value.parse().ok())
         .ok_or_else(|| invalid(format!("invalid thread count: {}", value.to_string_lossy())))
+}
+
+fn same_file(input: &File, output: &Path) -> io::Result<bool> {
+    let output = match fs::metadata(output) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let input = input.metadata()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(input.dev() == output.dev() && input.ino() == output.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (input, output);
+        Err(invalid(
+            "explicit output files require Unix file identity checks",
+        ))
+    }
 }
 
 fn create_output(path: &Path, force: bool) -> io::Result<File> {
@@ -435,6 +577,7 @@ fn output_path(input: &Path, decompress: bool, format: Format) -> io::Result<Pat
             Format::Gzip => ".gz",
             Format::Bzip2 => ".bz2",
             Format::Xz => ".xz",
+            Format::Zstd => ".zst",
         });
         return Ok(output.into());
     }
@@ -461,7 +604,7 @@ fn output_path(input: &Path, decompress: bool, format: Format) -> io::Result<Pat
             };
             Ok(input.with_file_name(output_name))
         }
-        Format::Bzip2 | Format::Xz => {
+        Format::Bzip2 | Format::Xz | Format::Zstd => {
             let suffix = input
                 .extension()
                 .and_then(OsStr::to_str)
@@ -469,12 +612,13 @@ fn output_path(input: &Path, decompress: bool, format: Format) -> io::Result<Pat
             let accepted = match format {
                 Format::Bzip2 => matches!(suffix, "bz2" | "bz" | "tbz" | "tbz2"),
                 Format::Gzip | Format::Xz => suffix == "xz",
+                Format::Zstd => matches!(suffix, "zst" | "tzst"),
             };
             if !accepted {
                 return Err(unknown());
             }
             let mut output = input.to_path_buf();
-            output.set_extension(if matches!(suffix, "tbz" | "tbz2") {
+            output.set_extension(if matches!(suffix, "tbz" | "tbz2" | "tzst") {
                 "tar"
             } else {
                 ""
