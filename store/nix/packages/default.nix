@@ -6,6 +6,7 @@
   lib = nixpkgs.lib;
   helpers = import ./lib.nix {inherit nixpkgs additionalCaBundle;};
   publicCategories = {
+    archives = import ./archives.nix helpers;
     containers = import ./containers.nix helpers;
     data = import ./data.nix helpers;
     debugging = import ./debugging.nix helpers;
