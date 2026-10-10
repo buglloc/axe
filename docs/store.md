@@ -65,6 +65,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `python`, `python3` | Static Python with HTTP, WebSocket, and HTML libraries | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `rclone` | Copy and synchronize files with remote storage | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `readelf` | Inspect ELF headers, sections, symbols, and debug information | `aarch64-linux`, `x86_64-linux` |
+| `restic` | Back up and restore files in encrypted repositories | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `rg` | Search file contents with regular expressions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `rsync` | Synchronize local and remote paths | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `s5cmd` | Copy and manage S3 objects with parallel batch operations | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
@@ -109,6 +110,8 @@ The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinn
 `rclone` embeds CA roots and timezone data. Release checks, self-update, the GUI downloader, and cloud SDK telemetry are disabled or removed. The authenticated RC API and explicit `--rc-files` remain available. Cgo-based mounting is excluded; Go FUSE mounts require host FUSE support and its mount helper.
 
 `s5cmd` uses AWS credentials and profiles, supports custom S3 endpoints with `--endpoint-url`, and runs command files with `run`. It embeds Mozilla CA roots and additional CAs from the selected edition as a fallback when system roots are unavailable. System trust and `SSL_CERT_FILE` custom CA bundles remain available. S3-compatible providers may support only a subset of its operations.
+
+`restic` supports local and remote encrypted repositories. It embeds edition CA roots as a fallback when system trust is unavailable; `--cacert` remains available for explicit trust. SFTP and rclone backends require `ssh` and `rclone` on `PATH`. Mounting requires host FUSE support. Self-update is excluded.
 
 `bwrap` is Bubblewrap's standalone executable. Unprivileged sandboxing requires user namespaces permitted by the host kernel and security policy.
 
