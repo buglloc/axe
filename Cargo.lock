@@ -452,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "axe"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "awk-rs",
  "axe-artifact",
@@ -562,7 +562,7 @@ dependencies = [
 
 [[package]]
 name = "axe-artifact"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "ciborium",
  "ed25519-dalek 2.2.0",
@@ -574,14 +574,14 @@ dependencies = [
 
 [[package]]
 name = "axe-paths"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "axe-relay"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "axum",
  "ciborium",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "axe-store"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "axe-artifact",
  "base64 0.22.1",
@@ -627,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "axe-store-client"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "axe-artifact",
  "axe-paths",
@@ -9884,7 +9884,7 @@ dependencies = [
 
 [[package]]
 name = "vzik"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64 0.22.1",
  "clap_builder",
