@@ -1,20 +1,20 @@
 {
   "aarch64-darwin": {
-    "version": "0.5.0",
-    "url": "https://storage.yandexcloud.net/axe-store/axe/releases/v0.5.0/aarch64-darwin/axe",
+    "version": "0.5.1",
+    "url": "https://storage.yandexcloud.net/axe-store/axe/releases/v0.5.1/aarch64-darwin/axe",
     "stable_url": "https://storage.yandexcloud.net/axe-store/axe/stable/aarch64-darwin/axe",
-    "hash": "sha256-wVBC163Tlmc9vG+XYMumSbc1O8tKC2YCg+8LWWZH+6E="
+    "hash": "sha256-bpGsuhl8naId3oxe+lw3xwRtBxPzNmsKlmlvwVOo4vo="
   },
   "aarch64-linux": {
-    "version": "0.5.0",
-    "url": "https://storage.yandexcloud.net/axe-store/axe/releases/v0.5.0/aarch64-linux/axe",
+    "version": "0.5.1",
+    "url": "https://storage.yandexcloud.net/axe-store/axe/releases/v0.5.1/aarch64-linux/axe",
     "stable_url": "https://storage.yandexcloud.net/axe-store/axe/stable/aarch64-linux/axe",
-    "hash": "sha256-7fIAthFesM7Sy9LlPtLL/+I+tXD+xQoFA2CRAC5fRbo="
+    "hash": "sha256-23DwQJ/Jxcpqx5yYvFZWnRtKGGMMvHlMBWRmXsOOcZg="
   },
   "x86_64-linux": {
-    "version": "0.5.0",
-    "url": "https://storage.yandexcloud.net/axe-store/axe/releases/v0.5.0/x86_64-linux/axe",
+    "version": "0.5.1",
+    "url": "https://storage.yandexcloud.net/axe-store/axe/releases/v0.5.1/x86_64-linux/axe",
     "stable_url": "https://storage.yandexcloud.net/axe-store/axe/stable/x86_64-linux/axe",
-    "hash": "sha256-s6CJM5q0M1rk/1875PEaftl737KMmY7UfiGyxrd/WYg="
+    "hash": "sha256-oDAKA5gRQMCOWnlT9nsHjHGsCSEgqbT8rdxs3ASlv+g="
   }
 }

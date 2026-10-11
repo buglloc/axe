@@ -2,6 +2,23 @@
 title = "Changelog"
 +++
 
+## [v0.5.1](https://github.com/buglloc/axe/releases/tag/v0.5.1) — 2026-10-11
+
+### Highlights
+
+- Unified bundled and AXE Store command categories by purpose. Website filters and command inventory rows now use the same category IDs and labels. (`eeb520864bc3`)
+
+### Changes
+
+- Updated category values in `commands` output: for example, `cp` uses `files`, `chmod` uses `security`, `jq` uses `text`, and AXE controls such as `doctor` use `axe`. Aliases retain their canonical command’s category, including `dnsdomainname` → `system` and `gunzip` → `archives`. (`eeb520864bc3`)
+- Renamed 15 Store package IDs to match their categories:
+  - `files/fd`, `files/fzf`, and `files/rg` replace the corresponding `search/` IDs.
+  - `text/jq`, `text/sqlite3`, and `text/yq` replace the corresponding `data/` IDs.
+  - `storage/findmnt`, `storage/fio`, `storage/rclone`, `storage/restic`, `storage/rsync`, and `storage/s5cmd` replace IDs under `containers/`, `debugging/`, `network/`, or `archives/`.
+  - `terminal/tmux` and `terminal/zellij` replace the corresponding `runtime/` IDs.
+  - `debugging/binwalk` replaces `security/binwalk`. (`eeb520864bc3`)
+- Website command search now matches the displayed category labels as well as category IDs, command names, synopses, and sources. (`eeb520864bc3`)
+
 ## Unreleased
 
 ### Changes
