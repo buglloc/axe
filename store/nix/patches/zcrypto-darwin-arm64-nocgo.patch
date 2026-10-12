@@ -1,0 +1,8 @@
+--- a/vendor/github.com/zmap/zcrypto/ct/x509/root_nocgo_darwin.go
++++ b/vendor/github.com/zmap/zcrypto/ct/x509/root_nocgo_darwin.go
+@@ -7,2 +7,3 @@
+-//go:build !arm && !arm64 && !ios
+-// +build !arm,!arm64,!ios
++//go:build !ios && ((!arm && !arm64) || !cgo)
++// +build !ios
++// +build !arm,!arm64 !cgo

@@ -1,0 +1,150 @@
+--- a/blocklist.go
++++ b/blocklist.go
+@@ -1,6 +1,8 @@
+ package zgrab2
+ 
+ import (
++	_ "embed"
++	"errors"
+ 	"fmt"
+ 	"net"
+ 	"os"
+@@ -8,6 +10,9 @@
+ 
+ 	"github.com/censys/cidranger"
+ )
++
++//go:embed conf/blocklist.conf
++var defaultBlocklist []byte
+ 
+ func stripComments(line, commentDelimiter string) string {
+ 	// Remove comments from the line
+@@ -20,7 +25,17 @@
+ // readBlocklist reads a blocklist file that contains CIDR ranges, IPs, or IP ranges
+ // It returns a path-compressed trie of CIDR ranges that can be used to check if an IP address is in the blocklist
+ func readBlocklist(fileName string) (cidranger.Ranger, error) {
++	useDefault := fileName == "-"
++	if useDefault {
++		fileName = os.Getenv("HOME") + "/.config/zgrab2/blocklist.conf"
++	}
++
+ 	data, err := os.ReadFile(fileName)
++	if useDefault && errors.Is(err, os.ErrNotExist) {
++		data = defaultBlocklist
++		err = nil
++	}
++
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to read blocklist file: %w", err)
+ 	}
+--- a/config.go
++++ b/config.go
+@@ -49,1 +49,1 @@
+-	BlocklistFileName     string `short:"b" long:"blocklist-file" description:"Blocklist filename, use - for $(HOME)/.config/zgrab2/blocklist.conf."`
++	BlocklistFileName     string `short:"b" long:"blocklist-file" description:"Blocklist filename, use - for $(HOME)/.config/zgrab2/blocklist.conf with embedded defaults if absent."`
+@@ -284,11 +284,8 @@
+ 	if len(config.BlocklistFileName) > 0 {
+-		if config.BlocklistFileName == "-" {
+-			// use the default location
+-			config.BlocklistFileName = os.Getenv("HOME") + "/.config/zgrab2/blocklist.conf"
+-		}
+ 		var err error
++
+ 		blocklist, err = readBlocklist(config.BlocklistFileName)
+ 		if err != nil {
+ 			log.Fatalf("could not read blocklist file %s: %s", config.BlocklistFileName, err)
+ 		}
+ 	} else {
+--- /dev/null
++++ b/blocklist_test.go
+@@ -0,0 +1,90 @@
++package zgrab2
++
++import (
++	"errors"
++	"net"
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++func TestStandaloneBlocklist(t *testing.T) {
++	tests := []struct {
++		name          string
++		fileName      string
++		contents      *string
++		directory     bool
++		wantError     bool
++		wantNotExist  bool
++		blockLoopback bool
++		blockPublic   bool
++	}{
++		{name: "missing default", fileName: "-", blockLoopback: true},
++		{name: "existing default", fileName: "-", contents: blocklistContents("8.8.8.8/32\n"), blockPublic: true},
++		{name: "empty default", fileName: "-", contents: blocklistContents("")},
++		{name: "invalid default", fileName: "-", contents: blocklistContents("invalid\n"), wantError: true},
++		{name: "unreadable default", fileName: "-", directory: true, wantError: true},
++		{name: "explicit missing", fileName: "explicit.conf", wantError: true, wantNotExist: true},
++		{name: "explicit missing default path", fileName: ".config/zgrab2/blocklist.conf", wantError: true, wantNotExist: true},
++		{name: "explicit empty", fileName: "explicit.conf", contents: blocklistContents("")},
++		{name: "explicit list", fileName: "explicit.conf", contents: blocklistContents("8.8.8.8/32\n"), blockPublic: true},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			home := t.TempDir()
++			t.Setenv("HOME", home)
++
++			fileName := tt.fileName
++			path := filepath.Join(home, ".config/zgrab2/blocklist.conf")
++			if fileName != "-" {
++				fileName = filepath.Join(home, fileName)
++				path = fileName
++			}
++
++			if tt.contents != nil || tt.directory {
++				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
++					t.Fatal(err)
++				}
++
++				if tt.directory {
++					if err := os.Mkdir(path, 0700); err != nil {
++						t.Fatal(err)
++					}
++				} else if err := os.WriteFile(path, []byte(*tt.contents), 0600); err != nil {
++					t.Fatal(err)
++				}
++			}
++
++			blocklist, err := readBlocklist(fileName)
++			if tt.wantError {
++				if err == nil {
++					t.Fatal("expected a blocklist error")
++				}
++
++				if tt.wantNotExist && !errors.Is(err, os.ErrNotExist) {
++					t.Fatalf("expected missing file error, got %v", err)
++				}
++				return
++			}
++
++			if err != nil {
++				t.Fatal(err)
++			}
++
++			for ip, want := range map[string]bool{"127.0.0.1": tt.blockLoopback, "8.8.8.8": tt.blockPublic} {
++				blocked, err := blocklist.Contains(net.ParseIP(ip))
++				if err != nil {
++					t.Fatal(err)
++				}
++
++				if blocked != want {
++					t.Errorf("blocklist.Contains(%s) = %t, want %t", ip, blocked, want)
++				}
++			}
++		})
++	}
++}
++
++func blocklistContents(value string) *string {
++	return &value
++}

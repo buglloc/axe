@@ -573,6 +573,7 @@
     });
 in {
   caddy = import ./network/caddy.nix helpers;
+  zgrab2 = import ./network/zgrab2.nix helpers;
 
   tcpdump = mkNixpkgsBinary {
     name = "tcpdump";
