@@ -94,14 +94,17 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `xh` | `network/xh` | Interactive-friendly HTTP client | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `yc` | `network/yc` | Manage Yandex Cloud resources | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `yq` | `text/yq` | Process YAML, JSON, and XML | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `zdns` | `network/zdns` | Perform high-speed DNS lookups with optional local recursive resolution | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `zellij` | `terminal/zellij` | Manage terminal sessions, panes, and embedded plugins | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `zgrab2` | `network/zgrab2` | Scan application-layer protocols and collect service metadata | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 
 The `nuclei` package includes pinned `nuclei-templates`; no separate template download is needed on first run.
 
-`zgrab2` does not send telemetry or perform automatic version checks, updates, or startup downloads. Network traffic is driven by the requested scans and DNS resolution; `zgrab2 --prometheus` enables an optional local monitoring listener.
+`zgrab2` and `zdns` do not send telemetry or perform automatic version checks, updates, or startup downloads. Network traffic is driven by the requested scans and DNS resolution; `zgrab2 --prometheus` and `ZDNS_PPROF=true` enable optional local monitoring listeners.
 
 `zgrab2` embeds the upstream blocklist as a fallback when `~/.config/zgrab2/blocklist.conf` is absent. Existing user files take precedence; invalid files and missing explicit `-b FILE` paths remain errors. The default list excludes private and loopback networks. Use `-b FILE` for a custom list or `-b ''` to disable it for an authorized internal scan.
+
+`zdns` supports explicit resolvers with `--name-servers` and local recursion with `--iterative`. Select the internal resolver explicitly for private DNS; `--threads` controls concurrency.
 
 The `interactsh-client` package removes automatic version checks and their machine-information telemetry. Explicit authentication, ASN lookups, and manual updates remain opt-in.
 
