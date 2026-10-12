@@ -2,6 +2,17 @@
 title = "Changelog"
 +++
 
+## [v0.5.2](https://github.com/buglloc/axe/releases/tag/v0.5.2) — 2026-10-12
+
+### Highlights
+
+- Added `zdns` 2.0.5 to AXE Store for high-speed DNS lookups with optional local recursive resolution. (`68fd4e573af4`)
+- Added `zgrab2` 1.0.0 to AXE Store for application-layer protocol scanning and service metadata collection. (`c1a29b335378`)
+
+### Changes
+
+- `zgrab2 --blocklist-file -` reads `$HOME/.config/zgrab2/blocklist.conf` when present and uses an embedded default blocklist when that file is absent. Existing files, including empty ones, take precedence; other read errors and missing explicitly named files remain errors. (`c1a29b335378`)
+
 ## [v0.5.1](https://github.com/buglloc/axe/releases/tag/v0.5.1) — 2026-10-11
 
 ### Highlights
