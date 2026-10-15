@@ -10,7 +10,7 @@
   goDarwin,
   disableCdncheckIPv6Probe,
   ...
-}: let
+} @ helpers: let
   capshMinimal = packageSet:
     (packageSet.libcap.override {runtimeShell = "/bin/sh";}).overrideAttrs (old: {
       patches = (old.patches or []) ++ [../patches/capsh-use-axe-shell.patch];
@@ -138,6 +138,10 @@
       fi
     '';
 in {
+  betterleaks = import ./security/betterleaks.nix helpers;
+  katana = import ./security/katana.nix helpers;
+  inherit (import ./security/yara.nix helpers) yara yarac;
+
   age = mkNixpkgsBinary {
     name = "age";
     synopsis = "Encrypt and decrypt files with explicit keys or passphrases";

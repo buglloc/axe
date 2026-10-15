@@ -1,0 +1,13 @@
+diff --git a/magic/Magdir/commands b/magic/Magdir/commands
+--- a/magic/Magdir/commands
++++ b/magic/Magdir/commands
+@@ -158,6 +158,7 @@
+ 
+-0	string	#!/nix/store/
+->&-11	string/T	x			a %s script text executable
++0	string	#!/nix/
++>7	string	store/
++>>&-11	string/T	x			a %s script text executable
+ 
+ # PHP scripts
+ # Ulf Harnhammar <ulfh@update.uu.se>

@@ -1,0 +1,122 @@
+diff --git a/internal/runner/runner.go b/internal/runner/runner.go
+--- a/internal/runner/runner.go
++++ b/internal/runner/runner.go
+@@ -18,7 +18,6 @@ import (
+ 	fileutil "github.com/projectdiscovery/utils/file"
+ 	iputil "github.com/projectdiscovery/utils/ip"
+ 	mapsutil "github.com/projectdiscovery/utils/maps"
+-	updateutils "github.com/projectdiscovery/utils/update"
+ 	"go.uber.org/multierr"
+ )
+ 
+@@ -63,17 +62,6 @@ func New(options *types.Options) (*Runner, error) {
+ 		return nil, nil
+ 	}
+ 
+-	if !options.DisableUpdateCheck {
+-		latestVersion, err := updateutils.GetToolVersionCallback("katana", version)()
+-		if err != nil {
+-			if options.Verbose {
+-				gologger.Error().Msgf("katana version check failed: %v", err.Error())
+-			}
+-		} else {
+-			gologger.Info().Msgf("Current katana version %v %v", version, updateutils.GetVersionDescription(version, latestVersion))
+-		}
+-	}
+-
+ 	if err := initExampleFormFillConfig(); err != nil {
+ 		return nil, errkit.Wrap(err, "could not init default config")
+ 	}
+diff --git a/pkg/engine/headless/browser/browser.go b/pkg/engine/headless/browser/browser.go
+--- a/pkg/engine/headless/browser/browser.go
++++ b/pkg/engine/headless/browser/browser.go
+@@ -116,9 +116,18 @@ func (l *Launcher) launchBrowserWithDataDir(userDataDir string) (*rod.Browser, error) {
+ 	if l.opts.ChromeWSUrl != "" {
+ 		launcherURL = l.opts.ChromeWSUrl
+ 	} else {
++		chromePath := l.opts.ChromiumPath
++		if chromePath == "" {
++			var hasChrome bool
++			chromePath, hasChrome = launcher.LookPath()
++			if !hasChrome {
++				return nil, errors.New("headless: Chrome/Chromium is not installed; use -system-chrome-path or -chrome-ws-url")
++			}
++		}
++
+ 		// Launch a new Chrome instance
+ 		chromeLauncher := launcher.New().
+ 			Leakless(true).
+ 			Set("disable-gpu", "true").
+ 			Set("ignore-certificate-errors", "true").
+ 			Set("disable-crash-reporter", "true").
+@@ -160,10 +169,6 @@ func (l *Launcher) launchBrowserWithDataDir(userDataDir string) (*rod.Browser, error) {
+ 			chromeLauncher = chromeLauncher.Headless(false)
+ 		}
+ 
+-		if l.opts.ChromiumPath != "" {
+-			chromeLauncher = chromeLauncher.Bin(l.opts.ChromiumPath)
+-		}
+-
+ 		if userDataDir != "" {
+ 			chromeLauncher = chromeLauncher.UserDataDir(userDataDir)
+ 		}
+@@ -171,7 +176,8 @@ func (l *Launcher) launchBrowserWithDataDir(userDataDir string) (*rod.Browser, error) {
+ 		for k, v := range l.opts.UserArguments {
+ 			chromeLauncher = chromeLauncher.Set(flags.Flag(k), v)
+ 		}
+ 
++		chromeLauncher.Bin(chromePath)
+ 		var err error
+ 		launcherURL, err = chromeLauncher.Launch()
+ 		if err != nil {
+diff --git a/pkg/engine/hybrid/hybrid.go b/pkg/engine/hybrid/hybrid.go
+--- a/pkg/engine/hybrid/hybrid.go
++++ b/pkg/engine/hybrid/hybrid.go
+@@ -279,20 +279,14 @@ func buildChromeLauncher(options *types.CrawlerOptions, dataStore string) (*launcher.Launcher, error) {
+ 		UserDataDir(dataStore)
+ 
+-	if options.Options.UseInstalledChrome {
+-		if options.Options.SystemChromePath != "" {
+-			chromeLauncher.Bin(options.Options.SystemChromePath)
+-		} else {
+-			if chromePath, hasChrome := launcher.LookPath(); hasChrome {
+-				chromeLauncher.Bin(chromePath)
+-			} else {
+-				return nil, errkit.New("hybrid: the chrome browser is not installed")
+-			}
++	chromePath := options.Options.SystemChromePath
++	if chromePath == "" {
++		var hasChrome bool
++		chromePath, hasChrome = launcher.LookPath()
++		if !hasChrome {
++			return nil, errkit.New("hybrid: Chrome/Chromium is not installed; use -system-chrome-path or -chrome-ws-url")
+ 		}
+ 	}
+-	if options.Options.SystemChromePath != "" {
+-		chromeLauncher.Bin(options.Options.SystemChromePath)
+-	}
+ 
+ 	if options.Options.ShowBrowser {
+ 		chromeLauncher = chromeLauncher.Headless(false)
+ 	} else {
+@@ -314,6 +308,7 @@ func buildChromeLauncher(options *types.CrawlerOptions, dataStore string) (*launcher.Launcher, error) {
+ 	for k, v := range options.Options.ParseHeadlessOptionalArguments() {
+ 		chromeLauncher.Set(flags.Flag(k), v)
+ 	}
+ 
++	chromeLauncher.Bin(chromePath)
+ 	return chromeLauncher, nil
+ }
+diff --git a/cmd/katana/main.go b/cmd/katana/main.go
+--- a/cmd/katana/main.go
++++ b/cmd/katana/main.go
+@@ -169,3 +169,3 @@ func readFlags() (*goflags.FlagSet, error) {
+ 		flagSet.BoolVarP(&options.HeadlessHybrid, "hybrid", "hh", false, "enable headless hybrid crawling (experimental)"),
+-		flagSet.BoolVarP(&options.UseInstalledChrome, "system-chrome", "sc", false, "use local installed chrome browser instead of katana installed"),
++		flagSet.BoolVarP(&options.UseInstalledChrome, "system-chrome", "sc", true, "use local Chrome/Chromium (automatic browser downloads are disabled)"),
+ 		flagSet.BoolVarP(&options.ShowBrowser, "show-browser", "sb", false, "show the browser on the screen with headless mode"),
+@@ -231,3 +231,3 @@ func readFlags() (*goflags.FlagSet, error) {
+ 		flagSet.CallbackVarP(runner.GetUpdateCallback(), "update", "up", "update katana to latest version"),
+-		flagSet.BoolVarP(&options.DisableUpdateCheck, "disable-update-check", "duc", false, "disable automatic katana update check"),
++		flagSet.BoolVarP(&options.DisableUpdateCheck, "disable-update-check", "duc", true, "automatic update checks are disabled in AXE Store"),
+ 	)

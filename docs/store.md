@@ -22,6 +22,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | --- | --- | --- | --- |
 | `7zz` | `archives/7zz` | Create and extract archives with 7-Zip | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `age` | `security/age` | Encrypt and decrypt files with keys or passphrases | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `betterleaks` | `security/betterleaks` | Scan files, stdin, and Git history for secrets with optional validation | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `binwalk` | `debugging/binwalk` | Analyze firmware images and embedded files | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `bpftool` | `debugging/bpftool` | Inspect and manage Linux eBPF objects | `aarch64-linux`, `x86_64-linux` |
 | `bwrap` | `containers/bwrap` | Run commands in isolated Linux namespaces | `aarch64-linux`, `x86_64-linux` |
@@ -51,6 +52,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `httpx` | `network/httpx` | Probe HTTP services and discover live targets | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `interactsh-client` | `security/interactsh-client` | Generate out-of-band testing payloads and collect interactions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `jq` | `text/jq` | Process JSON | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `katana` | `security/katana` | Crawl web applications and discover URLs and endpoints | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `kubectl` | `containers/kubectl` | Manage Kubernetes clusters | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `layerx` | `containers/layerx` | Inspect container image layers in a terminal UI or CI | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `lsns` | `containers/lsns` | Show Linux namespaces and processes | `aarch64-linux`, `x86_64-linux` |
@@ -92,6 +94,8 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `unshare` | `containers/unshare` | Run a program in new Linux namespaces | `aarch64-linux`, `x86_64-linux` |
 | `websocat` | `network/websocat` | Relay data between WebSockets and streams | `aarch64-linux`, `x86_64-linux` |
 | `xh` | `network/xh` | Interactive-friendly HTTP client | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `yara` | `security/yara` | Match user-supplied YARA rules against files and process memory | `aarch64-linux`, `x86_64-linux` |
+| `yarac` | `security/yarac` | Compile user-supplied YARA rules for the YARA scanner | `aarch64-linux`, `x86_64-linux` |
 | `yc` | `network/yc` | Manage Yandex Cloud resources | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `yq` | `text/yq` | Process YAML, JSON, and XML | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `zdns` | `network/zdns` | Perform high-speed DNS lookups with optional local recursive resolution | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
@@ -99,6 +103,14 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `zgrab2` | `network/zgrab2` | Scan application-layer protocols and collect service metadata | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 
 The `nuclei` package includes pinned `nuclei-templates`; no separate template download is needed on first run.
+
+`betterleaks` embeds its default detection rules, tokenizer, and word list. Filesystem and stdin scans do not require Git; history and clone modes require `git` on `PATH`. Live credential validation is opt-in with `--validation` and sends detected credentials to provider APIs. Use `--redact` when writing reports that must not expose secrets.
+
+`katana` performs standard crawling and JavaScript endpoint discovery without a browser. Automatic version checks and browser downloads are disabled. Headless and hybrid modes require an installed Chrome/Chromium, `-system-chrome-path`, or `-chrome-ws-url`; no browser is bundled. Katana can return status 0 after browser initialization or crawl failures, so check diagnostics and results rather than exit status alone.
+
+Katana's explicit `-kb`, `-filter-page-type`, and `-auto-login` features can download an upstream classification model on first use unless it is already available locally. `-kb-validate-secrets` enables provider requests; `-health-check` runs connectivity probes. Manual `-update` remains available.
+
+`yara` and `yarac` provide the classic YARA scanner and rule compiler. Linux binaries include the `hash`, `pe`, `elf`, `cuckoo`, `dex`, `dotnet`, `macho`, and `magic` modules. The `magic` database is embedded; no host database or separate download is required. Supply your own rules and local JSON reports for `cuckoo`. No rule feed is bundled.
 
 `zgrab2` and `zdns` do not send telemetry or perform automatic version checks, updates, or startup downloads. Network traffic is driven by the requested scans and DNS resolution; `zgrab2 --prometheus` and `ZDNS_PPROF=true` enable optional local monitoring listeners.
 

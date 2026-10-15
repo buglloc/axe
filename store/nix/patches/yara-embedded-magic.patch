@@ -1,0 +1,32 @@
+diff --git a/libyara/modules/magic/magic.c b/libyara/modules/magic/magic.c
+--- a/libyara/modules/magic/magic.c
++++ b/libyara/modules/magic/magic.c
+@@ -38,6 +38,16 @@
+ #include <yara/modules.h>
+ 
+ #define MODULE_NAME magic
+ 
++#if !defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
++#error "The embedded magic database requires a little-endian target"
++#endif
++
++// The pinned database and both supported targets are little-endian. libmagic
++// borrows this aligned process-lifetime storage without copying or byte-swapping.
++static unsigned char axe_magic_database[] __attribute__((aligned(8))) = {
++#include "axe_magic_database.inc"
++};
++
+ // Thread-local storage key used to store a pointer to a MAGIC_CACHE struct.
+ YR_THREAD_STORAGE_KEY magic_tls;
+@@ -69,7 +79,10 @@ static int get_cache(MAGIC_CACHE** cache)
+       return ERROR_INSUFFICIENT_MEMORY;
+     }
+ 
+-    if (magic_load((*cache)->magic_cookie, NULL) != 0)
++    void* buffers[] = {axe_magic_database};
++    size_t sizes[] = {sizeof(axe_magic_database)};
++
++    if (magic_load_buffers((*cache)->magic_cookie, buffers, sizes, 1) != 0)
+     {
+       magic_close((*cache)->magic_cookie);
+       yr_free(*cache);
