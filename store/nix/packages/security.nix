@@ -49,7 +49,13 @@
     (old: {
       outputs = ["out"];
       subPackages = ["cmd/age"];
-      env = (old.env or {}) // {CGO_ENABLED = 0;};
+      env =
+        (old.env or {})
+        // {
+          CGO_ENABLED = 0;
+          # TestScript builds helper commands without the package's ldflags.
+          GO_EXTLINK_ENABLED = 0;
+        };
       ldflags = (old.ldflags or []) ++ ["-linkmode=internal"];
       preInstall = "";
     });

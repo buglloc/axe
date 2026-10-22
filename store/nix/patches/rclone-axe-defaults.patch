@@ -232,7 +232,7 @@ diff --git a/cmd/cmd.go b/cmd/cmd.go
  	"sync"
  	"time"
  
-@@ -537,9 +536,6 @@
+@@ -558,9 +557,6 @@
  	setupRootCommand(Root)
  	AddBackendFlags()
  	if err := Root.Execute(); err != nil {
@@ -437,17 +437,6 @@ diff --git a/backend/azureblob/auth/auth.go b/backend/azureblob/auth/auth.go
  	}
  	// Can't do this with generics (yet)
  	// clientOpt := service.ClientOptions{
-diff --git a/backend/azureblob/azureblob.go b/backend/azureblob/azureblob.go
---- a/backend/azureblob/azureblob.go
-+++ b/backend/azureblob/azureblob.go
-@@ -733,6 +733,7 @@
- 		ClientOptions: azcore.ClientOptions{
- 			Transport:       auth.Transporter(ctx),
- 			PerCallPolicies: []policy.Policy{setAcceptEncodingGzip{}},
-+			Telemetry:       policy.TelemetryOptions{Disabled: true},
- 		},
- 	}
- 
 diff --git a/backend/googlecloudstorage/googlecloudstorage.go b/backend/googlecloudstorage/googlecloudstorage.go
 --- a/backend/googlecloudstorage/googlecloudstorage.go
 +++ b/backend/googlecloudstorage/googlecloudstorage.go

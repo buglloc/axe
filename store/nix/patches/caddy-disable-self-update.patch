@@ -56,7 +56,7 @@ diff --git a/cmd/commands.go b/cmd/commands.go
 diff --git a/cmd/packagesfuncs.go b/cmd/packagesfuncs.go
 --- a/cmd/packagesfuncs.go
 +++ b/cmd/packagesfuncs.go
-@@ -15,203 +15,13 @@
+@@ -15,211 +15,13 @@
  package caddycmd
  
  import (
@@ -94,20 +94,28 @@ diff --git a/cmd/packagesfuncs.go b/cmd/packagesfuncs.go
 -func splitModule(arg string) (module, version string, err error) {
 -	const versionSplit = "@"
 -
--	// accommodate module paths that have @ in them, but we can only tolerate that if there's also
--	// a version, otherwise we don't know if it's a version separator or part of the file path
--	lastVersionSplit := strings.LastIndex(arg, versionSplit)
--	if lastVersionSplit < 0 {
+-	// Per https://go.dev/ref/mod#go-mod-file-ident, module paths consist of
+-	// ASCII letters, digits, and `-`, `.`, `_`, `~` only, so `@` is never a
+-	// valid path character. That makes the split unambiguous: at most one
+-	// `@` may appear, and it separates the module path from the version.
+-	switch strings.Count(arg, versionSplit) {
+-	case 0:
 -		module = arg
--	} else {
--		module, version = arg[:lastVersionSplit], arg[lastVersionSplit+1:]
+-	case 1:
+-		idx := strings.Index(arg, versionSplit)
+-		module, version = arg[:idx], arg[idx+1:]
+-		if version == "" {
+-			return "", "", fmt.Errorf("version is required after '@'")
+-		}
+-	default:
+-		return "", "", fmt.Errorf("module path must not contain '@'")
 -	}
 -
 -	if module == "" {
--		err = fmt.Errorf("module name is required")
+-		return "", "", fmt.Errorf("module name is required")
 -	}
 -
--	return module, version, err
+-	return module, version, nil
 -}
 -
 -func cmdAddPackage(fl Flags) (int, error) {
@@ -260,9 +268,9 @@ diff --git a/cmd/packagesfuncs.go b/cmd/packagesfuncs.go
  
  func getModules() (standard, nonstandard, unknown []moduleInfo, err error) {
  	bi, ok := debug.ReadBuildInfo()
-@@ -262,93 +72,3 @@
- 	}
- 	return standard, nonstandard, unknown, err
+@@ -274,94 +76,3 @@
+ func moduleContainsPackage(modulePath, packagePath string) bool {
+ 	return packagePath == modulePath || strings.HasPrefix(packagePath, modulePath+"/")
  }
 -
 -func listModules(path string) error {
@@ -290,6 +298,7 @@ diff --git a/cmd/packagesfuncs.go b/cmd/packagesfuncs.go
 -		return nil, fmt.Errorf("secure request failed: %v", err)
 -	}
 -	if resp.StatusCode >= 400 {
+-		defer resp.Body.Close()
 -		var details struct {
 -			StatusCode int `json:"status_code"`
 -			Error      struct {
@@ -474,5 +483,159 @@ deleted file mode 100644
 -
 -	if !reflect.DeepEqual(expectedCommandNames, commandNames) {
 -		t.Errorf("expected %v, got %v", expectedCommandNames, commandNames)
+-	}
+-}
+diff --git a/cmd/packagesfuncs_test.go b/cmd/packagesfuncs_test.go
+--- a/cmd/packagesfuncs_test.go
++++ b/cmd/packagesfuncs_test.go
+@@ -1,43 +1,6 @@
+ package caddycmd
+ 
+-import (
+-	"bytes"
+-	"io"
+-	"net/http"
+-	"net/url"
+-	"testing"
+-)
+-
+-type trackingReadCloser struct {
+-	*bytes.Reader
+-	closed bool
+-}
+-
+-func (r *trackingReadCloser) Close() error {
+-	r.closed = true
+-	return nil
+-}
+-
+-func TestDownloadBuildClosesErrorResponseBody(t *testing.T) {
+-	originalTransport := http.DefaultTransport
+-	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+-
+-	body := &trackingReadCloser{Reader: bytes.NewReader([]byte(`{"error":{"message":"bad request","id":"test"}}`))}
+-	http.DefaultTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+-		return &http.Response{
+-			StatusCode: http.StatusBadRequest,
+-			Body:       body,
+-			Request:    req,
+-		}, nil
+-	})
+-
+-	if _, err := downloadBuild(url.Values{}); err == nil {
+-		t.Fatal("downloadBuild succeeded, want error")
+-	}
+-	if !body.closed {
+-		t.Fatal("downloadBuild did not close the error response body")
+-	}
+-}
++import "testing"
+ 
+ func TestModuleContainsPackage(t *testing.T) {
+ 	tests := []struct {
+@@ -60,11 +23,3 @@
+ 		})
+ 	}
+ }
+-
+-type roundTripperFunc func(*http.Request) (*http.Response, error)
+-
+-func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+-	return f(req)
+-}
+-
+-var _ io.ReadCloser = (*trackingReadCloser)(nil)
+diff --git a/cmd/packagesfuncs_split_test.go b/cmd/packagesfuncs_split_test.go
+deleted file mode 100644
+--- a/cmd/packagesfuncs_split_test.go
++++ /dev/null
+@@ -1,89 +0,0 @@
+-// Copyright 2015 Matthew Holt and The Caddy Authors
+-//
+-// Licensed under the Apache License, Version 2.0 (the "License");
+-// you may not use this file except in compliance with the License.
+-// You may obtain a copy of the License at
+-//
+-//     http://www.apache.org/licenses/LICENSE-2.0
+-//
+-// Unless required by applicable law or agreed to in writing, software
+-// distributed under the License is distributed on an "AS IS" BASIS,
+-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-// See the License for the specific language governing permissions and
+-// limitations under the License.
+-
+-package caddycmd
+-
+-import (
+-	"strings"
+-	"testing"
+-)
+-
+-// TestSplitModule_StrictGoSpec is the regression test for splitModule
+-// silently accepting inputs that violate go.dev/ref/mod#go-mod-file-ident
+-// (module paths cannot contain '@'). It also checks the happy paths and
+-// the empty-version edge case.
+-func TestSplitModule_StrictGoSpec(t *testing.T) {
+-	for _, tt := range []struct {
+-		name       string
+-		input      string
+-		module     string
+-		version    string
+-		wantErr    bool
+-		wantErrSub string
+-	}{
+-		{
+-			name:    "no version",
+-			input:   "github.com/caddyserver/caddy",
+-			module:  "github.com/caddyserver/caddy",
+-			version: "",
+-		},
+-		{
+-			name:    "with version",
+-			input:   "github.com/caddyserver/caddy@v2.0.0",
+-			module:  "github.com/caddyserver/caddy",
+-			version: "v2.0.0",
+-		},
+-		{
+-			name:       "multiple '@' rejected",
+-			input:      "github.com/@user/module@v1.0.0",
+-			wantErr:    true,
+-			wantErrSub: "module path must not contain '@'",
+-		},
+-		{
+-			name:       "trailing '@' with empty version rejected",
+-			input:      "github.com/user/module@",
+-			wantErr:    true,
+-			wantErrSub: "version is required after '@'",
+-		},
+-		{
+-			name:       "empty input rejected",
+-			input:      "",
+-			wantErr:    true,
+-			wantErrSub: "module name is required",
+-		},
+-	} {
+-		t.Run(tt.name, func(t *testing.T) {
+-			module, version, err := splitModule(tt.input)
+-
+-			if tt.wantErr {
+-				if err == nil {
+-					t.Fatalf("expected error containing %q, got nil", tt.wantErrSub)
+-				}
+-				if !strings.Contains(err.Error(), tt.wantErrSub) {
+-					t.Errorf("error %q does not contain %q", err.Error(), tt.wantErrSub)
+-				}
+-				return
+-			}
+-			if err != nil {
+-				t.Fatalf("unexpected error: %v", err)
+-			}
+-			if module != tt.module {
+-				t.Errorf("module: got %q, want %q", module, tt.module)
+-			}
+-			if version != tt.version {
+-				t.Errorf("version: got %q, want %q", version, tt.version)
+-			}
+-		})
 -	}
 -}

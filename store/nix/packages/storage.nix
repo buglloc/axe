@@ -120,7 +120,12 @@
     (old: {
       outputs = ["out"];
       buildInputs = [];
-      env = (old.env or {}) // {CGO_ENABLED = 0;};
+      env =
+        (old.env or {})
+        // {
+          CGO_ENABLED = 0;
+          GO_EXTLINK_ENABLED = 0;
+        };
       tags = ["noselfupdate"];
       patches = (old.patches or []) ++ [../patches/rclone-axe-defaults.patch];
       postPatch =

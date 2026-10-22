@@ -106,7 +106,7 @@ The `nuclei` package includes pinned `nuclei-templates`; no separate template do
 
 `betterleaks` embeds its default detection rules, tokenizer, and word list. Filesystem and stdin scans do not require Git; history and clone modes require `git` on `PATH`. Live credential validation is opt-in with `--validation` and sends detected credentials to provider APIs. Use `--redact` when writing reports that must not expose secrets.
 
-`katana` performs standard crawling and JavaScript endpoint discovery without a browser. Automatic version checks and browser downloads are disabled. Headless and hybrid modes require an installed Chrome/Chromium, `-system-chrome-path`, or `-chrome-ws-url`; no browser is bundled. Katana can return status 0 after browser initialization or crawl failures, so check diagnostics and results rather than exit status alone.
+`katana` performs standard crawling and JavaScript endpoint discovery without a browser. Automatic version checks and browser downloads are disabled. Headless and hybrid modes require an installed Chrome/Chromium, `-system-chrome-path`, or `-chrome-ws-url`; no browser is bundled. Katana can return status 0 after browser initialization or crawl failures, so check diagnostics and results rather than exit status alone. Use `-debug` to expose headless browser-launch errors.
 
 Katana's explicit `-kb`, `-filter-page-type`, and `-auto-login` features can download an upstream classification model on first use unless it is already available locally. `-kb-validate-secrets` enables provider requests; `-health-check` runs connectivity probes. Manual `-update` remains available.
 
@@ -122,7 +122,7 @@ The `interactsh-client` package removes automatic version checks and their machi
 
 The `gori` package disables startup update checks by default. Set `update.check_enabled` to `true` in its settings file to enable them.
 
-The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinned upstream universal binary.
+The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinned upstream universal binary; its archive version and SHA-256 must be updated together and match the Linux version.
 
 `tmux` embeds ncurses fallback records for modern terminals, including Ghostty, Kitty, Foot, Alacritty, and WezTerm. Ghostty and Kitty records come from their upstream sources pinned by `flake.lock`; updating the nixpkgs input refreshes them at build time. Host terminfo remains available for custom definitions, but no terminfo tree is shipped. AXE shell and SSH sessions preserve the client's `TERM`; panes default to `tmux-256color`.
 
@@ -130,13 +130,13 @@ The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinn
 
 `dig` includes CA roots for certificate-verified DNS-over-TLS and HTTPS queries. Use `+tls-ca` to enable verification, or `+tls-ca=FILE` for an explicit CA file.
 
-`rclone` embeds CA roots and timezone data. Release checks, self-update, the GUI downloader, and cloud SDK telemetry are disabled or removed. The authenticated RC API and explicit `--rc-files` remain available. Cgo-based mounting is excluded; Go FUSE mounts require host FUSE support and its mount helper.
+`rclone` embeds CA roots and timezone data. Release checks, self-update, the GUI downloader, and cloud SDK telemetry are disabled or removed. Azure Blob inherits disabled SDK telemetry from the shared Azure authentication client options while retaining its gzip request policy. The authenticated RC API and explicit `--rc-files` remain available. Cgo-based mounting is excluded; Go FUSE mounts require host FUSE support and its mount helper.
 
 `s5cmd` uses AWS credentials and profiles, supports custom S3 endpoints with `--endpoint-url`, and runs command files with `run`. It embeds Mozilla CA roots and additional CAs from the selected edition as a fallback when system roots are unavailable. System trust and `SSL_CERT_FILE` custom CA bundles remain available. S3-compatible providers may support only a subset of its operations.
 
 `restic` supports local and remote encrypted repositories. It embeds edition CA roots as a fallback when system trust is unavailable; `--cacert` remains available for explicit trust. SFTP and rclone backends require `ssh` and `rclone` on `PATH`. Mounting requires host FUSE support. Self-update is excluded.
 
-`caddy` includes the standard modules for HTTP serving, reverse proxying, and automatic HTTPS. It embeds edition CA roots as a fallback for outgoing TLS connections. Explicit trust pools remain available. Certificate and configuration state needs a writable directory. Binary-replacement commands (`upgrade`, `add-package`, and `remove-package`) are excluded; additional DNS-provider plugins are not bundled.
+`caddy` includes the standard modules for HTTP serving, reverse proxying, and automatic HTTPS. Use `caddy list-modules --versions` to inspect bundled modules. It embeds edition CA roots as a fallback for outgoing TLS connections. Explicit trust pools remain available. Certificate and configuration state needs a writable directory. Binary-replacement commands (`upgrade`, `add-package`, and `remove-package`) are excluded; additional DNS-provider plugins are not bundled.
 
 `layerx` reads Docker-save and OCI archives without a daemon. Live image inspection uses a Docker-compatible Docker or Podman API; `build` also needs the selected engine's CLI on `PATH`. It provides a terminal UI, JSON analysis, efficiency gates with `ci`, and image comparisons with `compare`.
 
@@ -190,6 +190,8 @@ Each package belongs to one primary category, shared with bundled commands. Its 
 | `axe` | AXE |
 
 For example, `restic`, `fio`, `findmnt`, `rclone`, `rsync`, and `s5cmd` belong to `storage`, while `binwalk` and `pspy` belong to `debugging`. Terminal multiplexers belong to `terminal`; Python belongs to `runtime`. Define only categories containing packages in the public Store inventory; do not add empty modules or compatibility category aliases. Changing a package's category changes its Store ID and requires regenerating the inventory and the signed snapshot before release.
+
+For CGO-free Go packages whose tests invoke `go build`, set `GO_EXTLINK_ENABLED=0` as well as `CGO_ENABLED=0`; package `ldflags` do not reach those helper builds. The musl Go compiler can otherwise default to external linking. Apply patches that only remove dependency imports after vendoring (`postConfigure`) to preserve the pinned upstream vendor hash.
 
 After changing package definitions, regenerate and check the inventory:
 

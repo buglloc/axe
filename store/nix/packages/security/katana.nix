@@ -24,15 +24,12 @@
           GOFLAGS = "${old.env.GOFLAGS or ""} -buildmode=exe";
         };
       ldflags = (old.ldflags or []) ++ ["-linkmode=internal"];
-      patches =
-        (old.patches or [])
-        ++ [
-          ../../patches/katana-axe-defaults.patch
-          ../../patches/katana-embedded-ca.patch
-        ];
-      postPatch =
-        (old.postPatch or "")
+      postConfigure =
+        (old.postConfigure or "")
         + ''
+          # Keep the upstream vendor hash when removing downloader imports.
+          patch -p1 < ${../../patches/katana-axe-defaults.patch}
+          patch -p1 < ${../../patches/katana-embedded-ca.patch}
           cp ${axePortableCaBundle} cmd/katana/axe-ca-bundle.pem
         '';
     });

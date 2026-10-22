@@ -26,10 +26,10 @@
       doInstallCheck = false;
     });
   sevenZipDarwin = let
-    version = buildPkgs._7zz.version;
+    version = "26.04";
     archive = buildPkgs.fetchurl {
       url = "https://github.com/ip7z/7zip/releases/download/${version}/7z${builtins.replaceStrings ["."] [""] version}-mac.tar.xz";
-      hash = "sha256-HPZ2BXlQL4flkf9cc6AF7FCz5Nb1B+iwODgtVjwxdbk=";
+      hash = "sha256-vuBDWMvLxxBic87g6NcpFtsmlsSAZ6NTjDTYzW/RZXg=";
     };
   in
     buildPkgs.runCommand "7zz-${version}-aarch64-darwin"
