@@ -159,6 +159,14 @@ The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinn
 )
 ```
 
+`python` includes pinned pure-Python HTTP, WebSocket, and HTML libraries and a certifi CA bundle. The package excludes pip, ensurepip, and virtual-environment tooling; update its interpreter and wheels together in the package definition.
+
+## Security source updates
+
+OpenSSL, curl, and NSS CA data come from the nixpkgs revision pinned in `flake.lock`. Update them with `nix flake update nixpkgs`, then regenerate and check the Store bootstrap metadata. The development shell uses the same pin so unmodified toolchain dependencies can be substituted from `cache.nixos.org`.
+
+Library and CA-bundle updates require rebuilding their consumers, including tools whose own version is unchanged. A new AXE executable does not replace published Store payloads. Build and publish the updated packages, then refresh the signed bootstrap snapshot through the publication workflow below.
+
 ## Adding a package
 
 Package definitions live in [`store/nix/packages/`](../store/nix/packages/).

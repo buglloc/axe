@@ -23,7 +23,7 @@
         packageSet.dtc
         packageSet.fontconfig
         packageSet.lzo
-        packageSet.openssl_3
+        packageSet.openssl
         packageSet.ucl
         packageSet.unzip
         compressionSet.xz

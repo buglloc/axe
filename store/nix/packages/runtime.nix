@@ -4,20 +4,20 @@
   ...
 }: let
   pythonVersion = "3.14";
-  version = "3.14.7-web.2";
+  version = "3.14.9-web.1";
 
   pythonSources = {
     aarch64-linux = {
-      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.14.7%2B20260901-aarch64-unknown-linux-musl-lto%2Bstatic-full.tar.zst";
-      hash = "sha256-OFTmjk6n+/mz9hBwpq0Gbs2D3GctYn2L0eJt73iF0zI=";
+      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.14.9%2B20261021-aarch64-unknown-linux-musl-lto%2Bstatic-full.tar.zst";
+      hash = "sha256-5ETtmsSXYKIhiyFmp7OKU2Q9CBWO336KBZflAFan2/s=";
     };
     aarch64-darwin = {
-      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.14.7%2B20260901-aarch64-apple-darwin-pgo%2Blto-full.tar.zst";
-      hash = "sha256-GF+mduFLZIvXNs5/IPmxHiARMbMhbsWjnU7NirinERI=";
+      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.14.9%2B20261021-aarch64-apple-darwin-pgo%2Blto-full.tar.zst";
+      hash = "sha256-ZATDygbnqKvzu1JHvzWcjwbD0OHQQhpsU5tUV82IVTc=";
     };
     x86_64-linux = {
-      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.14.7%2B20260901-x86_64-unknown-linux-musl-lto%2Bstatic-full.tar.zst";
-      hash = "sha256-5aduWJPDnIntJorXHD1nlMO+a3I27GE0SRQMV2hvwX8=";
+      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.14.9%2B20261021-x86_64-unknown-linux-musl-lto%2Bstatic-full.tar.zst";
+      hash = "sha256-dAmh8dN+AYGrcc2K2jmBwjd5S6yi5mvO2RK4/48OuD8=";
     };
   };
 
@@ -33,9 +33,9 @@
       hash = "sha256-1viN5i4dTjjssQd+uXJM0O/ynSoIyhakAem56T8RfPk=";
     }
     {
-      name = "certifi-2026.7.22-py3-none-any.whl";
-      url = "https://files.pythonhosted.org/packages/0b/a7/71ac2cff56fec219ed242bb11b8efb69fcc4bec75db06fb7bfe35de520e6/certifi-2026.7.22-py3-none-any.whl";
-      hash = "sha256-YvInQrWKGjMBSitrcGWIqNfiqIrnvRpuvoyZKShIN3U=";
+      name = "certifi-2026.10.19-py3-none-any.whl";
+      url = "https://files.pythonhosted.org/packages/c4/51/29046e48f693c54e5b7412216d447a1d8362c9653148d98c02cdf65fa733/certifi-2026.10.19-py3-none-any.whl";
+      hash = "sha256-QtNTQMxbm6eOgY3b/wxbHCt3neRIo0D9G5ifX6hnDhs=";
     }
     {
       name = "charset_normalizer-3.5.1-py3-none-any.whl";

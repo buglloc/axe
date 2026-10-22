@@ -29,7 +29,7 @@
       libopus = null;
       libsmi = null;
       libssh = null;
-      lua5_4 = null;
+      lua5_5 = null;
       lz4 = null;
       makeWrapper = null;
       minizip = null;
