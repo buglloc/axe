@@ -56,7 +56,7 @@ repository = "https://github.com/reubeno/brush"
 "builtin.echo" = []
 "builtin.enable" = []
 "builtin.eval" = []
-"builtin.exec" = []
+"builtin.exec" = ["builtin.command"]
 "builtin.exit" = []
 "builtin.export" = []
 "builtin.false" = []
@@ -151,6 +151,17 @@ name = "brush_builtins"
 path = "src/lib.rs"
 bench = false
 
+[[test]]
+name = "process_launcher_tests"
+path = "tests/process_launcher_tests.rs"
+
+[[test]]
+name = "registration_tests"
+path = "tests/registration_tests.rs"
+
+[dependencies.brush-clap-adapter]
+version = "^0.1.0"
+
 [dependencies.brush-core]
 version = "^0.5.0"
 
@@ -174,7 +185,7 @@ features = [
 version = "0.19.0"
 
 [dependencies.itertools]
-version = "0.14.0"
+version = "0.15.0"
 
 [dependencies.strum]
 version = "0.28.0"
@@ -225,6 +236,11 @@ features = [
     "macros",
     "rt",
 ]
+
+[target.'cfg(target_os = "wasi")'.dependencies.uucore]
+version = "0.12.0"
+features = ["format"]
+default-features = false
 
 [target."cfg(unix)".dependencies.nix]
 version = "0.31.2"

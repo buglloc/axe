@@ -56,7 +56,7 @@ uu_timeout = { version = "=0.12.0" }
 uu_test = { version = "=0.12.0" }
 uu_tty = { version = "=0.12.0" }
 uu_grep = { version = "0.2.0" }
-russh = { version = "0.63.1", default-features = false, features = ["ring"] }
+russh = { version = "0.63.2", default-features = false, features = ["ring"] }
 russh-sftp = { version = "=2.4.0" }
 rustls.workspace = true
 rustls-pemfile.workspace = true

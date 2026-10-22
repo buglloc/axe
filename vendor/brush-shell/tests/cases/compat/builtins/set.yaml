@@ -120,3 +120,35 @@ cases:
 
       # Remove set-output.txt to avoid it being byte-for-byte compared.
       rm set-output.txt
+
+  - name: "set quotes values starting with # or ~"
+    stdin: |
+      x="~" y="#z" z="a=~" w="a~"
+      set | grep -E "^(w|x|y|z)="
+
+  - name: "set leaves commas unquoted, like bash"
+    stdin: |
+      x="a,b" y="{a,b}" z=","
+      set | grep -E "^(x|y|z)="
+
+  - name: "set and declare -p leave commas in associative array keys unquoted, like bash"
+    stdin: |
+      declare -A m=([a,b]=1 [c]=2)
+      set | grep "^m="
+      declare -p m
+
+  - name: "set -o with an unknown option name"
+    known_failure: true # TODO(set): set -o bogus fails without bash's message
+    stdin: |
+      strip() { sed -E 's/\x1b\[[0-9;]*m//g; s/^[^ ]*: line [0-9]+: //; s/^error: //'; }
+      set -o bogus 2>&1 | strip
+      echo "set -o: ${PIPESTATUS[0]}"
+      set +o bogus 2>&1 | strip
+      echo "set +o: ${PIPESTATUS[0]}"
+
+  - name: "set rejects an option it doesn't have"
+    known_failure: true # TODO(set): set -Z and set +Z succeed with status 0
+    ignore_stderr: true
+    stdin: |
+      set -Z; echo "set -Z: $?"
+      set +Z; echo "set +Z: $?"

@@ -98,7 +98,7 @@ pub(crate) struct DeclareCommand {
     //
     // Declarations
     //
-    // N.B. These are skipped by clap, but filled in by the BuiltinDeclarationCommand trait.
+    // N.B. These are skipped by clap, but filled in by `impl_parse_args!`.
     #[clap(skip)]
     declarations: Vec<brush_core::CommandArg>,
 }
@@ -110,21 +110,13 @@ enum DeclareVerb {
     Readonly,
 }
 
-impl builtins::DeclarationCommand for DeclareCommand {
-    fn set_declarations(&mut self, declarations: Vec<brush_core::CommandArg>) {
-        self.declarations = declarations;
-    }
-}
+brush_clap_adapter::impl_parse_args!(DeclareCommand, declarations = declarations, plus_options);
 
-impl builtins::Command for DeclareCommand {
-    fn takes_plus_options() -> bool {
-        true
-    }
-
+impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for DeclareCommand {
     type Error = brush_core::Error;
 
-    async fn execute<SE: brush_core::ShellExtensions>(
-        &self,
+    async fn execute(
+        self,
         mut context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
         let verb = match context.command_name.as_str() {
@@ -185,7 +177,7 @@ impl DeclareCommand {
         };
 
         let lookup = if matches!(verb, DeclareVerb::Local) {
-            EnvironmentLookup::OnlyInCurrentLocal
+            EnvironmentLookup::OnlyInCurrent(EnvironmentScope::Local)
         } else {
             EnvironmentLookup::Anywhere
         };
@@ -296,7 +288,7 @@ impl DeclareCommand {
         if !env::valid_variable_name(name.as_str()) {
             writeln!(
                 context.stderr(),
-                "{}: {name}: not a valid variable name",
+                "{}: `{name}': not a valid identifier",
                 context.command_name
             )?;
             return Ok(false);
@@ -304,7 +296,7 @@ impl DeclareCommand {
 
         // Figure out where we should look.
         let lookup = if create_var_local {
-            EnvironmentLookup::OnlyInCurrentLocal
+            EnvironmentLookup::OnlyInCurrent(EnvironmentScope::Local)
         } else {
             EnvironmentLookup::Anywhere
         };
@@ -475,10 +467,9 @@ impl DeclareCommand {
                 match &assignment.value {
                     ast::AssignmentValue::Scalar(s) => {
                         if let Some(index) = &assigned_index {
-                            initial_value = Some(ShellValueLiteral::Array(ArrayLiteral(vec![(
-                                Some(index.to_owned()),
-                                s.value.clone(),
-                            )])));
+                            initial_value = Some(ShellValueLiteral::Array(ArrayLiteral::new(
+                                vec![(Some(index.to_owned()), s.value.clone())],
+                            )));
                             name_is_array = true;
                         } else {
                             initial_value = Some(ShellValueLiteral::Scalar(s.value.clone()));
@@ -486,7 +477,7 @@ impl DeclareCommand {
                         }
                     }
                     ast::AssignmentValue::Array(a) => {
-                        initial_value = Some(ShellValueLiteral::Array(ArrayLiteral(
+                        initial_value = Some(ShellValueLiteral::Array(ArrayLiteral::new(
                             a.iter()
                                 .map(|(i, v)| {
                                     (i.as_ref().map(|w| w.value.clone()), v.value.clone())
@@ -573,7 +564,7 @@ impl DeclareCommand {
         }
 
         let iter_policy = if matches!(verb, DeclareVerb::Local) {
-            EnvironmentLookup::OnlyInCurrentLocal
+            EnvironmentLookup::OnlyInCurrent(EnvironmentScope::Local)
         } else {
             EnvironmentLookup::Anywhere
         };

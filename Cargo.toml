@@ -11,17 +11,18 @@ members = [
 ]
 
 [workspace.metadata.brush-fork]
-# Update all six crates together from this immutable upstream revision: the three
-# patched crates are vendored under `paths`, the three unmodified crates are pinned
+# Update all Brush crates together from this immutable upstream revision: the three
+# patched crates are vendored under `paths`, the unmodified crates are pinned
 # to the same revision through [patch.crates-io].
 repository = "https://github.com/reubeno/brush"
-revision = "08db87a62345f11a4fc43bf385e318677f641089"
+revision = "b562e0586b366d0558b27019276e591856253947"
 brush-shell-version = "0.4.0"
 brush-core-version = "0.5.0"
 brush-builtins-version = "0.2.0"
 brush-parser-version = "0.4.0"
 brush-interactive-version = "0.4.0"
 brush-coreutils-builtins-version = "0.1.0"
+brush-clap-adapter-version = "0.1.0"
 paths = ["vendor/brush-shell", "vendor/brush-core", "vendor/brush-builtins"]
 
 [workspace.package]
@@ -63,7 +64,7 @@ regex = "1.11"
 rtnetlink = "0.23"
 prost = "0.14"
 rusty-s3 = { version = "0.10.2", default-features = false, features = ["rustcrypto", "xml"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -77,7 +78,7 @@ tokio = { version = "1.52", features = ["rt-multi-thread"] }
 ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 url = "2.5"
 which = { version = "8.0.6", default-features = false, features = ["real-sys"] }
-webpki-root-certs = "1.0.9"
+webpki-root-certs = "1.0.10"
 zip = { version = "8.0", default-features = false, features = ["deflate"] }
 zstd = "0.13"
 
@@ -85,9 +86,10 @@ zstd = "0.13"
 brush-shell = { path = "vendor/brush-shell" }
 brush-core = { path = "vendor/brush-core" }
 brush-builtins = { path = "vendor/brush-builtins" }
-brush-parser = { git = "https://github.com/reubeno/brush", rev = "08db87a62345f11a4fc43bf385e318677f641089" }
-brush-interactive = { git = "https://github.com/reubeno/brush", rev = "08db87a62345f11a4fc43bf385e318677f641089" }
-brush-coreutils-builtins = { git = "https://github.com/reubeno/brush", rev = "08db87a62345f11a4fc43bf385e318677f641089" }
+brush-parser = { git = "https://github.com/reubeno/brush", rev = "b562e0586b366d0558b27019276e591856253947" }
+brush-interactive = { git = "https://github.com/reubeno/brush", rev = "b562e0586b366d0558b27019276e591856253947" }
+brush-coreutils-builtins = { git = "https://github.com/reubeno/brush", rev = "b562e0586b366d0558b27019276e591856253947" }
+brush-clap-adapter = { git = "https://github.com/reubeno/brush", rev = "b562e0586b366d0558b27019276e591856253947" }
 procutils-ps = { path = "vendor/procutils-ps" }
 
 # brush-interactive depends on its upstream brush-core sibling by path; keep one patched copy.

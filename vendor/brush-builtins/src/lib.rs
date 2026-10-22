@@ -1,7 +1,7 @@
 //! Standard builtins.
 
-// `brush_core::builtins::Command::execute` is async by contract: the trait declares a desugared
-// `-> impl Future<...> + Send` so that `brush_core::builtins::exec_builtin` can box and dispatch
+// `brush_core::builtins::Builtin::execute` is async by contract: the trait declares a desugared
+// `-> impl Future<...> + Send` so that a `brush_core::builtins::Registration` can box and dispatch
 // every builtin uniformly. Most builtins in this crate do purely synchronous work, so their
 // `execute` bodies contain no `.await` -- that is the trait contract being honored, not a defect.
 #![allow(
@@ -47,7 +47,7 @@ mod echo;
 mod enable;
 #[cfg(feature = "builtin.eval")]
 mod eval;
-#[cfg(all(feature = "builtin.exec", unix))]
+#[cfg(feature = "builtin.exec")]
 mod exec;
 #[cfg(feature = "builtin.exit")]
 mod exit;
@@ -77,7 +77,7 @@ mod let_;
 mod mapfile;
 #[cfg(feature = "builtin.popd")]
 mod popd;
-#[cfg(all(feature = "builtin.printf", any(unix, windows)))]
+#[cfg(all(feature = "builtin.printf", any(unix, windows, target_os = "wasi")))]
 mod printf;
 #[cfg(feature = "builtin.pushd")]
 mod pushd;

@@ -1030,6 +1030,57 @@ fn shell_preserves_literal_heredoc_content_and_padded_braces() {
 }
 
 #[test]
+fn shell_isolates_pipeline_exit_and_errors_from_parent() {
+    let scratch = Scratch::new("shell-pipeline-isolation");
+
+    for (script, expected_stdout, expected_error) in [
+        (
+            "echo x | exit 3; printf 'exit=%s\\nAXE_PARENT_CONTINUED\\n' \"$?\"",
+            "exit=3\nAXE_PARENT_CONTINUED\n",
+            None,
+        ),
+        (
+            "set -o pipefail; echo ${AXE_PIPELINE_UNSET?pipeline-error} | cat; printf 'expansion=%s\\nAXE_PARENT_CONTINUED\\n' \"$?\"",
+            "expansion=1\nAXE_PARENT_CONTINUED\n",
+            Some("pipeline-error"),
+        ),
+        (
+            "cd /nonexistent 2>/dev/null | true; printf 'builtin=%s\\nAXE_PARENT_CONTINUED\\n' \"$?\"",
+            "builtin=0\nAXE_PARENT_CONTINUED\n",
+            None,
+        ),
+        (
+            "true | eval 'echo ${AXE_PIPELINE_UNSET?pipeline-error}'; printf 'eval=%s\\nAXE_PARENT_CONTINUED\\n' \"$?\"",
+            "eval=1\nAXE_PARENT_CONTINUED\n",
+            Some("pipeline-error"),
+        ),
+    ] {
+        let output = run_with_input_before_deadline(
+            offline_axe(&scratch).args(["--no-config", "--norc", "--noprofile", "-c", script]),
+            b"",
+            std::time::Duration::from_secs(5),
+        );
+
+        assert!(
+            output.status.success(),
+            "{script}\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, expected_stdout.as_bytes(), "{script}");
+
+        if let Some(expected_error) = expected_error {
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(expected_error),
+                "{script}\nstderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        } else {
+            assert_eq!(output.stderr, b"", "{script}");
+        }
+    }
+}
+
+#[test]
 fn shell_printf_and_large_redirection_prefix_terminate() {
     let scratch = Scratch::new("shell-termination-regressions");
     let output = run_with_input_before_deadline(

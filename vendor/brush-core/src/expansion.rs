@@ -1017,6 +1017,7 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
         }
     }
 
+    #[allow(clippy::double_must_use)]
     #[async_recursion::async_recursion]
     async fn expand_word_piece(
         &mut self,
@@ -2154,6 +2155,11 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
         replacement: &str,
         match_kind: &SubstringMatchKind,
     ) -> String {
+        // The replacement is already fully expanded; it must be inserted verbatim. A bare
+        // `&str` replacer would instead read `$1`, `$0` and `${name}` as references to the
+        // regex's capture groups.
+        let replacement = fancy_regex::NoExpand(replacement);
+
         match match_kind {
             brush_parser::word::SubstringMatchKind::Prefix
             | brush_parser::word::SubstringMatchKind::Suffix
@@ -2410,6 +2416,26 @@ mod tests {
         assert_eq!(
             expand("{a,b{1,2}}"),
             Some(vec!["a".into(), "b1".into(), "b2".into()])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_substring_inserts_replacement_verbatim() -> Result<()> {
+        // A capture group, as an extglob pattern like `@(b)` produces.
+        let regex = fancy_regex::Regex::new("(b)")?;
+        let replace = |r: &str, kind: SubstringMatchKind| {
+            WordExpander::<crate::extensions::DefaultShellExtensions>::replace_substring(
+                "abcb", &regex, r, &kind,
+            )
+        };
+
+        assert_eq!(replace("$1", SubstringMatchKind::FirstOccurrence), "a$1cb");
+        assert_eq!(replace("$0", SubstringMatchKind::Anywhere), "a$0c$0");
+        assert_eq!(
+            replace("${y}$$", SubstringMatchKind::Anywhere),
+            "a${y}$$c${y}$$"
         );
 
         Ok(())

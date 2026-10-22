@@ -22,11 +22,13 @@ pub(crate) struct PrintfCommand {
     format_and_args: Vec<String>,
 }
 
-impl builtins::Command for PrintfCommand {
+brush_clap_adapter::impl_parse_args!(PrintfCommand);
+
+impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for PrintfCommand {
     type Error = brush_core::Error;
 
-    async fn execute<SE: brush_core::ShellExtensions>(
-        &self,
+    async fn execute(
+        self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         if let Some(variable_name) = &self.output_variable {
@@ -140,16 +142,13 @@ fn format_via_uucore(
 }
 
 fn quote_printf_q(s: &str) -> String {
-    let quoted = escape::quote_if_needed(s, escape::QuoteMode::BackslashEscape);
-    if quoted.starts_with("$'") {
-        return quoted.into_owned();
-    }
-
-    let mut quoted = quoted.replace(":~", ":\\~").replace("=~", "=\\~");
-    if matches!(quoted.as_bytes().first(), Some(b'~' | b'#')) {
-        quoted.insert(0, '\\');
-    }
-    quoted
+    // Like bash's, this escapes commas too, so the result is safe even inside a brace
+    // expansion.
+    let options = escape::QuoteOptions::builder()
+        .preferred_mode(escape::QuoteMode::BackslashEscape)
+        .quote_commas(true)
+        .build();
+    escape::quote(s, &options).into_owned()
 }
 
 type ParsedFormatItem = (format::FormatItem<format::EscapedChar>, bool);

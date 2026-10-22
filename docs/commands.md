@@ -28,6 +28,8 @@ Bundled applets take precedence over AXE Store and `PATH`. Commands not register
 
 For an asynchronous command, `$!` holds the child PID. When Brush runs a list in the current process, there is no separate PID. Instead, AXE puts a `%N` job specification in `$!`; `wait` accepts it. The in-process job ends with the current shell.
 
+A pipeline stage or background list running in a subshell returns only its exit status to the parent. `exit`, `return`, `break`, and expansion or builtin errors end that subshell alone; `errexit` and `pipefail` still determine how the parent handles a failing status. With `lastpipe` enabled, control flow in a final stage running in the parent applies to the parent.
+
 Call a bundled applet by name, explicitly with `--applet`, or from an AXE shell:
 
 ```bash

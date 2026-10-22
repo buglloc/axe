@@ -637,6 +637,7 @@ pub enum ShellValueUnsetType {
 
 /// A shell value literal; used for assignment.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum ShellValueLiteral {
     /// A scalar value.
     Scalar(String),
@@ -698,9 +699,28 @@ impl From<Vec<&str>> for ShellValueLiteral {
     }
 }
 
+impl From<Vec<String>> for ShellValueLiteral {
+    fn from(value: Vec<String>) -> Self {
+        Self::Array(ArrayLiteral(value.into_iter().map(|s| (None, s)).collect()))
+    }
+}
+
 /// An array literal.
 #[derive(Clone, Debug)]
-pub struct ArrayLiteral(pub Vec<(Option<String>, String)>);
+pub struct ArrayLiteral(pub(crate) Vec<(Option<String>, String)>);
+
+impl ArrayLiteral {
+    /// Returns an array literal with the given elements, in order. An element
+    /// with a key is assigned at that key (`[key]=value`); one without is
+    /// assigned at the next index.
+    ///
+    /// # Arguments
+    ///
+    /// * `elements` - The elements, each an optional key and a value.
+    pub const fn new(elements: Vec<(Option<String>, String)>) -> Self {
+        Self(elements)
+    }
+}
 
 /// Style for formatting a shell variable's value.
 #[derive(Copy, Clone, Debug)]
@@ -1039,10 +1059,15 @@ fn get_key_for_indexed_array(
 ) -> Result<u64, error::Error> {
     let mut index_value = index_str.parse::<i64>().unwrap_or(0);
 
-    // Handle negative indices, but check for out-of-range values.
+    // Handle negative indices, but check for out-of-range values. A negative index is
+    // relative to one greater than the maximum index (not the element count, which
+    // differs for sparse arrays).
     #[expect(clippy::cast_possible_wrap)]
     if index_value < 0 {
-        index_value += values.len() as i64;
+        let end = values
+            .last_key_value()
+            .map_or(0, |(k, _)| (*k as i64).saturating_add(1));
+        index_value += end;
         if index_value < 0 {
             return Err(error::ErrorKind::ArrayIndexOutOfRange(index_str.to_owned()).into());
         }

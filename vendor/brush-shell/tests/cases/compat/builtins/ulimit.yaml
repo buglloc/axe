@@ -35,3 +35,19 @@ cases:
   - name: "ulimit -m unlimited"
     stdin: |
       ulimit -m unlimited
+
+  - name: "ulimit with an invalid number fails with status 1"
+    known_failure: true # TODO(ulimit): fails with status 2, where bash fails with 1
+    ignore_stderr: true
+    stdin: |
+      ulimit -n abc
+      echo "ulimit: $?"
+
+  - name: "ulimit in a subshell stays there"
+    known_failure: true # TODO(ulimit): a subshell runs in the shell's own process, so its limits are the shell's
+    stdin: |
+      ulimit -S -n 512
+      ( ulimit -S -n 256 )
+      echo "after a subshell: $(ulimit -S -n)"
+      ulimit -S -n 256 | true
+      echo "after a pipeline stage: $(ulimit -S -n)"

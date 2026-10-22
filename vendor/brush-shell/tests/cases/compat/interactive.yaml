@@ -13,6 +13,48 @@ cases:
       #expect-prompt
       #send:Ctrl+D
 
+  - name: "SIGINT ends the command an interactive shell is running"
+    known_failure: true # TODO(signals): an interactive brush goes on with the command it's running
+    pty: true
+    ignore_stdout: true # Prompts don't line up
+    stdin: |
+      #expect-prompt
+      kill -INT $$; touch went-on.txt
+      #send:Enter
+      #expect-prompt
+      #send:Ctrl+D
+
+  - name: "Programs inherit an ignored SIGINT after the shell first waits for one"
+    known_failure: true # TODO(signals): tokio's SIGINT listener, which the shell starts on first waiting for a program, replaces the ignore the shell inherited, so later programs get the default action
+    pty: true
+    ignore_stdout: true # Prompts don't line up
+    # The shell replaces itself with one started ignoring SIGINT, given the flags the harness
+    # gives brush; it waits for one program, and then another sends itself SIGINT.
+    stdin: |
+      #expect-prompt
+      exec sh -c 'p=$1; shift; trap "" INT; exec env PS1="$p" "$0" --norc --noprofile -i "$@"' "$BASH" "$PS1" ${BRUSH_VERSION:+--no-config --disable-bracketed-paste --disable-color --input-backend=basic}
+      #send:Enter
+      #expect-prompt
+      sh -c 'exit 0'; sh -c 'kill -INT $$; touch survived.txt'; echo "done-$((2 + 2))"
+      #send:Enter
+      #expect:done-4
+      #expect-prompt
+      #send:Ctrl+D
+
+  - name: "An interactive shell's inherited _ isn't exported by its first prompt"
+    pty: true
+    ignore_stdout: true # Prompts don't line up
+    min_oracle_version: "5.3" # bash 5.2 keeps the inherited `_` exported until a command updates it
+    # The shell replaces itself with an interactive one that inherits `_`, given the flags the
+    # harness gives brush; that one's first command passes on whatever `_` it exports then.
+    stdin: |
+      #expect-prompt
+      exec env _=/inherited/underscore PS1="$PS1" "$BASH" --norc --noprofile -i ${BRUSH_VERSION:+--no-config --disable-bracketed-paste --disable-color --input-backend=basic}
+      #send:Enter
+      #expect-prompt
+      exec printenv _ > out.txt
+      #send:Enter
+
   - name: "Simple tab completion"
     skip: true # TODO(input): Need to find the right way to enable this with a rich input backend.
     pty: true
@@ -158,3 +200,89 @@ cases:
       PS1='$( (exit 9) | (exit 8) )$ '
       (exit 4) | (exit 5)
       echo "AFTER[$?][${PIPESTATUS[*]}]"
+
+  - name: "Interactive -c running a program"
+    known_failure: true # TODO(jobs): the program takes the terminal's foreground from a background process group, and is stopped by SIGTTOU for good
+    pty: true
+    timeout_in_seconds: 5
+    args: ["-i", "-c", "cat /dev/null; echo done"]
+    stdin: |
+      #expect:done
+
+  - name: "A fatal error in a function drops the rest of the interactive line"
+    known_failure: true # TODO(interactive): runs the rest of the line
+    pty: true
+    ignore_stdout: true # Prompts don't line up
+    stdin: |
+      #expect-prompt
+      f() { set -u; echo "$unset_var"; }; f; touch went-on.txt
+      #send:Enter
+      #expect-prompt
+      #send:Ctrl+D
+
+  - name: "A fatal error in a builtin drops the rest of the interactive line"
+    known_failure: true # TODO(interactive): runs the rest of the line
+    pty: true
+    ignore_stdout: true # Prompts don't line up
+    stdin: |
+      #expect-prompt
+      set -u; compgen -W '$unset_var'; touch went-on.txt
+      #send:Enter
+      #expect-prompt
+      #send:Ctrl+D
+
+  - name: "A fatal error in a builtin ends an interactive shell's subshell"
+    known_failure: true # TODO(interactive): the subshell carries on
+    pty: true
+    ignore_stdout: true # Prompts don't line up
+    stdin: |
+      #expect-prompt
+      ( set -u; compgen -W '$unset_var'; touch went-on.txt )
+      #send:Enter
+      #expect-prompt
+      #send:Ctrl+D
+
+  - name: "A fatal expansion error drops the rest of the interactive line"
+    pty: true
+    ignore_stdout: true # Prompts don't line up
+    stdin: |
+      #expect-prompt
+      set -u; echo "$unset_var"; touch went-on.txt
+      #send:Enter
+      #expect-prompt
+      #send:Ctrl+D
+
+  - name: "A fatal expansion error ends an interactive shell's subshell"
+    pty: true
+    ignore_stdout: true # Prompts don't line up
+    stdin: |
+      #expect-prompt
+      ( set -u; echo "$unset_var"; touch went-on.txt )
+      #send:Enter
+      #expect-prompt
+      #send:Ctrl+D
+
+  - name: "A fatal error in eval drops only the eval'd code in an interactive shell"
+    pty: true
+    ignore_stdout: true # Prompts don't line up
+    stdin: |
+      #expect-prompt
+      set -u; eval 'echo "$unset_var"; touch skipped.txt'; touch went-on.txt
+      #send:Enter
+      #expect-prompt
+      #send:Ctrl+D
+
+  - name: "A fatal error in a sourced file drops only that file in an interactive shell"
+    pty: true
+    ignore_stdout: true # Prompts don't line up
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "$unset_var"
+          touch skipped.txt
+    stdin: |
+      #expect-prompt
+      set -u; . ./script.sh; touch went-on.txt
+      #send:Enter
+      #expect-prompt
+      #send:Ctrl+D

@@ -119,11 +119,13 @@ impl From<&BindError> for brush_core::ExecutionExitCode {
     }
 }
 
-impl builtins::Command for BindCommand {
+brush_clap_adapter::impl_parse_args!(BindCommand);
+
+impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for BindCommand {
     type Error = BindError;
 
-    async fn execute<SE: brush_core::ShellExtensions>(
-        &self,
+    async fn execute(
+        self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
         if let Some(key_bindings) = context.shell.key_bindings() {
@@ -369,7 +371,6 @@ fn bind_key_sequence_to_readline_target(
             }
 
             bindings.bind(key_sequence, interfaces::KeyAction::DoInputFunction(func))?;
-            Ok(())
         }
         BindableReadlineTarget::Macro(cmd_macro) => {
             tracing::debug!(target: trace_categories::INPUT,
@@ -377,9 +378,10 @@ fn bind_key_sequence_to_readline_target(
             );
 
             bindings.define_macro(key_sequence, cmd_macro)?;
-            Ok(())
         }
     }
+
+    Ok(())
 }
 
 fn key_sequence_to_abstract_strokes(

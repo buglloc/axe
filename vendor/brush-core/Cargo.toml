@@ -56,12 +56,24 @@ name = "call-func"
 path = "examples/call-func.rs"
 
 [[example]]
-name = "custom-builtin"
-path = "examples/custom-builtin.rs"
-
-[[example]]
 name = "readme"
 path = "examples/readme.rs"
+
+[[test]]
+name = "builtin_contract_tests"
+path = "tests/builtin_contract_tests.rs"
+
+[[test]]
+name = "builtin_state_tests"
+path = "tests/builtin_state_tests.rs"
+
+[[test]]
+name = "cancellation_tests"
+path = "tests/cancellation_tests.rs"
+
+[[test]]
+name = "history_tests"
+path = "tests/history_tests.rs"
 
 [[test]]
 name = "kill_on_drop_tests"
@@ -92,13 +104,6 @@ version = "1.0.4"
 [dependencies.chrono]
 version = "0.4.44"
 
-[dependencies.clap]
-version = "4.6.0"
-features = [
-    "derive",
-    "wrap_help",
-]
-
 [dependencies.color-print]
 version = "0.3.7"
 
@@ -112,7 +117,7 @@ version = "0.3.32"
 version = "1.0.13"
 
 [dependencies.itertools]
-version = "0.14.0"
+version = "0.15.0"
 
 [dependencies.normalize-path]
 version = "0.2.1"
@@ -149,6 +154,10 @@ features = ["unstable"]
 
 [dev-dependencies.tempfile]
 version = "3.27.0"
+
+[dev-dependencies.tokio]
+version = "1.52.3"
+features = ["time"]
 
 [target."cfg(any(unix, windows))".dependencies.hostname]
 version = "0.4.2"
@@ -193,6 +202,9 @@ features = [
     "user",
 ]
 
+[target."cfg(unix)".dependencies.terminal_size]
+version = "0.4.4"
+
 [target."cfg(unix)".dependencies.terminfo]
 version = "0.9.0"
 
@@ -200,7 +212,7 @@ version = "0.9.0"
 version = "0.12.2"
 
 [target."cfg(windows)".dependencies.check_elevation]
-version = "0.2.7"
+version = "0.3.0"
 
 [target."cfg(windows)".dependencies.whoami]
 version = "2.1.1"
@@ -210,7 +222,7 @@ version = "0.4.2"
 features = ["wasm_js"]
 
 [target.wasm32-unknown-unknown.dependencies.uuid]
-version = "1.23.1"
+version = "1"
 features = ["js"]
 
 [lints.clippy]

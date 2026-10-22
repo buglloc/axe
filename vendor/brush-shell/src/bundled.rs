@@ -23,11 +23,11 @@
 //! ## Shell integration
 //!
 //! For every entry in the registry, [`register_commands`] installs a Brush
-//! builtin (using `register_builtin_if_unset`, so Brush's own builtins always
-//! win on conflict). Spawn-backed entries use brush-core's external-command
-//! machinery and preserve descriptor-aware self-exec. Native callbacks execute
-//! synchronously against a snapshot of the live parent shell with the
-//! context-derived standard streams.
+//! builtin (using `builtins::Registry::register_if_absent`, so Brush's own
+//! builtins always win on conflict). Spawn-backed entries use brush-core's
+//! external-command machinery and preserve descriptor-aware self-exec. Native
+//! callbacks execute synchronously against a snapshot of the live parent shell
+//! with the context-derived standard streams.
 //!
 //! The mechanism is generic: each registry entry carries its standalone
 //! multicall function and shell execution policy.
@@ -40,7 +40,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use brush_core::ExecutionExitCode;
-use brush_core::builtins::{BoxFuture, ContentOptions, ContentType, Registration};
+use brush_core::builtins::{
+    Builtin, ContentOptions, ContentType, Invocation, ParseArgs, Registration, UsageError,
+};
 use brush_core::commands::{self, CommandArg, ExecutionContext};
 use brush_core::extensions::ShellExtensions;
 
@@ -190,14 +192,6 @@ impl BundledExecutable {
             Self::Path(path) => Some(path),
             #[cfg(target_os = "linux")]
             Self::Descriptor { fallback_path, .. } => fallback_path.as_deref(),
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn descriptor(&self) -> Option<&DescriptorExecutable> {
-        match self {
-            Self::Path(_) => None,
-            Self::Descriptor { descriptor, .. } => Some(descriptor),
         }
     }
 }
@@ -370,140 +364,121 @@ pub fn executable_path() -> Option<PathBuf> {
     self_exe().and_then(|executable| executable.path().map(Path::to_owned))
 }
 
-/// Help/usage content provider for the shim builtin. brush calls this for
-/// `help <name>`, `type <name>`, etc.
-#[allow(
-    clippy::needless_pass_by_value,
-    clippy::unnecessary_wraps,
-    reason = "signature dictated by brush_core::builtins::CommandContentFunc"
-)]
-fn shim_content(
-    name: &str,
-    content_type: ContentType,
-    _options: &ContentOptions,
-) -> Result<String, brush_core::Error> {
-    match content_type {
-        ContentType::ShortDescription => Ok(format!("{name} - bundled command")),
-        ContentType::DetailedHelp => Ok(format!(
-            "{name} - bundled command (executes via `brush {DISPATCH_FLAG} {name}`)\n"
-        )),
-        // A bundled command never contributes its own short-usage or man page
-        // through this path; detailed help comes from the bundled utility
-        // itself (`brush <DISPATCH_FLAG> <name> --help` or equivalent).
-        ContentType::ShortUsage | ContentType::ManPage => Ok(String::new()),
+struct BundledBuiltin {
+    args: Vec<CommandArg>,
+}
+
+impl ParseArgs for BundledBuiltin {
+    fn content(
+        name: &str,
+        content_type: ContentType,
+        _options: &ContentOptions,
+    ) -> Result<String, brush_core::Error> {
+        match content_type {
+            ContentType::ShortDescription => Ok(format!("{name} - bundled command")),
+            ContentType::DetailedHelp => Ok(format!(
+                "{name} - bundled command (executes via `brush {DISPATCH_FLAG} {name}`)\n"
+            )),
+            // Detailed help comes from the bundled utility itself.
+            ContentType::ShortUsage | ContentType::ManPage => Ok(String::new()),
+        }
+    }
+
+    fn parse(invocation: Invocation<'_>) -> Result<Self, UsageError> {
+        Ok(Self {
+            args: invocation.into_args(),
+        })
     }
 }
 
-/// Builtin execute function shared by all bundled commands. Looks up the
-/// invoked name from `context.command_name` and re-executes the running
-/// brush binary as `brush <DISPATCH_FLAG> <name> <args>`.
-///
-/// Reuses the same entry point the `command` builtin uses (see
-/// `brush-builtins/src/command.rs`): constructs a [`commands::SimpleCommand`]
-/// whose `command_name` is the absolute brush exe path. Because that contains
-/// a path separator, `SimpleCommand::execute` routes directly to the
-/// external-execution path, bypassing the builtin/function lookup that would
-/// otherwise re-enter this very shim.
-///
-/// `use_functions = false` is defensive: even though the path-separator
-/// branch already skips function dispatch, we don't want a hypothetical
-/// refactor of `SimpleCommand` to silently break us.
-//
-// TODO(bundled): Process-group propagation.
-// The shim leaves `SimpleCommand::process_group_id` as `None`, so when a
-// bundled command appears in a pipeline it doesn't join the pipeline's
-// pgid — job control and pipeline-wide signal delivery misbehave.
-// `ExecutionContext` doesn't currently carry the dispatcher's pgid, so
-// fixing this requires plumbing the pgid through the builtin dispatch
-// boundary (likely as a field on `ExecutionParameters` or a new
-// `ExecutionContext` accessor).
-//
-// TODO(bundled): Pipeline serialization.
-// The builtin contract returns an `ExecutionResult` (a completed command),
-// not an `ExecutionSpawnResult` (a spawn handle), so this function has to
-// `.await` the child to completion before returning. That's fine for a
-// standalone bundled command or for the tail of a pipeline, but for a
-// bundled stage in the middle of `a | b | c` it means stage N only
-// "starts" (from brush's perspective) after its child has fully exited —
-// downstream stages get no parallelism with it. Fixing this means
-// bypassing the builtin API for bundled dispatch: either detect the shim
-// inside `SimpleCommand::execute`'s dispatch table and return an
-// `ExecutionSpawnResult::StartedProcess` directly (same shape as external
-// dispatch), or generalize the builtin API so a builtin can return a
-// spawn handle instead of a finished result.
-fn shim_execute<SE: ShellExtensions>(
+impl<SE: ShellExtensions> Builtin<SE> for BundledBuiltin {
+    type Error = brush_core::Error;
+
+    async fn execute(
+        self,
+        context: ExecutionContext<'_, SE>,
+    ) -> Result<brush_core::ExecutionResult, Self::Error> {
+        let callback = REGISTRY
+            .get()
+            .and_then(|registry| registry.get(&context.command_name))
+            .and_then(|command| match command.shell_execution {
+                ShellExecution::Builtin(callback) => Some(callback),
+                ShellExecution::Spawn => None,
+            });
+        match callback {
+            Some(callback) => Ok(in_process_execute(context, self.args, callback)),
+            None => shim_execute(context, self.args).await,
+        }
+    }
+}
+
+async fn shim_execute<SE: ShellExtensions>(
     context: ExecutionContext<'_, SE>,
     args: Vec<CommandArg>,
-) -> BoxFuture<'_, Result<brush_core::ExecutionResult, brush_core::Error>> {
-    Box::pin(async move {
-        let Some(executable) = self_exe() else {
-            let _ = writeln!(
-                context.stderr(),
-                "brush: cannot determine how to launch running executable"
-            );
-            return Ok(ExecutionExitCode::CannotExecute.into());
-        };
-        let exe_path = executable
-            .path()
-            .unwrap_or_else(|| Path::new("/dev/null"))
-            .to_string_lossy()
-            .into_owned();
-
-        // Build the argv for the spawned brush. `SimpleCommand::args[0]` is
-        // dropped by the external-execution path (argv[0] of the spawned
-        // process comes from `cmd.argv0` below), so a placeholder suffices;
-        // args[1..] become the spawned process's argv[1..]. The caller's
-        // `args[0]` is the bundled name by builtin-dispatch convention — we
-        // replace it with an explicit `<name>` after `DISPATCH_FLAG` so the
-        // child's dispatcher sees it in a fixed slot.
-        let bundled_name = context.command_name.clone();
-        let mut child_args: Vec<CommandArg> = Vec::with_capacity(args.len() + 2);
-        child_args.push(CommandArg::String(String::new())); // args[0], dropped
-        child_args.push(CommandArg::String(DISPATCH_FLAG.into()));
-        child_args.push(CommandArg::String(bundled_name.clone()));
-        child_args.extend(args.into_iter().skip(1));
-
-        let mut cmd = commands::SimpleCommand::new(
-            commands::ShellForCommand::ParentShell(context.shell),
-            context.params,
-            exe_path,
-            child_args,
+) -> Result<brush_core::ExecutionResult, brush_core::Error> {
+    let Some(executable) = self_exe() else {
+        let _ = writeln!(
+            context.stderr(),
+            "brush: cannot determine how to launch running executable"
         );
-        cmd.use_functions = false;
-        // Override the spawned process's argv[0] so tools that report errors
-        // via their own argv[0] (uutils' `uucore::util_name()` reads
-        // `std::env::args_os()[0]` into a LazyLock at first use) render as
-        // `<name>:` rather than `brush:`. Without this the child sees the
-        // brush exe path as argv[0] and misattributes errors.
-        cmd.argv0 = Some(bundled_name.clone());
-        #[cfg(target_os = "linux")]
-        {
-            cmd.executable_descriptor = executable.descriptor().cloned();
-        }
+        return Ok(ExecutionExitCode::CannotExecute.into());
+    };
+    let exe_path = executable
+        .path()
+        .unwrap_or_else(|| Path::new("/dev/null"))
+        .to_string_lossy()
+        .into_owned();
 
-        let spawn_result = match cmd.execute().await {
-            Ok(result) => {
-                let mut observation = BUNDLED_LAUNCH
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if observation.last_failure.is_some() {
-                    observation.later_bundled_launch_succeeded = true;
-                }
-                result
-            }
-            Err(error) => {
-                let failure = bundled_launch_failure(&bundled_name, &error);
-                let mut observation = BUNDLED_LAUNCH
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                observation.last_failure = Some(failure);
-                observation.later_bundled_launch_succeeded = false;
-                return Err(error);
-            }
+    // SimpleCommand drops args[0]; the child's dispatcher needs the bundled
+    // command in the fixed slot following DISPATCH_FLAG.
+    let bundled_name = context.command_name.clone();
+    let mut child_args: Vec<CommandArg> = Vec::with_capacity(args.len() + 3);
+    child_args.push(CommandArg::String(String::new()));
+    child_args.push(CommandArg::String(DISPATCH_FLAG.into()));
+    child_args.push(CommandArg::String(bundled_name.clone()));
+    child_args.extend(args);
+
+    // TODO(bundled): Carry the pipeline's process-group ID through ExecutionContext
+    // so this child can join the same group as its neighboring stages.
+    let mut cmd = commands::SimpleCommand::new(
+        commands::ShellForCommand::ParentShell(context.shell),
+        context.params,
+        exe_path,
+        child_args,
+    );
+    cmd.use_functions = false;
+    // uutils reads the process's argv[0] for diagnostic prefixes.
+    cmd.argv0 = Some(bundled_name.clone());
+    #[cfg(target_os = "linux")]
+    {
+        cmd.executable_descriptor = match executable {
+            BundledExecutable::Path(_) => None,
+            BundledExecutable::Descriptor { descriptor, .. } => Some(descriptor),
         };
-        let wait_result = spawn_result.wait().await?;
-        Ok(wait_result.into())
-    })
+    }
+
+    let spawn_result = match cmd.execute().await {
+        Ok(result) => {
+            let mut observation = BUNDLED_LAUNCH
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if observation.last_failure.is_some() {
+                observation.later_bundled_launch_succeeded = true;
+            }
+            result
+        }
+        Err(error) => {
+            let failure = bundled_launch_failure(&bundled_name, &error);
+            let mut observation = BUNDLED_LAUNCH
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            observation.last_failure = Some(failure);
+            observation.later_bundled_launch_succeeded = false;
+            return Err(error);
+        }
+    };
+    let wait_result = spawn_result.wait().await?;
+    Ok(wait_result.into())
 }
 
 fn bundled_launch_failure(command: &str, error: &brush_core::Error) -> BundledLaunchFailure {
@@ -544,122 +519,74 @@ fn stable_io_error_code(kind: io::ErrorKind) -> &'static str {
     }
 }
 
-/// Constructs a [`Registration`] for the bundled-shim builtin. The same
-/// registration value can be reused for every bundled name; per-name
-/// dispatch happens via `context.command_name` at execution time.
-fn shim_registration<SE: ShellExtensions>() -> Registration<SE> {
-    Registration {
-        execute_func: shim_execute::<SE>,
-        content_func: shim_content,
-        disabled: false,
-        special_builtin: false,
-        declaration_builtin: false,
-    }
-}
-
 fn in_process_execute<SE: ShellExtensions>(
     context: ExecutionContext<'_, SE>,
     args: Vec<CommandArg>,
     callback: InProcessFn,
-) -> BoxFuture<'_, Result<brush_core::ExecutionResult, brush_core::Error>> {
-    Box::pin(async move {
-        let options = context.shell.options();
-        let command_source = if options.interactive {
-            "interactive"
-        } else if options.command_string_mode {
-            "command_string"
-        } else if options.read_commands_from_stdin {
-            "stdin"
-        } else {
-            "script"
-        };
-        let mut exported_variables = context
-            .shell
-            .env()
-            .iter_exported()
-            .filter_map(|(name, _)| {
-                context
-                    .shell
-                    .env_str(name)
-                    .map(|value| (name.clone(), value.into_owned()))
-            })
-            .collect::<Vec<_>>();
-        exported_variables.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-        let shell = ShellSnapshot {
-            current_directory: context.shell.working_dir().to_owned(),
-            name: context
+) -> brush_core::ExecutionResult {
+    let options = context.shell.options();
+    let command_source = if options.interactive {
+        "interactive"
+    } else if options.command_string_mode {
+        "command_string"
+    } else if options.read_commands_from_stdin {
+        "stdin"
+    } else {
+        "script"
+    };
+    let mut exported_variables = context
+        .shell
+        .env()
+        .iter_exported()
+        .filter_map(|(name, _)| {
+            context
                 .shell
-                .current_shell_name()
-                .map(|name| name.into_owned()),
-            depth: context.shell.depth(),
-            interactive: options.interactive,
-            login: options.login_shell,
-            restricted: options.restricted_shell,
-            command_source,
-            job_control: options.enable_job_control,
-            exported_variables,
-        };
-        let mut argv = Vec::with_capacity(args.len().max(1));
-        argv.push(OsString::from(&context.command_name));
-        argv.extend(
-            args.into_iter()
-                .skip(1)
-                .map(|arg| OsString::from(arg.to_string())),
-        );
-        let invocation = InProcessInvocation {
-            argv,
-            shell,
-            stdin: Box::new(context.stdin()),
-            stdout: Box::new(context.stdout()),
-            stderr: Box::new(context.stderr()),
-        };
-        let status = callback(invocation);
+                .env_str(name)
+                .map(|value| (name.clone(), value.into_owned()))
+        })
+        .collect::<Vec<_>>();
+    exported_variables.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    let shell = ShellSnapshot {
+        current_directory: context.shell.working_dir().to_owned(),
+        name: context
+            .shell
+            .current_shell_name()
+            .map(|name| name.into_owned()),
+        depth: context.shell.depth(),
+        interactive: options.interactive,
+        login: options.login_shell,
+        restricted: options.restricted_shell,
+        command_source,
+        job_control: options.enable_job_control,
+        exported_variables,
+    };
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push(OsString::from(&context.command_name));
+    argv.extend(args.into_iter().map(|arg| OsString::from(String::from(arg))));
+    let invocation = InProcessInvocation {
+        argv,
+        shell,
+        stdin: Box::new(context.stdin()),
+        stdout: Box::new(context.stdout()),
+        stderr: Box::new(context.stderr()),
+    };
+    let status = callback(invocation);
 
-        Ok(brush_core::ExecutionResult::new(status))
-    })
-}
-
-fn builtin_execute<SE: ShellExtensions>(
-    context: ExecutionContext<'_, SE>,
-    args: Vec<CommandArg>,
-) -> BoxFuture<'_, Result<brush_core::ExecutionResult, brush_core::Error>> {
-    let callback = REGISTRY
-        .get()
-        .and_then(|registry| registry.get(&context.command_name))
-        .and_then(|command| match command.shell_execution {
-            ShellExecution::Builtin(callback) => Some(callback),
-            ShellExecution::Spawn => None,
-        });
-    match callback {
-        Some(callback) => in_process_execute(context, args, callback),
-        None => shim_execute(context, args),
-    }
-}
-
-fn builtin_registration<SE: ShellExtensions>() -> Registration<SE> {
-    Registration {
-        execute_func: builtin_execute::<SE>,
-        content_func: shim_content,
-        disabled: false,
-        special_builtin: false,
-        declaration_builtin: false,
-    }
+    brush_core::ExecutionResult::new(status)
 }
 
 /// Registers a builtin for every installed bundled command.
 ///
-/// Uses `register_builtin_if_unset` so Brush's own builtins win on conflict.
+/// Uses `builtins::Registry::register_if_absent` so Brush's own builtins win on conflict.
 /// Spawn commands retain descriptor-aware self-reexec; injected builtin
 /// commands execute synchronously against the live parent shell.
 pub fn register_commands<SE: ShellExtensions>(shell: &mut brush_core::Shell<SE>) {
     let Some(registry) = REGISTRY.get() else {
         return;
     };
-    for (name, command) in registry {
-        let registration = match command.shell_execution {
-            ShellExecution::Spawn => shim_registration::<SE>(),
-            ShellExecution::Builtin(_) => builtin_registration::<SE>(),
-        };
-        shell.register_builtin_if_unset(name.clone(), registration);
+    for name in registry.keys() {
+        shell
+            .builtins_mut()
+            .register_if_absent(name.clone(), Registration::of::<BundledBuiltin>());
     }
 }

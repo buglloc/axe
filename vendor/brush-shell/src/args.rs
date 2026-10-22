@@ -35,14 +35,20 @@ const HEADING_UI_OPTIONS: &str = "User interface options";
 const HEADING_EXPERIMENTAL_OPTIONS: &str = "*Experimental* options (unstable)";
 
 /// Identifies the input backend to use for the shell.
-#[derive(Clone, Copy, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum InputBackendType {
-    /// Richest input backend, based on reedline.
+    /// Richest input backend, based on reedline. Not available on WASI or other
+    /// wasm targets.
     Reedline,
-    /// Basic input backend that provides minimal completion support for testing.
+    /// The `vt` backend's line editing, drawn with backspaces alone and listing
+    /// ambiguous completions straight away: output that test harnesses can follow.
+    /// Available only on Unix.
     Basic,
     /// Most minimal input backend.
     Minimal,
+    /// Line editing with completion and history, drawn with VT100-style escape
+    /// sequences; needs no terminal library. Available only on Unix.
+    Vt,
 }
 
 /// Parsed command-line arguments for the brush shell.
@@ -327,7 +333,7 @@ mod tests {
         assert!(!args.interactive);
         assert!(!args.login);
         assert!(args.command.is_none());
-        assert!(args.script_args.is_empty());
+        assert_eq!(args.script_args, Vec::<String>::new());
     }
 
     #[test]

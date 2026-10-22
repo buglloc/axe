@@ -12,11 +12,13 @@ pub(crate) struct PopdCommand {
     // TODO(popd): implement +N and -N
 }
 
-impl builtins::Command for PopdCommand {
+brush_clap_adapter::impl_parse_args!(PopdCommand);
+
+impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for PopdCommand {
     type Error = crate::dirs::DirError;
 
-    async fn execute<SE: brush_core::ShellExtensions>(
-        &self,
+    async fn execute(
+        self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
         if let Some(popped) = context.shell.directory_stack_mut().pop() {
@@ -26,7 +28,8 @@ impl builtins::Command for PopdCommand {
 
             // Display dirs.
             let dirs_cmd = crate::dirs::DirsCommand::default();
-            dirs_cmd.execute(context).await?;
+            // The change to the stack decides the status, not the listing.
+            let _ = dirs_cmd.execute(context).await?;
 
             Ok(ExecutionResult::success())
         } else {

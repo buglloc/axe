@@ -92,7 +92,7 @@ let result = shell
 assert!(result.is_success());
 ```
 
-For more, see the examples: [register a builtin written in Rust](brush-core/examples/custom-builtin.rs) alongside the standard ones, [call a shell function from Rust](brush-core/examples/call-func.rs) with control over its I/O, or [parse a script and serialize its syntax tree](brush-parser/examples/serde.rs). The [examples guide](docs/reference/examples.md) describes each one and when it's useful.
+For more, see the examples: [register a builtin written in Rust](brush-clap-adapter/examples/custom-builtin.rs) alongside the standard ones, [call a shell function from Rust](brush-core/examples/call-func.rs) with control over its I/O, or [parse a script and serialize its syntax tree](brush-parser/examples/serde.rs). The [examples guide](docs/reference/examples.md) describes each one and when it's useful.
 
 | Crate | API docs | What it provides |
 |---|---|---|
@@ -117,7 +117,7 @@ Optional crates add bundled [coreutils builtins](brush-coreutils-builtins) and [
 |---|---|---|
 | **Supported** | _Linux_: x86_64, aarch64 (glibc, musl) <br/> macOS: aarch64 | Prebuilt binaries for every release, the full test suite on Linux x86_64 and aarch64 (glibc) and macOS aarch64, build checks for Linux musl and macOS x86_64, and daily-driver quality. |
 | **Preview**   | _Windows_: x86_64, aarch64 | Windows receives build and static checks in CI along with a small brush-specific test suite; prebuilt binaries are on the way. Parts of the shell are still missing or limited but it's functional for basic usage, particularly when paired with Microsoft's build of [coreutils for Windows](https://github.com/microsoft/coreutils). |
-| **Experimental** | _WASI 0.2_ | WASI builds run under wasmtime in CI. There are *many* significant gaps; more of a starting point for further experimentation.  |
+| **Experimental** | _WASI 0.3_ | WASI builds run under wasmtime in CI. There are *many* significant gaps; more of a starting point for further experimentation.  |
 | **Builds only** | _Android_, _FreeBSD_, _NetBSD_, _OpenBSD_ | Cross-compiled in CI so they keep compiling. No official tests, binaries, or validation. |
 
 ## Community and contributing

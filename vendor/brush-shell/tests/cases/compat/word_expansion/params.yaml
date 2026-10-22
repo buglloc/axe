@@ -791,18 +791,131 @@ cases:
       echo "${#var}"
 
   - name: "Extglob-like text in parameter expansion default"
-    known_failure: true # TODO(tokenizer): '@(' inside '${...}' is taken as the start of an extglob
     stdin: |
       shopt -s extglob
       echo ${u:-a@(}
 
   - name: "Doubled dollar sign before brace"
-    known_failure: true # TODO(tokenizer): '$${' is taken as '$' followed by '${' instead of '$$' followed by '{'
     stdin: |
       echo $${u | sed "s/$$/PID/g"
       echo "rc=$?"
+
+  - name: "Doubled dollar sign before parenthesis"
+    ignore_stderr: true
+    stdin: |
+      echo $$(echo hi)
+
+  - name: "ANSI-C quoting in parameter expansion in double quotes"
+    known_failure: true # TODO(expansion): with extquote (on by default), $'...' inside "${...}" is decoded; brush keeps it as is
+    stdin: |
+      echo "[${x:-$'a\tb'}]"
+
+  - name: "Escaped closing brace in parameter expansion in double quotes"
+    known_failure: true # TODO(expansion): bash removes the backslash from '\}' inside "${...}"; brush keeps it
+    stdin: |
+      echo "[${x:-\}}]"
+
+  - name: "Tabs in parameter expansion default"
+    stdin: |
+      echo "[${x:-a	b}]" "[${x:-a 	 b}]"
 
   - name: "Here-doc operator as parameter expansion default"
     stdin: |
       echo ${u:-<<} ${u:-<<-}
       echo "${u:-<<}" "${u:-<<-}"
+
+  - name: "Bad substitution in braced parameter expansion"
+    known_failure: true # TODO(expansion): #540: a malformed '${...}' is silently treated as literal text
+    ignore_stderr: true # error wording differs
+    stdin: |
+      echo before
+      echo ${x!}
+      echo "rc=$?"
+      x="a ${y!} b"
+      echo "rc=$? x=$x"
+
+  - name: "Braced last background process ID"
+    known_failure: true # TODO(expansion): '${!}' (not followed by a name) is taken as indirection, so it doesn't parse
+    stdin: |
+      echo "[${!:-none}]"
+      true &
+      wait
+      [ "${!}" = "$!" ] && echo same
+      echo "[${!:+set}]"
+      b=x x=y
+      echo "${!b}"
+
+  - name: "Case-toggling parameter expansion"
+    known_failure: true # TODO(expansion): ${x~} and ${x~~} (undocumented in bash) are not implemented
+    stdin: |
+      x=aBc
+      echo "${x~}" "${x~~}"
+
+  - name: "An escaped dollar sign in a pattern substitution's replacement is literal"
+    stdin: |
+      x=abc y=Y
+      echo "1 ${x/b/\$0}"
+      echo "2 ${x/b/\$1}"
+      echo "3 ${x/b/\$y}"
+      echo 4 ${x/b/\$0}
+      echo "5 ${x//[ac]/\$1}" "${x/#a/\$1}" "${x/%c/\$1}"
+      echo "6 ${x/b/\$\$}" "${x/b/\${y}}"
+      set -- P
+      echo "7 ${x/b/\\\$1}" ${x/b/\\\$1}
+
+  - name: "A dollar sign the replacement's expansion yields is literal"
+    stdin: |
+      x=abc
+      r='$1'
+      echo "1 ${x/b/$r}" ${x/b/$r}
+      r='\$1'
+      echo "2 ${x/b/$r}" ${x/b/$r}
+      echo "3 ${x/b/$(echo '$0')}"
+      echo "4 ${x/b/'$1'}" ${x/b/"\$1"}
+      shopt -s extglob
+      echo "5 ${x/@(b)/\$1}" "${x//@(b|c)/[\$1]}"
+      arr=(ab cb)
+      echo "6 ${arr[@]/b/\$1}"
+      set -- ab cb
+      echo "7 ${@/b/\$1}"
+
+  - name: "Expansions in a pattern substitution's replacement are performed"
+    stdin: |
+      x=abc y=Y
+      set -- P
+      echo "1 ${x/b/$1}" ${x/b/$1} "${x/b/$y}" "${x/b/${y}}"
+      echo "2 ${x/b/$(echo C)}" "${x/b/`echo B`}" "${x/b/$((1+2))}"
+      echo "3 ${x/b/\\$1}" ${x/b/\\$1}
+      echo "4 ${x//[ac]/$1}" "${x/#a/$1}" "${x/%c/$1}"
+      echo "5 ${x/b/$}" "${x/b/\$}" "${x/b/\q}" "${x/b/\\q}"
+
+  - name: "An escaped or quoted ampersand in a pattern substitution's replacement is literal"
+    stdin: |
+      x=abc
+      echo "1 ${x/b/<\&>}" ${x/b/<\&>}
+      echo "2 ${x/b/'&'}" ${x/b/"&"} "${x/b/"&"}"
+      echo "3 ${x/b/\\\&}" ${x/b/\\\&} "${x/b/$'\\&'}"
+      shopt -u patsub_replacement
+      echo "4 ${x/b/<&>}" ${x/b/<&>} "${x/b/<\&>}"
+      r='\\'
+      echo "5 ${x/b/$r}"
+
+  - name: "An ampersand in a pattern substitution's replacement stands for the match"
+    known_failure: true # TODO(expansion): patsub_replacement is not implemented
+    stdin: |
+      x=abc
+      echo "1 ${x/b/<&>}" ${x/b/<&>}
+      echo "2 ${x/b/&&}" "${x//?/<&>}"
+      echo "3 ${x/b/<\\&>}" ${x/b/<\\&>}
+      r='&'
+      echo "4 ${x/b/$r}" ${x/b/$r} "${x/b/$(echo '&')}"
+      echo "5 ${x/b/x\$1&}"
+
+  - name: "A backslash an unquoted replacement expansion yields escapes an ampersand or backslash"
+    known_failure: true # TODO(expansion): patsub_replacement is not implemented
+    stdin: |
+      x=abc
+      r='\&'
+      echo "1 ${x/b/$r}" ${x/b/$r}
+      r='\\'
+      echo "2 ${x/b/$r}" ${x/b/$r}

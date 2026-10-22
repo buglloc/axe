@@ -23,11 +23,13 @@ pub(crate) struct WaitCommand {
     ids: Vec<String>,
 }
 
-impl builtins::Command for WaitCommand {
+brush_clap_adapter::impl_parse_args!(WaitCommand);
+
+impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for WaitCommand {
     type Error = brush_core::Error;
 
-    async fn execute<SE: brush_core::ShellExtensions>(
-        &self,
+    async fn execute(
+        self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         if self.wait_for_terminate {
@@ -47,7 +49,9 @@ impl builtins::Command for WaitCommand {
                 if id.starts_with('%') {
                     // It's a job spec.
                     if let Some(job) = context.shell.jobs_mut().resolve_job_spec(id) {
-                        result = job.wait().await?;
+                        // Take the job's status, but not its control flow: an `exit` in a
+                        // background job ends only that job.
+                        result = job.wait().await?.exit_code.into();
                     } else {
                         writeln!(
                             context.stderr(),
@@ -61,7 +65,7 @@ impl builtins::Command for WaitCommand {
                 } else {
                     let pid = brush_core::int_utils::parse(id.as_str(), 10)?;
                     if let Some(job) = context.shell.jobs_mut().resolve_process_id(pid) {
-                        result = job.wait().await?;
+                        result = job.wait().await?.exit_code.into();
                     } else {
                         writeln!(
                             context.stderr(),
@@ -72,7 +76,6 @@ impl builtins::Command for WaitCommand {
                         result = ExecutionExitCode::NotFound.into();
                     }
                 }
-
             }
         } else {
             // Wait for all jobs.
