@@ -91,7 +91,6 @@ _build-rust package target:
             ;;
         *-apple-darwin)
             just apple-sdk
-            rustup target add {{target}}
             SDKROOT="{{apple_sdk_root}}" AXE_EDITION_ROOT="{{edition_root}}" cargo zigbuild --locked -p {{package}} --release --target {{target}}
             ;;
         *)

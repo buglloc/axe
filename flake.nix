@@ -1,9 +1,19 @@
 {
   description = "AXE shell, binary releases, and AXE Store package set";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
-  outputs = {nixpkgs, ...}: let
+  outputs = {
+    nixpkgs,
+    rust-overlay,
+    ...
+  }: let
     lib = nixpkgs.lib;
     axeStore = {
       mkPackageSet = arguments:
@@ -47,7 +57,9 @@
         pkgs = import nixpkgs {
           inherit system;
           config.allowUnfreePredicate = package: lib.getName package == "yandex-cloud";
+          overlays = [rust-overlay.overlays.default];
         };
+        rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
         cargoZigbuild = pkgs.cargo-zigbuild.overrideAttrs (old: {
           patches =
             (old.patches or [])
@@ -114,7 +126,7 @@
               pkg-config
               python3
               rust-analyzer
-              rustup
+              rustToolchain
               yandex-cloud
               zstd
               zig
