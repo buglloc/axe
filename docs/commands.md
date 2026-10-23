@@ -83,7 +83,7 @@ Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-sty
 | `runtime` — Runtimes | Store only; see [Store inventory](store.md#package-inventory) |
 | `axe` — AXE | `commands`, `doctor`, `clean-tools`, `refresh-tools`, `sshd` |
 
-The bundled `mount` is read-only. Linux-specific applets in this table remain absent from Darwin builds.
+The bundled `mount` follows util-linux `mount(8)`: listing, `-t`/`-o` mounts, single-operand `/etc/fstab` lookup, `-a` with `-t`/`-O` filters, remount, bind/rbind, move, propagation (`--make-*`), and `/sbin/mount.<type>` helpers. Remounts change only the requested flags and keep the others (`nosuid`, `nodev`, atime mode, ...). New filesystems attach through `fsopen`/`fsconfig`/`fsmount`/`move_mount`, so option errors show the kernel's message (`fsconfig() failed: ...`); kernels without that API use `mount(2)`. Loop mounts (`-o loop`), `-N`, `-T`, and `-F` are not supported. Linux-specific applets in this table remain absent from Darwin builds.
 
 For the bundled HTTP applet, see [HTTP requests](http.md).
 

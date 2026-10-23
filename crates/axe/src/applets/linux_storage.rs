@@ -14,7 +14,7 @@ pub fn commands() -> HashMap<String, AppletFn> {
     let mut commands = HashMap::new();
     commands.insert("blkid".into(), blkid as AppletFn);
     commands.insert("blockdev".into(), blockdev as AppletFn);
-    commands.insert("mount".into(), mount as AppletFn);
+    commands.insert("mount".into(), super::mount::mount as AppletFn);
     commands
 }
 
@@ -374,15 +374,15 @@ fn run_blkid(args: Vec<OsString>) -> Result<bool, String> {
 }
 
 #[derive(Default, Debug)]
-struct Signature {
-    fs_type: &'static str,
+pub(super) struct Signature {
+    pub(super) fs_type: &'static str,
     uuid: Option<String>,
-    label: Option<String>,
+    pub(super) label: Option<String>,
     block_size: Option<String>,
     version: Option<String>,
 }
 
-fn probe(path: &Path) -> std::io::Result<Option<Signature>> {
+pub(super) fn probe(path: &Path) -> std::io::Result<Option<Signature>> {
     let mut file = File::open(path)?;
     let mut bytes = vec![0u8; 131_072];
     let read = file.read(&mut bytes)?;
@@ -674,93 +674,6 @@ fn escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-pub fn mount(args: Vec<OsString>) -> i32 {
-    match run_mount(args) {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!("mount: {error}");
-            1
-        }
-    }
-}
-
-fn run_mount(args: Vec<OsString>) -> Result<(), String> {
-    let values = utf8_args(args)?;
-    let mut types = None::<Vec<String>>;
-    let mut show_labels = false;
-    let mut iter = values.into_iter().skip(1);
-    while let Some(value) = iter.next() {
-        match value.as_str() {
-            "-t" | "--types" => {
-                types = Some(
-                    iter.next()
-                        .ok_or("-t requires a filesystem type")?
-                        .split(',')
-                        .map(str::to_owned)
-                        .collect(),
-                )
-            }
-            "-l" | "--show-labels" => show_labels = true,
-            "-h" | "--help" => {
-                println!("Usage: mount [-l] [-t TYPE]\nList mounted filesystems (read-only).");
-                return Ok(());
-            }
-            value if value.starts_with('-') => {
-                return Err(format!("unsupported option '{value}' (listing mode only)"));
-            }
-            _ => {
-                return Err(
-                    "mount operations are not supported; invoke without operands to list mounts"
-                        .into(),
-                );
-            }
-        }
-    }
-    let content =
-        std::fs::read_to_string("/proc/self/mountinfo").map_err(|error| error.to_string())?;
-    for line in content.lines() {
-        let Some((left, right)) = line.split_once(" - ") else {
-            continue;
-        };
-        let left = left.split_whitespace().collect::<Vec<_>>();
-        let right = right.split_whitespace().collect::<Vec<_>>();
-        if left.len() < 6 || right.len() < 3 {
-            continue;
-        }
-        let fs_type = right[0];
-        if types
-            .as_ref()
-            .is_some_and(|types| !types.iter().any(|value| value == fs_type))
-        {
-            continue;
-        }
-        let source = unescape_mount(right[1]);
-        let target = unescape_mount(left[4]);
-        let mut options = left[5].to_string();
-        if !right[2].is_empty() {
-            options.push(',');
-            options.push_str(right[2]);
-        }
-        print!("{source} on {target} type {fs_type} ({options})");
-        if show_labels
-            && let Ok(Some(signature)) = probe(Path::new(&source))
-            && let Some(label) = signature.label
-        {
-            print!(" [{label}]");
-        }
-        println!();
-    }
-    Ok(())
-}
-
-fn unescape_mount(value: &str) -> String {
-    value
-        .replace("\\040", " ")
-        .replace("\\011", "\t")
-        .replace("\\012", "\n")
-        .replace("\\134", "\\")
-}
-
 fn utf8_args(args: Vec<OsString>) -> Result<Vec<String>, String> {
     args.into_iter()
         .map(|value| {
@@ -783,10 +696,5 @@ mod tests {
             Ok(BlockAction::SetValue("set readahead", BLKRASET, 128))
         ));
         assert!(parse_block_action("setbsz", &mut std::iter::empty()).is_err());
-    }
-
-    #[test]
-    fn mountinfo_escapes_are_decoded() {
-        assert_eq!(unescape_mount("/tmp/a\\040b"), "/tmp/a b");
     }
 }

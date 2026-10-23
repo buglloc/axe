@@ -443,7 +443,7 @@ fn bundled_synopsis(name: &str) -> &'static str {
         "mktemp" => "Create temporary files or directories",
         "modinfo" => "Display Linux kernel module information",
         "more" => "Page through text one screen at a time",
-        "mount" => "Inspect mounts or mount filesystems read-only",
+        "mount" => "List, mount, remount, bind, and move filesystems",
         "mountpoint" => "Check whether a path is a mount point",
         "mv" => "Move or rename files and directories",
         "nice" => "Run a command with adjusted scheduling priority",

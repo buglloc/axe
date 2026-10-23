@@ -20,6 +20,8 @@ pub(crate) mod linux_network;
 #[cfg(target_os = "linux")]
 pub(crate) mod linux_storage;
 #[cfg(target_os = "linux")]
+mod mount;
+#[cfg(target_os = "linux")]
 mod ping;
 #[cfg(target_os = "linux")]
 mod procutils;

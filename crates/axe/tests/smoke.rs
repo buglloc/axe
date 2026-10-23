@@ -436,6 +436,63 @@ fn unresolved_current_identity_uses_numeric_fallbacks() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn mount_bind_remount_toggles_read_only_and_keeps_other_flags() {
+    let scratch = Scratch::new("mount-remount");
+    let root = scratch.path().canonicalize().expect("canonicalize scratch");
+    let mut root_env = std::ffi::OsString::from("ROOT=");
+    root_env.push(&root);
+    // `env -i` runs after `unshare` resolved through the caller's PATH, so
+    // AXE itself sees an empty environment and has no host tools.
+    let output = Command::new("unshare")
+        .args(["--user", "--map-root-user", "--mount", "--"])
+        .args([
+            "env",
+            "-i",
+            "HOME=/tmp",
+            "PATH=/nonexistent",
+            "AXE_STORE_MODE=off",
+        ])
+        .arg(root_env)
+        .arg(env!("CARGO_BIN_EXE_axe"))
+        .args([
+            "-c",
+            r#"set -e
+mount -t tmpfs -o nosuid,nodev,size=1m tmpfs "$ROOT"
+mkdir "$ROOT/src" "$ROOT/dst"
+mount --bind "$ROOT/src" "$ROOT/dst"
+mount -o remount,bind,ro "$ROOT/dst"
+mount -t tmpfs
+if touch "$ROOT/dst/blocked" 2>/dev/null; then exit 3; fi
+mount -o remount,bind,rw "$ROOT/dst"
+touch "$ROOT/dst/allowed"
+mount -t tmpfs
+if mount -t tmpfs -o bogusopt=1 t "$ROOT/src"; then exit 4; fi"#,
+        ])
+        .output()
+        .expect("start isolated mount test");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() && stderr.contains("unshare") {
+        eprintln!("mount remount proof skipped: {}", stderr.trim());
+        return;
+    }
+    assert!(output.status.success(), "stderr: {stderr}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mounted = format!(" on {}/dst type tmpfs (", root.display());
+    let states: Vec<&str> = stdout
+        .lines()
+        .filter_map(|line| line.split_once(&mounted).map(|(_, options)| options))
+        .collect();
+    assert_eq!(states.len(), 2, "stdout: {stdout}");
+    assert!(states[0].starts_with("ro,nosuid,nodev,"), "{}", states[0]);
+    assert!(states[1].starts_with("rw,nosuid,nodev,"), "{}", states[1]);
+    assert!(
+        stderr.contains("fsconfig() failed: tmpfs: Unknown parameter 'bogusopt'."),
+        "kernel option error must be reported: {stderr}"
+    );
+}
+
 #[test]
 fn store_mode_off_omits_store_commands_without_network_or_storage() {
     use std::io;
