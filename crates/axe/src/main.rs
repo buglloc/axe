@@ -33,17 +33,10 @@ fn main() {
         return;
     }
 
-    if args.len() == 1 && (args[0] == OsStr::new("--help") || args[0] == OsStr::new("-h")) {
-        print!("{HELP}");
-        return;
-    }
-
-    if args.len() == 1 && args[0] == OsStr::new("--version") {
-        println!(
-            "axe {VERSION} (edition {}; Brush {})",
-            embedded::INPUTS.edition_id,
-            brush_version()
-        );
+    // `axe --help` answers before the registry exists; an applet name in
+    // argv[0] (`mount --help` through a link) must reach the applet first.
+    let invoked_as_axe = Path::new(&argv0).file_name() == Some(OsStr::new("axe"));
+    if invoked_as_axe && print_axe_info(&args) {
         return;
     }
 
@@ -82,17 +75,6 @@ fn main() {
         }
     };
 
-    if args.len() == 1 && args[0] == OsStr::new("--list") {
-        if let Some(error) = &registry.blocking_index_error {
-            eprintln!("axe: {error}");
-            std::process::exit(126);
-        }
-        for name in &registry.visible_names {
-            println!("{name}");
-        }
-        return;
-    }
-
     let bundled_executable = Arc::clone(&executable);
     brush_shell::bundled::install_with_executable(
         registry.commands,
@@ -103,6 +85,19 @@ fn main() {
         if let Some(code) = route.dispatch() {
             std::process::exit(code);
         }
+    }
+    if print_axe_info(&args) {
+        return;
+    }
+    if args.len() == 1 && args[0] == OsStr::new("--list") {
+        if let Some(error) = &registry.blocking_index_error {
+            eprintln!("axe: {error}");
+            std::process::exit(126);
+        }
+        for name in &registry.visible_names {
+            println!("{name}");
+        }
+        return;
     }
 
     if let Some(error) = &registry.blocking_index_error
@@ -126,6 +121,25 @@ fn main() {
 
     disable_persistent_shell_history();
     brush_shell::entry::run(Some(r"axe \w\$ "));
+}
+
+/// Prints AXE's own help or version for a lone `--help`/`-h`/`--version`.
+fn print_axe_info(args: &[OsString]) -> bool {
+    let [arg] = args else {
+        return false;
+    };
+    if arg == "--help" || arg == "-h" {
+        print!("{HELP}");
+    } else if arg == "--version" {
+        println!(
+            "axe {VERSION} (edition {}; Brush {})",
+            embedded::INPUTS.edition_id,
+            brush_version()
+        );
+    } else {
+        return false;
+    }
+    true
 }
 
 /// How argv selected an applet, in dispatch precedence order.

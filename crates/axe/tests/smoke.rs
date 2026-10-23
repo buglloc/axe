@@ -893,6 +893,47 @@ fn applet_basename_dispatches_busybox_style() {
 }
 
 #[test]
+fn applet_links_answer_help_version_and_list_themselves() {
+    const AXE_BANNER: &str = "AXE — Assume nothing";
+    let scratch = Scratch::new("argv0-help");
+    let run = |name: &str, arg: &str| {
+        let link = scratch.path().join(name);
+        if !link.exists() {
+            std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_axe"), &link)
+                .expect("create applet symlink");
+        }
+        Command::new(&link)
+            .arg(arg)
+            .env("AXE_STORE_MODE", "off")
+            .output()
+            .expect("run applet symlink")
+    };
+
+    for applet in ["ls", "grep", "tar"] {
+        let help = run(applet, "--help");
+        let stdout = String::from_utf8_lossy(&help.stdout);
+        assert!(help.status.success(), "{applet} --help: {help:?}");
+        assert!(
+            !stdout.contains(AXE_BANNER),
+            "{applet} --help printed AXE help"
+        );
+
+        let version = run(applet, "--version");
+        assert!(version.status.success(), "{applet} --version: {version:?}");
+        assert!(
+            !String::from_utf8_lossy(&version.stdout).starts_with("axe "),
+            "{applet} --version printed the AXE version"
+        );
+    }
+    // `ls` rejects `--list`; AXE must not answer with its command inventory.
+    assert!(!run("ls", "--list").status.success());
+
+    // A renamed AXE binary that names no applet still prints AXE's own help.
+    let renamed = run("axe-renamed", "--help");
+    assert!(String::from_utf8_lossy(&renamed.stdout).contains(AXE_BANNER));
+}
+
+#[test]
 fn bundled_pipeline_and_recursive_xargs_work_without_path() {
     let scratch = Scratch::new("empty-path");
     fs::create_dir(scratch.path().join("directory")).expect("create fixture directory");
