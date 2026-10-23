@@ -55,7 +55,7 @@ quinn = { version = "0.11.9", default-features = false, features = ["runtime-tok
 rcgen = "0.14.5"
 rand = "0.10"
 hickory-resolver = "0.26"
-linux-raw-sys = { version = "0.12", features = ["ioctl"] }
+linux-raw-sys = { version = "0.12", features = ["ioctl", "loop_device"] }
 inotify = { version = "0.11", default-features = false }
 lzma-rust2 = { version = "0.20", default-features = false, features = ["std", "encoder", "xz"] }
 netlink-packet-route = "0.33"

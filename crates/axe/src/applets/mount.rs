@@ -14,6 +14,10 @@ use libc::c_ulong;
 
 use super::linux_storage::probe;
 
+mod loop_device;
+
+use loop_device::{LoopError, LoopRequest};
+
 const MOUNTINFO: &str = "/proc/self/mountinfo";
 const FSTAB: &str = "/etc/fstab";
 const FILESYSTEMS: &str = "/proc/filesystems";
@@ -167,7 +171,7 @@ fn run(args: Vec<OsString>) -> Result<i32, Failure> {
         return Ok(0);
     }
     let plan = command_line_plan(&args)?;
-    execute(&plan, &args, args.verbose)?;
+    execute(&plan, &args, args.verbose, None)?;
     Ok(0)
 }
 
@@ -487,6 +491,10 @@ struct MountOptions {
     noauto: bool,
     nofail: bool,
     mkdir: Option<u32>,
+    /// `loop`, `loop=`, `offset=`, `sizelimit=`: back the source with a loop device.
+    loop_request: Option<LoopRequest>,
+    /// `encryption=`: cryptoloop, which util-linux rejects.
+    encryption: bool,
 }
 
 impl MountOptions {
@@ -552,11 +560,19 @@ impl MountOptions {
             "rprivate" => self.propagation.push(libc::MS_PRIVATE | libc::MS_REC),
             "unbindable" => self.propagation.push(libc::MS_UNBINDABLE),
             "runbindable" => self.propagation.push(libc::MS_UNBINDABLE | libc::MS_REC),
-            _ if matches!(name, "loop" | "offset" | "sizelimit" | "encryption") => {
-                return Err(failed(format!(
-                    "unsupported option '{option}': loop devices are not supported; attach one with losetup and mount the device"
-                )));
+            "loop" => {
+                self.loop_request.get_or_insert_default();
             }
+            _ if matches!(name, "loop" | "offset" | "sizelimit") => {
+                let value = option.split_once('=').map_or("", |(_, value)| value);
+                let request = self.loop_request.get_or_insert_default();
+                match name {
+                    "loop" => request.device = Some(PathBuf::from(value)),
+                    "offset" => request.offset = parse_size(value)?,
+                    _ => request.size_limit = parse_size(value)?,
+                }
+            }
+            _ if name == "encryption" => self.encryption = true,
             _ if name.eq_ignore_ascii_case("x-mount.mkdir") => {
                 self.mkdir = Some(mkdir_mode(
                     option.split_once('=').map(|(_, mode)| OsStr::new(mode)),
@@ -780,8 +796,15 @@ fn remount_target(spec: &OsStr, args: &Args) -> Result<PathBuf, Failure> {
 }
 
 /// Performs one mount; `verbose` prints util-linux's single-mount status line.
-fn execute(plan: &Plan, args: &Args, verbose: bool) -> Result<(), Failure> {
-    let options = MountOptions::parse(plan.options.iter().map(String::as_str))?;
+/// `mount_all_table` is the table `--all` read up front, which util-linux
+/// keeps using for its diagnostics during the whole run.
+fn execute(
+    plan: &Plan,
+    args: &Args,
+    verbose: bool,
+    mount_all_table: Option<&[MountEntry]>,
+) -> Result<(), Failure> {
+    let mut options = MountOptions::parse(plan.options.iter().map(String::as_str))?;
     if let Some(mode) = args.mkdir.or(options.mkdir)
         && !args.fake
     {
@@ -823,12 +846,45 @@ fn execute(plan: &Plan, args: &Args, verbose: bool) -> Result<(), Failure> {
         // util-linux names the target as given in tag lookup errors.
         Some(resolve_source(spec, Path::new(&plan.target), args)?)
     };
+    // A new filesystem on a regular file goes through a loop device; the
+    // handle keeps a fresh autoclear device attached until the mount holds it.
+    let mut attached = match &source {
+        Some(file)
+            if !remount
+                && options.operation & (libc::MS_BIND | libc::MS_MOVE) == 0
+                && !args.fake =>
+        {
+            attach_loop(file, plan, &options)?
+        }
+        _ => None,
+    };
+    if let Some(device) = &attached
+        && device.reused
+        && mount_table()?
+            .iter()
+            .any(|entry| entry.target == target && Path::new(&entry.source) == device.device)
+    {
+        // util-linux refuses to stack the same file on the same mountpoint.
+        return Err(usage(format!(
+            "{}: {} is already mounted.",
+            plan.target.display(),
+            source.as_deref().unwrap_or_default().display()
+        )));
+    }
+    if attached.as_ref().is_some_and(|attached| attached.read_only) {
+        options.flag(libc::MS_RDONLY, true);
+    }
+    let source = attached
+        .as_ref()
+        .map(|attached| attached.device.clone().into_os_string())
+        .or(source);
     let call = Call {
         target: &target,
         source: source.as_deref(),
         fs_type: None,
         kind: Kind::Mount,
         fake: args.fake,
+        mount_table: mount_all_table,
     };
 
     if remount {
@@ -893,7 +949,13 @@ fn execute(plan: &Plan, args: &Args, verbose: bool) -> Result<(), Failure> {
             }
             "bound on"
         } else {
-            if let Some(code) = new_mount(&call, plan, &options, args)? {
+            let mounted = new_mount(&call, plan, &options, args);
+            if !matches!(mounted, Ok(None | Some(0)))
+                && let Some(attached) = attached.take()
+            {
+                attached.release_unused();
+            }
+            if let Some(code) = mounted? {
                 return match code {
                     0 => Ok(()),
                     code => Err(Failure {
@@ -1071,6 +1133,103 @@ fn is_block_device(source: &OsStr) -> bool {
     fs::metadata(source).is_ok_and(|metadata| metadata.file_type().is_block_device())
 }
 
+/// Attaches a loop device when the options ask for one or, like util-linux,
+/// when a regular file is mounted as a block filesystem.
+fn attach_loop(
+    file: &OsStr,
+    plan: &Plan,
+    options: &MountOptions,
+) -> Result<Option<loop_device::Attached>, Failure> {
+    let target = plan.target.display();
+    if options.encryption {
+        let mut list = options.all.join(",");
+        if !options
+            .all
+            .iter()
+            .any(|option| matches!(option.as_str(), "ro" | "rw"))
+        {
+            list.insert_str(0, "rw,");
+        }
+        return Err(usage(format!(
+            "{target}: failed to parse mount options '{list}': Inappropriate ioctl for device."
+        )));
+    }
+    let request = match &options.loop_request {
+        Some(request) => request.clone(),
+        None if needs_auto_loop(file, plan) => LoopRequest::default(),
+        None => return Ok(None),
+    };
+    let read_only = options.set & libc::MS_RDONLY != 0;
+    // util-linux names the backing file by its canonical path when it exists.
+    let named = fs::canonicalize(file).map_or_else(|_| file.to_owned(), PathBuf::into_os_string);
+    match loop_device::attach(Path::new(file), &request, read_only) {
+        Ok(attached) => Ok(Some(attached)),
+        Err(LoopError::Overlap) => Err(failed(format!(
+            "{target}: overlapping loop device exists for {}.",
+            named.display()
+        ))),
+        Err(LoopError::Setup(_)) => Err(failed(format!(
+            "{target}: failed to setup loop device for {}.",
+            named.display()
+        ))),
+    }
+}
+
+/// A regular file needs a loop device unless every requested type is a
+/// `nodev` filesystem (tmpfs, proc, ...) that ignores its source.
+fn needs_auto_loop(file: &OsStr, plan: &Plan) -> bool {
+    if !fs::metadata(file).is_ok_and(|metadata| metadata.is_file()) {
+        return false;
+    }
+    let Some(types) = plan
+        .fs_type
+        .as_deref()
+        .filter(|types| !types.is_empty() && *types != "auto")
+    else {
+        return true;
+    };
+    if plan.type_pattern && types.starts_with("no") {
+        return true;
+    }
+    let filesystems = fs::read_to_string(FILESYSTEMS).unwrap_or_default();
+    let virtual_types: Vec<&str> = filesystems
+        .lines()
+        .filter_map(|line| line.strip_prefix("nodev"))
+        .map(str::trim)
+        .collect();
+    types
+        .split(',')
+        .any(|fs_type| !virtual_types.contains(&fs_type))
+}
+
+/// util-linux `strtosize`: an integer with an optional `K`/`M`/`G`/`T`/`P`/`E`
+/// suffix, binary as is or with `iB`, decimal with `B` (`4KiB`, `4K`, `4KB`).
+fn parse_size(value: &str) -> Result<u64, Failure> {
+    let invalid = || usage(format!("invalid size '{value}'"));
+    let digits = value
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(value.len());
+    let number: u64 = value[..digits].parse().map_err(|_| invalid())?;
+    let suffix = &value[digits..];
+    let (unit, base) = match suffix.len() {
+        0 => return Ok(number),
+        1 => (suffix, 1024u64),
+        2 if suffix.ends_with('B') => (&suffix[..1], 1000),
+        3 if suffix.ends_with("iB") => (&suffix[..1], 1024),
+        _ => return Err(invalid()),
+    };
+    let exponent = match unit.to_ascii_uppercase().as_str() {
+        "K" => 1,
+        "M" => 2,
+        "G" => 3,
+        "T" => 4,
+        "P" => 5,
+        "E" => 6,
+        _ => return Err(invalid()),
+    };
+    number.checked_mul(base.pow(exponent)).ok_or_else(invalid)
+}
+
 /// Resolves `LABEL=`, `UUID=`, `PARTLABEL=`, `PARTUUID=` through udev links and
 /// canonicalizes existing paths; other sources (`tmpfs`, `host:/export`) pass through.
 fn resolve_source(spec: &OsStr, target: &Path, args: &Args) -> Result<OsString, Failure> {
@@ -1099,8 +1258,12 @@ fn resolve_source(spec: &OsStr, target: &Path, args: &Args) -> Result<OsString, 
                 });
         }
     }
+    // Like util-linux, device and image paths are canonicalized; other
+    // sources (`tmpfs`, `proc`) stay as given even if a same-named file exists.
     if !args.no_canonicalize
-        && bytes.starts_with(b"/")
+        && (bytes.starts_with(b"/")
+            || fs::metadata(spec)
+                .is_ok_and(|metadata| metadata.is_file() || metadata.file_type().is_block_device()))
         && let Ok(path) = fs::canonicalize(spec)
     {
         return Ok(path.into_os_string());
@@ -1137,6 +1300,8 @@ struct Call<'a> {
     fs_type: Option<&'a str>,
     kind: Kind,
     fake: bool,
+    /// Snapshot for diagnostics during `--all`; `None` reads the live table.
+    mount_table: Option<&'a [MountEntry]>,
 }
 
 impl Call<'_> {
@@ -1336,7 +1501,24 @@ impl Call<'_> {
             }
             (Some(libc::EPERM | libc::EACCES), _) => "permission denied.".to_owned(),
             (Some(libc::EBUSY), Kind::Mount | Kind::Bind | Kind::Move) => {
-                format!("{source} already mounted or mount point busy.")
+                let mounted_on = self.source.and_then(|source| {
+                    let find = |table: &[MountEntry]| {
+                        table
+                            .iter()
+                            .find(|entry| entry.source == source)
+                            .map(|entry| entry.target.clone())
+                    };
+                    match self.mount_table {
+                        Some(table) => find(table),
+                        None => find(&mount_table().ok()?),
+                    }
+                });
+                match mounted_on {
+                    Some(mounted_on) => {
+                        format!("{source} already mounted on {}.", mounted_on.display())
+                    }
+                    None => format!("{source} already mounted or mount point busy."),
+                }
             }
             (Some(libc::EBUSY), _) => "mount point is busy.".to_owned(),
             (Some(libc::ENOENT), _) if !self.target.exists() => {
@@ -1426,6 +1608,7 @@ fn strerror(error: &io::Error) -> String {
 fn mount_all(args: &Args) -> Result<i32, Failure> {
     let entries = read_fstab(FSTAB)?;
     let mut table = mount_table()?;
+    let initial_table = mount_table()?;
     let (mut attempted, mut failures) = (0, 0);
     for entry in entries {
         let report = |status: &str| {
@@ -1467,7 +1650,7 @@ fn mount_all(args: &Args) -> Result<i32, Failure> {
             options: plan_options,
         };
         // `-a -v` reports through the per-entry status table only.
-        match execute(&plan, args, false) {
+        match execute(&plan, args, false, Some(&initial_table)) {
             Ok(()) => {
                 report("successfully mounted");
                 table = mount_table()?;
@@ -1799,8 +1982,25 @@ mod tests {
     }
 
     #[test]
-    fn loop_mounts_are_rejected() {
-        assert!(MountOptions::parse(["loop,ro"]).is_err());
+    fn loop_options_build_a_request_and_stay_out_of_fs_data() {
+        let options = options("ro,loop=/dev/loop7,offset=1MiB,sizelimit=4KB,size=1m");
+        assert_eq!(
+            options.loop_request,
+            Some(LoopRequest {
+                device: Some(PathBuf::from("/dev/loop7")),
+                offset: 1 << 20,
+                size_limit: 4000,
+            })
+        );
+        assert_eq!(options.data, ["size=1m"]);
+        assert_eq!(
+            MountOptions::parse(["offset=4096"]).unwrap().loop_request,
+            Some(LoopRequest {
+                offset: 4096,
+                ..LoopRequest::default()
+            })
+        );
+        assert!(MountOptions::parse(["offset=4X"]).is_err());
     }
 
     #[test]
