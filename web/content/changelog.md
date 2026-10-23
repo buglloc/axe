@@ -2,6 +2,19 @@
 title = "Changelog"
 +++
 
+## [v0.6.1](https://github.com/buglloc/axe/releases/tag/v0.6.1) — 2026-10-23
+
+### Highlights
+
+- AXE now uses Brush upstream revision `b562e0586b36`, up from `08db87a62345`. (`64c6c78226231`)
+- Updated AXE Store packages: `7zz` 26.04, `caddy` 2.11.7, `docker` 29.9.1, `helm` 4.3.1, `katana` 1.8.0, `kubectl` 1.37.1, `fzf` 0.74.5, `rclone` 1.75.2, `subfinder` 2.17.0, `tcpdump` 4.99.7, `tmux` 3.8, `yq` 4.54.1, `ss` 7.2.0, OpenSSH tools (`ssh`, `scp`, `sftp`, `ssh-add`, `ssh-agent`, `ssh-keygen`, `ssh-keyscan`) 10.6p1, and util-linux tools (`findmnt`, `lsns`, `nsenter`, `unshare`) 2.42.4. (`bbebe2c269e2`)
+- The Store `python` package moves to 3.14.9, built from python-build-standalone 20261021, and bundles `certifi` 2026.10.19. (`bbebe2c269e2`)
+
+### Fixes
+
+- In a pipeline, `exit`, failed parameter expansions such as `${VAR?msg}`, failed builtins, and errors inside `eval` no longer terminate the parent shell. The shell sets `$?` and keeps running the script. A new smoke test covers this behavior. (`64c6c78226231`)
+- Fixed Store builds after the package updates. `age` and `rclone` now build with `GO_EXTLINK_ENABLED=0`, and `katana` now applies its patches after configuration so the upstream vendor hash is preserved. (`276c49b380af`)
+
 ## [v0.6.0](https://github.com/buglloc/axe/releases/tag/v0.6.0) — 2026-10-15
 
 ### Highlights
