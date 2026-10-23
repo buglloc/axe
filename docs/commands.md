@@ -83,13 +83,23 @@ Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-sty
 | `runtime` — Runtimes | Store only; see [Store inventory](store.md#package-inventory) |
 | `axe` — AXE | `commands`, `doctor`, `clean-tools`, `refresh-tools`, `sshd` |
 
-The bundled `mount` follows util-linux `mount(8)`: listing, `-t`/`-o` mounts, single-operand `/etc/fstab` lookup, `-a` with `-t`/`-O` filters, remount, bind/rbind, move, propagation (`--make-*`), and `/sbin/mount.<type>` helpers. Remounts change only the requested flags and keep the others (`nosuid`, `nodev`, atime mode, ...). New filesystems attach through `fsopen`/`fsconfig`/`fsmount`/`move_mount`, so option errors show the kernel's message (`fsconfig() failed: ...`); kernels without that API use `mount(2)`. Image files mount through autoclear loop devices (`-o loop`, `loop=/dev/loopN`, `offset=`, `sizelimit=`, or a regular-file source); an existing attachment of the same file and range is reused, an overlapping one is refused, and a write-protected file is attached read-only. `-o encryption`, `-N`, `-T`, and `-F` are not supported. Linux-specific applets in this table remain absent from Darwin builds.
-
 For the bundled HTTP applet, see [HTTP requests](http.md).
 
 For passive host context and targeted evidence, see [Vzik](vzik.md).
 
 The bundled `zstd` uses the linked Zstandard codec and keeps input files by default. It supports compression/decompression (`-d`), stdout (`-c`), explicit output (`-o FILE`), integrity checks (`-t`), overwrite (`-f`), input removal (`--rm`), levels 1–19, `--ultra` levels 20–22, `--fast[=N]`, and worker counts (`-T N`; zero selects available CPUs). Compression includes a checksum; decompression accepts concatenated frames. Run `axe zstd -- --help` for its supported CLI options.
+
+## Mounting filesystems
+
+The bundled `mount` follows util-linux `mount(8)`. Without arguments it lists mounts; with `-t`/`-o` it mounts a filesystem. It also supports remount, `--bind`/`--rbind`, `--move`, `--make-*` propagation, single-operand lookup in `/etc/fstab`, `-a` with `-t` and `-O` filters, and `/sbin/mount.<type>` helpers.
+
+A remount changes only the flags you name. Other flags, such as `nosuid`, `nodev`, and the atime mode, keep their current values.
+
+When the filesystem rejects an option, `mount` prints the kernel's message, for example `fsconfig() failed: tmpfs: Unknown parameter 'size2'`. On kernels without the `fsopen` API it falls back to `mount(2)` and prints a generic error.
+
+Image files mount through loop devices. `mount` attaches one for `-o loop`, `loop=/dev/loopN`, `offset=`, or `sizelimit=`, and for any regular file mounted as a block filesystem. The device detaches after the last unmount. If the same file and range is already attached, `mount` reuses that device. It refuses an overlapping range, and it attaches a write-protected file read-only.
+
+`-o encryption`, `-N`, `-T`, and `-F` are not supported.
 
 ## Process and network compatibility
 
