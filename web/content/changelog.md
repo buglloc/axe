@@ -2,6 +2,29 @@
 title = "Changelog"
 +++
 
+## [v0.7.0](https://github.com/buglloc/axe/releases/tag/v0.7.0) — 2026-10-23
+
+### Highlights
+
+- The bundled `mount` now mounts filesystems as well as listing them. (`f9b342d1faed`)
+- `mount` supports loop devices. Image files mount through autoclear loop devices, as in util-linux. (`7d6b2b1b9188`)
+
+### Changes
+
+- New filesystems are mounted through `fsopen`/`fsconfig`/`fsmount`/`move_mount`. On older kernels without that API, `mount` uses `mount(2)`. Option errors now carry the kernel's message, for example `fsconfig() failed: tmpfs: Unknown parameter 'bogusopt'.` (`f9b342d1faed`)
+- A remount or `remount,bind` keeps every flag that was not specified. A bind mount given flags applies them with a follow-up `remount,bind`. (`f9b342d1faed`)
+- Loop-device behavior (`7d6b2b1b9188`):
+  - Supported options: `-o loop`, `loop=/dev/loopN`, `offset=` and `sizelimit=`. A regular-file source mounted as a block filesystem gets a loop device automatically.
+  - An existing attachment of the same file and range is reused. An overlapping attachment is refused.
+  - A write-protected backing file is attached read-only.
+  - If the mount fails, the loop device created for it is detached.
+- The `mount` synopsis in the command inventory now reads "List, mount, remount, bind, and move filesystems". (`f9b342d1faed`)
+- The mount documentation has been rewritten. (`5a9b1b8c352a`)
+
+### Fixes
+
+- A lone `--help`, `-h`, `--version` or `--list` is now passed to the applet when AXE is invoked through an applet link or the PATH bridge. Before this fix, `mount --help` through a link printed AXE's own help. AXE answers these flags itself only when `argv[0]` is `axe` or names no applet. (`657b0646892c`)
+
 ## [v0.6.1](https://github.com/buglloc/axe/releases/tag/v0.6.1) — 2026-10-23
 
 ### Highlights
