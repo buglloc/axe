@@ -6,7 +6,7 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 use bzip2::read::{BzEncoder, MultiBzDecoder};
-use flate2::read::MultiGzDecoder;
+use flate2::bufread::GzDecoder;
 use flate2::write::GzEncoder;
 use lzma_rust2::{XzOptions, XzReader, XzWriter, XzWriterMt};
 
@@ -30,7 +30,7 @@ impl Format {
 
     fn usage(self) -> &'static str {
         match self {
-            Self::Gzip => "[-cdfkt] [FILE ...]",
+            Self::Gzip => "[-cdfklt] [FILE ...]",
             Self::Bzip2 | Self::Xz => "[-cdfktl] [-T THREADS] [-1..-9] [FILE ...]",
             Self::Zstd => {
                 "[-cdfktqv] [-o FILE] [-T THREADS] [-1..-19] [--ultra -20..-22] [--fast[=N]] [--rm] [FILE ...]"
@@ -64,7 +64,7 @@ fn entry(args: Vec<OsString>, format: Format) -> i32 {
         .to_owned();
 
     match Options::parse(name.clone(), format, args.into_iter().skip(1)).and_then(Options::run) {
-        Ok(()) => 0,
+        Ok(code) => code,
         Err(error)
             if error.kind() == io::ErrorKind::BrokenPipe
                 || (error.kind() == io::ErrorKind::Interrupted && error.to_string().is_empty()) =>
@@ -301,93 +301,114 @@ impl Options {
         Ok(())
     }
 
-    fn run(self) -> io::Result<()> {
+    fn run(self) -> io::Result<i32> {
         if self.list {
-            return self.list_contents();
+            return self.list_contents().map(|warning| if warning { 2 } else { 0 });
         }
 
         if self.files.is_empty() {
-            return self.filter_stdin();
+            return self.filter_stdin().map(|warning| if warning { 2 } else { 0 });
         }
 
+        let mut warning = false;
         for file in &self.files {
             if file == OsStr::new("-") {
-                self.filter_stdin()?;
+                warning |= self.filter_stdin()?;
                 continue;
             }
 
             let input_path = Path::new(file);
             let input = File::open(input_path)?;
-            if self.test {
-                self.decode(input, io::sink())?;
-                continue;
-            }
-
-            if self.stdout {
-                self.transcode(input, io::stdout().lock())?;
-                continue;
-            }
-
-            let output_path = match &self.output {
-                Some(path) => {
-                    if same_file(&input, path)? {
-                        return Err(invalid("input and output must be different files"));
+            let trailing_garbage = if self.test {
+                self.decode(input, io::sink(), true)?.trailing_garbage
+            } else if self.stdout {
+                self.transcode(input, io::stdout().lock(), true)?
+            } else {
+                let output_path = match &self.output {
+                    Some(path) => {
+                        if same_file(&input, path)? {
+                            return Err(invalid("input and output must be different files"));
+                        }
+                        Cow::Borrowed(path.as_path())
                     }
-                    Cow::Borrowed(path.as_path())
+                    None => Cow::Owned(output_path(input_path, self.decompress, self.format)?),
+                };
+                let trailing_garbage = self.transcode_file(input, &output_path)?;
+
+                if self.verbose && !self.quiet {
+                    eprintln!("{}: done", input_path.display());
                 }
-                None => Cow::Owned(output_path(input_path, self.decompress, self.format)?),
+
+                if !self.keep {
+                    fs::remove_file(input_path)?;
+                }
+                trailing_garbage
             };
-            let output = create_output(&output_path, self.force)?;
-            self.transcode_file(input, output, &output_path)?;
-
-            if self.verbose && !self.quiet {
-                eprintln!("{}: done", input_path.display());
+            if trailing_garbage {
+                self.report_trailing_garbage(&input_path.display().to_string(), true);
             }
-
-            if !self.keep {
-                fs::remove_file(input_path)?;
-            }
+            warning |= trailing_garbage;
         }
 
-        Ok(())
+        Ok(if warning { 2 } else { 0 })
     }
 
-    fn filter_stdin(&self) -> io::Result<()> {
+    fn filter_stdin(&self) -> io::Result<bool> {
         let stdin = io::stdin().lock();
-        if self.test {
-            self.decode(stdin, io::sink()).map(drop)
+        let warning = if self.test {
+            self.decode(stdin, io::sink(), true)?.trailing_garbage
         } else if !self.stdout
             && let Some(path) = &self.output
         {
-            let output = create_output(path, self.force)?;
-            self.transcode_file(stdin, output, path)
+            self.transcode_file(stdin, path)?
         } else {
-            self.transcode(stdin, io::stdout().lock())
+            self.transcode(stdin, io::stdout().lock(), true)?
+        };
+        self.report_trailing_garbage("(stdin)", warning);
+        Ok(warning)
+    }
+
+    fn report_trailing_garbage(&self, name: &str, warning: bool) {
+        if warning && !self.quiet {
+            eprintln!(
+                "\n{}: {name}: decompression OK, trailing garbage ignored",
+                self.program
+            );
         }
     }
 
-    fn transcode_file(&self, input: impl Read, output: File, path: &Path) -> io::Result<()> {
-        if let Err(error) = self.transcode(input, output) {
-            return match fs::remove_file(path) {
-                Ok(()) => Err(error),
-                Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => Err(error),
-                Err(cleanup) => Err(io::Error::new(
-                    error.kind(),
-                    format!(
-                        "{error}; cannot remove partial output {}: {cleanup}",
-                        path.display()
-                    ),
-                )),
-            };
+    fn transcode_file(&self, input: impl Read, path: &Path) -> io::Result<bool> {
+        let mut output = DeferredOutput { path, force: self.force, file: None };
+        let result = self.transcode(input, &mut output, false);
+        if result.is_ok() || output.file.is_none() {
+            return result;
         }
-        Ok(())
+        drop(output.file.take());
+        match (result, fs::remove_file(path)) {
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(cleanup)) if cleanup.kind() == io::ErrorKind::NotFound => Err(error),
+            (Err(error), Err(cleanup)) => Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "{error}; cannot remove partial output {}: {cleanup}",
+                    path.display()
+                ),
+            )),
+            (Ok(warning), _) => Ok(warning),
+        }
     }
 
-    fn transcode(&self, input: impl Read, output: impl Write) -> io::Result<()> {
+    fn transcode(
+        &self,
+        input: impl Read,
+        output: impl Write,
+        to_stdout: bool,
+    ) -> io::Result<bool> {
         if self.decompress {
-            self.decode(input, output).map(drop)
+            self.decode(input, output, to_stdout)
+                .map(|decoded| decoded.trailing_garbage)
         } else {
-            self.encode(input, output)
+            self.encode(input, output).map(|()| false)
         }
     }
 
@@ -443,66 +464,79 @@ impl Options {
         }
     }
 
-    /// Decodes every concatenated stream and returns the decoded byte count.
-    fn decode(&self, input: impl Read, mut output: impl Write) -> io::Result<u64> {
+    fn decode(
+        &self,
+        input: impl Read,
+        mut output: impl Write,
+        to_stdout: bool,
+    ) -> io::Result<Decoded> {
         let decoded = match self.format {
-            Format::Gzip => {
-                let mut peeked = io::BufReader::new(input);
-                let header = peeked.fill_buf()?;
-                if self.force && !header.starts_with(&[0x1f, 0x8b]) {
-                    // GNU gzip -f copies input that is not in gzip format.
-                    io::copy(&mut peeked, &mut output)?
-                } else {
-                    io::copy(&mut MultiGzDecoder::new(peeked), &mut output)?
-                }
-            }
-            Format::Bzip2 => io::copy(&mut MultiBzDecoder::new(input), &mut output)?,
-            Format::Xz => io::copy(&mut XzReader::new(input, true), &mut output)?,
-            Format::Zstd => io::copy(&mut zstd::stream::read::Decoder::new(input)?, &mut output)?,
+            Format::Gzip => decode_gzip(
+                input,
+                &mut output,
+                self.force && to_stdout && !self.list,
+            )?,
+            Format::Bzip2 => Decoded::clean(io::copy(&mut MultiBzDecoder::new(input), &mut output)?),
+            Format::Xz => Decoded::clean(io::copy(&mut XzReader::new(input, true), &mut output)?),
+            Format::Zstd => Decoded::clean(io::copy(
+                &mut zstd::stream::read::Decoder::new(input)?,
+                &mut output,
+            )?),
         };
         output.flush()?;
         Ok(decoded)
     }
 
-    fn list_contents(&self) -> io::Result<()> {
-        println!(
-            "{}",
-            match self.format {
-                Format::Gzip => "         compressed        uncompressed  ratio uncompressed_name",
-                Format::Bzip2 | Format::Xz => {
-                    "Strms  Blocks   Compressed Uncompressed  Ratio  Check   Filename"
-                }
-                Format::Zstd => unreachable!("zstd does not accept --list"),
-            }
-        );
-
+    fn list_contents(&self) -> io::Result<bool> {
+        let mut header_printed = false;
         if self.files.is_empty() {
-            return self.print_listing("-", &read_stdin()?);
+            return self.print_listing("-", &read_stdin()?, &mut header_printed);
         }
 
+        let mut warning = false;
         for file in &self.files {
             if file == OsStr::new("-") {
-                self.print_listing("-", &read_stdin()?)?;
+                warning |= self.print_listing("-", &read_stdin()?, &mut header_printed)?;
                 continue;
             }
 
             let compressed = fs::read(file)?;
             let name = match self.format {
-                Format::Gzip => output_path(Path::new(file), true, self.format)?
+                Format::Gzip => output_path(Path::new(file), true, self.format)
+                    .unwrap_or_else(|_| PathBuf::from(file))
                     .display()
                     .to_string(),
                 Format::Bzip2 | Format::Xz => file.to_string_lossy().into_owned(),
                 Format::Zstd => unreachable!("zstd does not accept --list"),
             };
-            self.print_listing(&name, &compressed)?;
+            warning |= self.print_listing(&name, &compressed, &mut header_printed)?;
         }
 
-        Ok(())
+        Ok(warning)
     }
 
-    fn print_listing(&self, name: &str, compressed: &[u8]) -> io::Result<()> {
-        let uncompressed = self.decode(compressed, io::sink())?;
+    fn print_listing(
+        &self,
+        name: &str,
+        compressed: &[u8],
+        header_printed: &mut bool,
+    ) -> io::Result<bool> {
+        let decoded = self.decode(compressed, io::sink(), false)?;
+        let uncompressed = decoded.bytes;
         let ratio = |value: f64| if uncompressed == 0 { 0.0 } else { value };
+        if !*header_printed {
+            println!(
+                "{}",
+                match self.format {
+                    Format::Gzip => "         compressed        uncompressed  ratio uncompressed_name",
+                    Format::Bzip2 | Format::Xz => {
+                        "Strms  Blocks   Compressed Uncompressed  Ratio  Check   Filename"
+                    }
+                    Format::Zstd => unreachable!("zstd does not accept --list"),
+                }
+            );
+            *header_printed = true;
+        }
         match self.format {
             Format::Gzip => println!(
                 "{:>19} {:>19} {:>5.1}% {name}",
@@ -521,7 +555,84 @@ impl Options {
             Format::Zstd => unreachable!("zstd does not accept --list"),
         }
 
-        Ok(())
+        self.report_trailing_garbage(name, decoded.trailing_garbage);
+        Ok(decoded.trailing_garbage)
+    }
+}
+
+struct Decoded {
+    bytes: u64,
+    trailing_garbage: bool,
+}
+
+impl Decoded {
+    fn clean(bytes: u64) -> Self {
+        Self {
+            bytes,
+            trailing_garbage: false,
+        }
+    }
+}
+
+fn decode_gzip(
+    input: impl Read,
+    mut output: impl Write,
+    passthrough: bool,
+) -> io::Result<Decoded> {
+    let mut input = io::BufReader::new(input);
+    let mut decoded = Decoded::clean(0);
+    let mut members = 0_u64;
+    loop {
+        // A pipe read may stop between the two magic bytes.
+        let mut magic = [0; 2];
+        let mut length = 0;
+        while length < magic.len() {
+            match input.read(&mut magic[length..]) {
+                Ok(0) => break,
+                Ok(count) => length += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        if length == 0 && members != 0 {
+            return Ok(decoded);
+        }
+        let prefix = &magic[..length];
+        if prefix == [0x1f, 0x8b] {
+            let mut member = GzDecoder::new(prefix.chain(&mut input));
+            decoded.bytes += io::copy(&mut member, &mut output)?;
+            members += 1;
+        } else if passthrough {
+            output.write_all(prefix)?;
+            decoded.bytes += length as u64 + io::copy(&mut input, &mut output)?;
+            return Ok(decoded);
+        } else if members != 0 && prefix.first() == Some(&0) {
+            let mut only_zeroes = prefix.iter().all(|byte| *byte == 0);
+            while only_zeroes {
+                let bytes = input.fill_buf()?;
+                if bytes.is_empty() {
+                    return Ok(decoded);
+                }
+                only_zeroes = bytes.iter().all(|byte| *byte == 0);
+                let count = bytes.len();
+                input.consume(count);
+            }
+            decoded.trailing_garbage = true;
+            return Ok(decoded);
+        } else if length < magic.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected end of file",
+            ));
+        } else if members == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "not in gzip format",
+            ));
+        } else {
+            decoded.trailing_garbage = true;
+            return Ok(decoded);
+        }
     }
 }
 
@@ -556,6 +667,35 @@ fn same_file(input: &File, output: &Path) -> io::Result<bool> {
         Err(invalid(
             "explicit output files require Unix file identity checks",
         ))
+    }
+}
+
+// Invalid input must not truncate an existing destination before decoding starts.
+struct DeferredOutput<'a> {
+    path: &'a Path,
+    force: bool,
+    file: Option<File>,
+}
+
+impl DeferredOutput<'_> {
+    fn file(&mut self) -> io::Result<&mut File> {
+        if self.file.is_none() {
+            self.file = Some(create_output(self.path, self.force)?);
+        }
+        Ok(self.file.as_mut().expect("file was opened above"))
+    }
+}
+
+impl Write for DeferredOutput<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        self.file()?.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file()?.flush()
     }
 }
 
@@ -648,6 +788,54 @@ fn done() -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gzip_magic_survives_one_byte_reads_and_interruption_between_members() {
+        struct ShortReads<'a> {
+            input: &'a [u8],
+            interrupted: bool,
+        }
+
+        impl Read for ShortReads<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                self.interrupted = false;
+                let length = buffer.len().min(1);
+                self.input.read(&mut buffer[..length])
+            }
+        }
+
+        let mut compressed = Vec::new();
+        for payload in [b"first".as_slice(), b"second".as_slice()] {
+            let mut encoder = GzEncoder::new(&mut compressed, flate2::Compression::default());
+            encoder.write_all(payload).unwrap();
+            encoder.finish().unwrap();
+        }
+        let mut output = Vec::new();
+        let decoded = decode_gzip(
+            ShortReads { input: &compressed, interrupted: true },
+            &mut output,
+            true,
+        ).unwrap();
+        assert_eq!(output, b"firstsecond");
+        assert_eq!(decoded.bytes, output.len() as u64);
+        assert!(!decoded.trailing_garbage);
+    }
+
+    #[test]
+    fn gzip_emits_complete_members_before_a_corrupt_member_fails() {
+        let mut compressed = Vec::new();
+        let mut encoder = GzEncoder::new(&mut compressed, flate2::Compression::default());
+        encoder.write_all(b"complete member").unwrap();
+        encoder.finish().unwrap();
+        compressed.extend_from_slice(&[0x1f, 0x8b, 8]);
+        let mut output = Vec::new();
+        assert!(decode_gzip(compressed.as_slice(), &mut output, true).is_err());
+        assert_eq!(output, b"complete member");
+    }
 
     #[test]
     fn traditional_suffixes_are_mapped() {

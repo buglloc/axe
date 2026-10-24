@@ -23,7 +23,7 @@ pub fn traceroute6(args: Vec<OsString>) -> i32 {
 struct PingOptions {
     host: String,
     force_v6: bool,
-    count: Option<u16>,
+    count: Option<u64>,
     interval: Duration,
     timeout: Duration,
     size: usize,
@@ -142,26 +142,17 @@ async fn ping_async(options: PingOptions) -> Result<bool, String> {
     }
 
     let started = Instant::now();
-    let mut transmitted = 0u16;
-    let mut received = 0u16;
-    let mut total_rtt = Duration::ZERO;
-    let mut total_rtt_squared = 0f64;
-    let mut minimum = None::<Duration>;
-    let mut maximum = Duration::ZERO;
+    let mut transmitted = 0_u64;
+    let mut rtt_stats = RttStats::default();
     loop {
         if options.count.is_some_and(|count| transmitted >= count) {
             break;
         }
         let sequence = transmitted;
-        transmitted = transmitted.saturating_add(1);
-        match pinger.ping(PingSequence(sequence), &payload).await {
+        transmitted += 1;
+        match pinger.ping(PingSequence(sequence as u16), &payload).await {
             Ok((_packet, rtt)) => {
-                received = received.saturating_add(1);
-                let milliseconds = rtt.as_secs_f64() * 1000.0;
-                total_rtt += rtt;
-                total_rtt_squared += milliseconds * milliseconds;
-                minimum = Some(minimum.map_or(rtt, |value| value.min(rtt)));
-                maximum = maximum.max(rtt);
+                rtt_stats.record(rtt);
                 if !options.quiet {
                     let display_host = if options.numeric {
                         destination.to_string()
@@ -203,26 +194,54 @@ async fn ping_async(options: PingOptions) -> Result<bool, String> {
     let loss = if transmitted == 0 {
         0.0
     } else {
-        f64::from(transmitted - received) * 100.0 / f64::from(transmitted)
+        (transmitted - rtt_stats.received) as f64 * 100.0 / transmitted as f64
     };
     println!("\n--- {} ping statistics ---", options.host);
+    let received = rtt_stats.received;
     println!(
-        "{transmitted} packets transmitted, {received} received, {loss:.0}% packet loss, time {:.0}ms",
-        started.elapsed().as_secs_f64() * 1000.0
+        "{transmitted} packets transmitted, {received} received, {loss:.0}% packet loss, time {}ms",
+        started.elapsed().as_millis()
     );
     if received > 0 {
-        let count = f64::from(received);
-        let minimum_ms = minimum.unwrap_or_default().as_secs_f64() * 1000.0;
-        let maximum_ms = maximum.as_secs_f64() * 1000.0;
-        let average_ms = total_rtt.as_secs_f64() * 1000.0 / count;
-        let mean_deviation = (total_rtt_squared / count - average_ms * average_ms)
-            .abs()
-            .sqrt();
+        let minimum_ms = rtt_stats.minimum_us as f64 / 1000.0;
+        let maximum_ms = rtt_stats.maximum_us as f64 / 1000.0;
+        let (average_ms, mean_deviation) = rtt_stats.average_and_deviation();
         println!(
             "rtt min/avg/max/mdev = {minimum_ms:.3}/{average_ms:.3}/{maximum_ms:.3}/{mean_deviation:.3} ms",
         );
     }
     Ok(received > 0)
+}
+
+#[derive(Default)]
+struct RttStats {
+    received: u64,
+    total_us: u128,
+    total_squared_us: f64,
+    minimum_us: u128,
+    maximum_us: u128,
+}
+
+impl RttStats {
+    fn record(&mut self, rtt: Duration) {
+        let microseconds = rtt.as_micros();
+        self.minimum_us = if self.received == 0 {
+            microseconds
+        } else {
+            self.minimum_us.min(microseconds)
+        };
+        self.maximum_us = self.maximum_us.max(microseconds);
+        self.received += 1;
+        self.total_us += microseconds;
+        self.total_squared_us += (microseconds as f64).powi(2);
+    }
+
+    fn average_and_deviation(&self) -> (f64, f64) {
+        let count = self.received as f64;
+        let average_us = self.total_us as f64 / count;
+        let variance = self.total_squared_us / count - average_us * average_us;
+        (average_us / 1000.0, variance.max(0.0).sqrt() / 1000.0)
+    }
 }
 
 struct TraceOptions {
@@ -390,6 +409,39 @@ fn utf8_args(args: Vec<OsString>) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rtt_statistics_keep_long_run_counts_and_population_deviation() {
+        let mut stats = RttStats::default();
+        for _ in 0..65_536 {
+            stats.record(Duration::from_micros(1000));
+            stats.record(Duration::from_micros(3000));
+        }
+        assert_eq!(stats.received, 131_072);
+        assert_eq!(stats.average_and_deviation(), (2.0, 1.0));
+        assert_eq!((stats.minimum_us, stats.maximum_us), (1000, 3000));
+    }
+
+    #[test]
+    fn rtt_variance_clamps_negative_roundoff_to_zero() {
+        let stats = RttStats {
+            received: 1,
+            total_us: 1000,
+            total_squared_us: 1_000_000.0 - f64::EPSILON * 1_000_000.0,
+            minimum_us: 1000,
+            maximum_us: 1000,
+        };
+        assert_eq!(stats.average_and_deviation(), (1.0, 0.0));
+    }
+
+    #[test]
+    fn ping_accepts_counts_beyond_the_wire_sequence_space() {
+        let options = parse_ping(
+            vec!["ping".into(), "-c".into(), "65536".into(), "127.0.0.1".into()],
+            false,
+        ).unwrap().unwrap();
+        assert_eq!(options.count, Some(65_536));
+    }
 
     #[test]
     fn ping_requires_a_host() {
