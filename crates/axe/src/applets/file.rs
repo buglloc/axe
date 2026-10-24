@@ -12,7 +12,13 @@ use super::errno::strerror;
 const TEXT_SAMPLE_LIMIT: u64 = 64 * 1024;
 
 #[derive(Parser)]
-#[command(name = "file", version, about = "Determine file type", disable_help_flag = true, args_override_self = true)]
+#[command(
+    name = "file",
+    version,
+    about = "Determine file type",
+    disable_help_flag = true,
+    args_override_self = true
+)]
 struct Args {
     /// Omit the file name from output.
     #[arg(short = 'b', long)]
@@ -71,7 +77,12 @@ impl MimeMode {
         }
     }
 
-    fn render(self, description: impl FnOnce() -> String, media_type: &str, charset: &str) -> String {
+    fn render(
+        self,
+        description: impl FnOnce() -> String,
+        media_type: &str,
+        charset: &str,
+    ) -> String {
         match self {
             Self::Description => description(),
             Self::Type => media_type.into(),
@@ -129,7 +140,12 @@ fn run(args: &Args, output: &mut impl Write) -> io::Result<i32> {
     let width = names.iter().map(|name| name.1).max().unwrap_or(0);
     let mut failed = false;
     for (path, (name, name_width)) in args.files.iter().zip(names) {
-        let description = match describe(path, args.dereference && !args.no_dereference, mode, args.error) {
+        let description = match describe(
+            path,
+            args.dereference && !args.no_dereference,
+            mode,
+            args.error,
+        ) {
             Ok(kind) => kind.render(mode),
             Err(failure) => {
                 failed |= args.error;
@@ -147,11 +163,19 @@ fn run(args: &Args, output: &mut impl Write) -> io::Result<i32> {
 }
 
 enum Kind {
-    Empty { stdin: bool },
+    Empty {
+        stdin: bool,
+    },
     Directory,
-    Symlink { target: PathBuf, broken: bool },
+    Symlink {
+        target: PathBuf,
+        broken: bool,
+    },
     #[cfg(unix)]
-    Device { metadata: fs::Metadata, block: bool },
+    Device {
+        metadata: fs::Metadata,
+        block: bool,
+    },
     #[cfg(unix)]
     Socket,
     #[cfg(unix)]
@@ -168,7 +192,11 @@ impl Kind {
         match self {
             Self::Empty { stdin } => mode.render(
                 || "empty".into(),
-                if *stdin { "application/x-empty" } else { "inode/x-empty" },
+                if *stdin {
+                    "application/x-empty"
+                } else {
+                    "inode/x-empty"
+                },
                 "binary",
             ),
             Self::Directory => mode.render(|| "directory".into(), "inode/directory", "binary"),
@@ -181,26 +209,54 @@ impl Kind {
                     };
                 }
                 mode.render(
-                    || format!("{}symbolic link to {}", if *broken { "broken " } else { "" }, escaped_name(target.as_os_str()).0),
+                    || {
+                        format!(
+                            "{}symbolic link to {}",
+                            if *broken { "broken " } else { "" },
+                            escaped_name(target.as_os_str()).0
+                        )
+                    },
                     "inode/symlink",
                     "binary",
                 )
             }
             #[cfg(unix)]
             Self::Device { metadata, block } => mode.render(
-                || device_text(metadata, if *block { "block special" } else { "character special" }),
-                if *block { "inode/blockdevice" } else { "inode/chardevice" },
+                || {
+                    device_text(
+                        metadata,
+                        if *block {
+                            "block special"
+                        } else {
+                            "character special"
+                        },
+                    )
+                },
+                if *block {
+                    "inode/blockdevice"
+                } else {
+                    "inode/chardevice"
+                },
                 "binary",
             ),
             #[cfg(unix)]
             Self::Socket => mode.render(|| "socket".into(), "inode/socket", "binary"),
             #[cfg(unix)]
             Self::Fifo => mode.render(|| "fifo (named pipe)".into(), "inode/fifo", "binary"),
-            Self::Content { format, sample, complete } => {
+            Self::Content {
+                format,
+                sample,
+                complete,
+            } => {
                 let plain_text = *format == FileFormat::PlainText;
-                let json = plain_text && *complete
+                let json = plain_text
+                    && *complete
                     && serde_json::from_slice::<serde_json::Value>(sample).is_ok();
-                let media_type = if json { "application/json" } else { format.media_type() };
+                let media_type = if json {
+                    "application/json"
+                } else {
+                    format.media_type()
+                };
                 let charset = if !plain_text {
                     "binary"
                 } else if sample.is_ascii() {
@@ -239,36 +295,62 @@ enum Failure {
 impl Failure {
     fn render(&self, path: &Path, hard: bool) -> String {
         let (message, error) = match self {
-            Self::Stat(error) if hard => (format!("cannot stat `{}'", escaped_name(path.as_os_str()).0), error),
-            Self::Stat(error) | Self::Open(error) => (format!("cannot open `{}'", escaped_name(path.as_os_str()).0), error),
-            Self::BrokenLink { target, error } => (format!("broken symbolic link to {}", escaped_name(target.as_os_str()).0), error),
+            Self::Stat(error) if hard => (
+                format!("cannot stat `{}'", escaped_name(path.as_os_str()).0),
+                error,
+            ),
+            Self::Stat(error) | Self::Open(error) => (
+                format!("cannot open `{}'", escaped_name(path.as_os_str()).0),
+                error,
+            ),
+            Self::BrokenLink { target, error } => (
+                format!(
+                    "broken symbolic link to {}",
+                    escaped_name(target.as_os_str()).0
+                ),
+                error,
+            ),
         };
-        format!("{}{message} ({})", if hard { "ERROR: " } else { "" }, strerror(error))
+        format!(
+            "{}{message} ({})",
+            if hard { "ERROR: " } else { "" },
+            strerror(error)
+        )
     }
 }
 
 fn describe(path: &Path, dereference: bool, mode: MimeMode, hard: bool) -> Result<Kind, Failure> {
     if path == Path::new("-") {
         let mut sample = Vec::new();
-        io::stdin().read_to_end(&mut sample).map_err(Failure::Open)?;
+        io::stdin()
+            .read_to_end(&mut sample)
+            .map_err(Failure::Open)?;
         if sample.is_empty() {
             return Ok(Kind::Empty { stdin: true });
         }
         let format = FileFormat::from_reader(Cursor::new(&sample)).map_err(Failure::Open)?;
-        return Ok(Kind::Content { format, sample, complete: true });
+        return Ok(Kind::Content {
+            format,
+            sample,
+            complete: true,
+        });
     }
 
     let metadata = if dereference {
         fs::metadata(path)
     } else {
         fs::symlink_metadata(path)
-    }.map_err(Failure::Stat)?;
+    }
+    .map_err(Failure::Stat)?;
     let file_type = metadata.file_type();
     if file_type.is_symlink() {
         let target = fs::read_link(path).map_err(Failure::Open)?;
         let error = fs::metadata(path).err();
         let broken = error.is_some();
-        if hard && mode == MimeMode::Description && let Some(error) = error {
+        if hard
+            && mode == MimeMode::Description
+            && let Some(error) = error
+        {
             return Err(Failure::BrokenLink { target, error });
         }
         return Ok(Kind::Symlink { target, broken });
@@ -286,7 +368,10 @@ fn describe(path: &Path, dereference: bool, mode: MimeMode, hard: bool) -> Resul
             return Ok(Kind::Fifo);
         }
         if file_type.is_block_device() || file_type.is_char_device() {
-            return Ok(Kind::Device { metadata, block: file_type.is_block_device() });
+            return Ok(Kind::Device {
+                metadata,
+                block: file_type.is_block_device(),
+            });
         }
     }
     if metadata.len() == 0 {
@@ -307,7 +392,11 @@ fn describe(path: &Path, dereference: bool, mode: MimeMode, hard: bool) -> Resul
     } else {
         (Vec::new(), false)
     };
-    Ok(Kind::Content { format, sample, complete })
+    Ok(Kind::Content {
+        format,
+        sample,
+        complete,
+    })
 }
 
 #[cfg(unix)]
@@ -367,7 +456,8 @@ impl FilenameLocale {
     fn new() -> Self {
         // SAFETY: the empty NUL-terminated locale name selects the environment;
         // the null base requests an independently owned locale object.
-        let locale = unsafe { libc::newlocale(libc::LC_CTYPE_MASK, c"".as_ptr(), std::ptr::null_mut()) };
+        let locale =
+            unsafe { libc::newlocale(libc::LC_CTYPE_MASK, c"".as_ptr(), std::ptr::null_mut()) };
         let previous = if locale.is_null() {
             std::ptr::null_mut()
         } else {

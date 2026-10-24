@@ -76,12 +76,16 @@ fn header(kind: EntryType) -> Header {
 
 fn gnu_extension(builder: &mut Builder<Vec<u8>>, kind: EntryType, value: &str) {
     let mut header = header(kind);
-    header.set_path("././@LongLink").expect("set extension path");
+    header
+        .set_path("././@LongLink")
+        .expect("set extension path");
     let mut bytes = value.as_bytes().to_vec();
     bytes.push(0);
     header.set_size(bytes.len() as u64);
     header.set_cksum();
-    builder.append(&header, bytes.as_slice()).expect("append GNU extension");
+    builder
+        .append(&header, bytes.as_slice())
+        .expect("append GNU extension");
 }
 
 fn append(
@@ -92,9 +96,13 @@ fn append(
     mut header: Header,
     data: &[u8],
 ) {
-    header.set_path("placeholder").expect("set placeholder path");
+    header
+        .set_path("placeholder")
+        .expect("set placeholder path");
     if target.is_some() {
-        header.set_link_name("placeholder").expect("set placeholder link");
+        header
+            .set_link_name("placeholder")
+            .expect("set placeholder link");
     }
     match encoding {
         Encoding::Header => {
@@ -112,7 +120,9 @@ fn append(
             if let Some(target) = target {
                 extensions.push(("linkpath", target.as_bytes()));
             }
-            builder.append_pax_extensions(extensions).expect("append PAX paths");
+            builder
+                .append_pax_extensions(extensions)
+                .expect("append PAX paths");
         }
         Encoding::Gnu => {
             gnu_extension(builder, EntryType::GNULongName, path);
@@ -123,7 +133,9 @@ fn append(
     }
     header.set_size(data.len() as u64);
     header.set_cksum();
-    builder.append(&header, data).expect("append archive member");
+    builder
+        .append(&header, data)
+        .expect("append archive member");
 }
 
 fn member(
@@ -188,15 +200,30 @@ fn parent_components_are_rejected_before_and_after_stripping() {
             } else {
                 format!(
                     "top/../../{}/outside/escaped",
-                    scratch.path().file_name().expect("scratch basename").to_str().unwrap()
+                    scratch
+                        .path()
+                        .file_name()
+                        .expect("scratch basename")
+                        .to_str()
+                        .unwrap()
                 )
             };
             let mut builder = Builder::new(Vec::new());
-            member(&mut builder, encoding, &path, EntryType::Regular, None, b"escaped");
+            member(
+                &mut builder,
+                encoding,
+                &path,
+                EntryType::Regular,
+                None,
+                b"escaped",
+            );
             let archive = scratch.archive(builder);
             let output = extract(&root, &archive, strip);
             assert_status(&output, 2);
-            assert!(!outside.join("escaped").exists(), "{encoding:?}, strip={strip}");
+            assert!(
+                !outside.join("escaped").exists(),
+                "{encoding:?}, strip={strip}"
+            );
             assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"outside data");
         }
     }
@@ -258,7 +285,11 @@ fn archive_symlinks_cannot_redirect_files_or_deferred_directories_outside() {
                                 &mut builder,
                                 encoding,
                                 &format!("{prefix}link/nested/escaped"),
-                                if directory { EntryType::Directory } else { EntryType::Regular },
+                                if directory {
+                                    EntryType::Directory
+                                } else {
+                                    EntryType::Regular
+                                },
                                 None,
                                 if directory { b"" } else { b"escaped" },
                             );
@@ -292,13 +323,20 @@ fn preexisting_symlink_parents_are_checked_before_creating_children() {
                     &mut builder,
                     encoding,
                     &format!("{prefix}link/new-parent/escaped"),
-                    if directory { EntryType::Directory } else { EntryType::Regular },
+                    if directory {
+                        EntryType::Directory
+                    } else {
+                        EntryType::Regular
+                    },
                     None,
                     if directory { b"" } else { b"escaped" },
                 );
                 let archive = scratch.archive(builder);
                 assert_status(&extract(&root, &archive, strip), 2);
-                assert!(!outside.join("new-parent").exists(), "{encoding:?}, strip={strip}");
+                assert!(
+                    !outside.join("new-parent").exists(),
+                    "{encoding:?}, strip={strip}"
+                );
                 assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"outside data");
             }
         }
@@ -334,7 +372,10 @@ fn hardlink_targets_cannot_reach_host_files_through_absolute_parent_or_symlink_p
                 );
                 let archive = scratch.archive(builder);
                 assert_status(&extract(&root, &archive, strip), 2);
-                assert!(!root.join("linked").exists(), "{encoding:?}, strip={strip}, {target_kind}");
+                assert!(
+                    !root.join("linked").exists(),
+                    "{encoding:?}, strip={strip}, {target_kind}"
+                );
                 assert_eq!(fs::metadata(&sentinel).unwrap().nlink(), initial_links);
                 assert_eq!(fs::read(sentinel).unwrap(), b"outside data");
             }
@@ -360,7 +401,11 @@ fn overwriting_a_final_symlink_replaces_it_without_modifying_its_target() {
         );
         let archive = scratch.archive(builder);
         assert_status(&extract(&root, &archive, strip), 0);
-        assert!(!fs::symlink_metadata(root.join("file")).unwrap().is_symlink());
+        assert!(
+            !fs::symlink_metadata(root.join("file"))
+                .unwrap()
+                .is_symlink()
+        );
         assert_eq!(fs::read(root.join("file")).unwrap(), b"inside data");
         assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"outside data");
     }
@@ -376,7 +421,14 @@ fn internal_symlink_parents_and_hardlinks_survive_component_stripping() {
             let mut builder = Builder::new(Vec::new());
             let mut directory = header(EntryType::Directory);
             directory.set_mode(0o555);
-            append(&mut builder, encoding, &format!("{prefix}real/"), None, directory, b"");
+            append(
+                &mut builder,
+                encoding,
+                &format!("{prefix}real/"),
+                None,
+                directory,
+                b"",
+            );
             member(
                 &mut builder,
                 encoding,
@@ -406,7 +458,11 @@ fn internal_symlink_parents_and_hardlinks_survive_component_stripping() {
                 encoding,
                 &format!("{prefix}hard"),
                 EntryType::Link,
-                Some(if strip == 0 { "real/data" } else { "top/real/data" }),
+                Some(if strip == 0 {
+                    "real/data"
+                } else {
+                    "top/real/data"
+                }),
                 b"",
             );
             let archive = scratch.archive(builder);
@@ -416,7 +472,10 @@ fn internal_symlink_parents_and_hardlinks_survive_component_stripping() {
             let _ = fs::set_permissions(root.join("real"), fs::Permissions::from_mode(0o755));
             assert_status(&output, 0);
             assert_eq!(mode.unwrap(), 0o555);
-            assert_eq!(fs::read_link(root.join("alias")).unwrap(), Path::new("real"));
+            assert_eq!(
+                fs::read_link(root.join("alias")).unwrap(),
+                Path::new("real")
+            );
             assert_eq!(fs::read(root.join("alias/data")).unwrap(), b"payload");
             assert!(root.join("real/subdir").is_dir());
             assert_eq!(
@@ -431,12 +490,20 @@ fn internal_symlink_parents_and_hardlinks_survive_component_stripping() {
 fn listing_ignores_strip_and_reports_every_unmatched_normalized_operand() {
     let scratch = Scratch::new();
     let mut builder = Builder::new(Vec::new());
-    for (path, data) in [("tree/", &b""[..]), ("tree/file", &b"payload"[..]), ("other", &b""[..])] {
+    for (path, data) in [
+        ("tree/", &b""[..]),
+        ("tree/file", &b"payload"[..]),
+        ("other", &b""[..]),
+    ] {
         member(
             &mut builder,
             Encoding::Header,
             path,
-            if path.ends_with('/') { EntryType::Directory } else { EntryType::Regular },
+            if path.ends_with('/') {
+                EntryType::Directory
+            } else {
+                EntryType::Regular
+            },
             None,
             data,
         );
@@ -451,7 +518,10 @@ fn listing_ignores_strip_and_reports_every_unmatched_normalized_operand() {
     assert_status(&output, 0);
     assert_eq!(output.stdout, b"tree/\ntree/file\n");
 
-    let output = run_tar(scratch.path(), &["tf", archive, "/tree", "/absent", "absent-too"]);
+    let output = run_tar(
+        scratch.path(),
+        &["tf", archive, "/tree", "/absent", "absent-too"],
+    );
     assert_status(&output, 2);
     assert_eq!(output.stdout, b"tree/\ntree/file\n");
     assert_eq!(
@@ -464,9 +534,16 @@ fn listing_ignores_strip_and_reports_every_unmatched_normalized_operand() {
     assert_eq!(output.stdout, b"payload");
     let output = run_tar(scratch.path(), &["xOf", archive, "absent"]);
     assert_status(&output, 2);
-    assert!(output.stderr.starts_with(b"tar: absent: Not found in archive\n"));
+    assert!(
+        output
+            .stderr
+            .starts_with(b"tar: absent: Not found in archive\n")
+    );
 
-    let output = run_tar(scratch.path(), &["tf", archive, "--exclude=tree/file", "/tree/file"]);
+    let output = run_tar(
+        scratch.path(),
+        &["tf", archive, "--exclude=tree/file", "/tree/file"],
+    );
     assert_status(&output, 0);
     assert!(output.stdout.is_empty());
 }
@@ -480,7 +557,14 @@ fn fully_stripped_members_are_skipped_without_changing_the_root() {
     let mut directory = header(EntryType::Directory);
     directory.set_mode(0o000);
     append(&mut builder, Encoding::Pax, "./top/", None, directory, b"");
-    member(&mut builder, Encoding::Gnu, "top/file", EntryType::Regular, None, b"payload");
+    member(
+        &mut builder,
+        Encoding::Gnu,
+        "top/file",
+        EntryType::Regular,
+        None,
+        b"payload",
+    );
     let archive = scratch.archive(builder);
     assert_status(&extract(&root, &archive, 1), 0);
     assert_eq!(fs::metadata(&root).unwrap().mode() & 0o777, 0o750);
@@ -522,16 +606,35 @@ fn option_errors_distinguish_unknown_options_and_missing_or_unexpected_arguments
         (vec!["cfz"], "Old option 'f' requires an argument."),
         (vec!["cC"], "Old option 'C' requires an argument."),
         (vec!["-cC"], "option requires an argument -- 'C'"),
-        (vec!["--create", "--file"], "option '--file' requires an argument"),
-        (vec!["--list", "--strip-components"], "option '--strip-components' requires an argument"),
-        (vec!["--list=foo"], "option '--list' doesn't allow an argument"),
-        (vec!["--help=foo"], "option '--help' doesn't allow an argument"),
-        (vec!["--list", "--strip-components=-1"], "invalid strip-components count '-1'"),
+        (
+            vec!["--create", "--file"],
+            "option '--file' requires an argument",
+        ),
+        (
+            vec!["--list", "--strip-components"],
+            "option '--strip-components' requires an argument",
+        ),
+        (
+            vec!["--list=foo"],
+            "option '--list' doesn't allow an argument",
+        ),
+        (
+            vec!["--help=foo"],
+            "option '--help' doesn't allow an argument",
+        ),
+        (
+            vec!["--list", "--strip-components=-1"],
+            "invalid strip-components count '-1'",
+        ),
     ] {
         let output = run_tar(scratch.path(), &args);
         assert_status(&output, 2);
         assert!(output.stdout.is_empty(), "{args:?}");
-        assert_eq!(output.stderr, format!("tar: {message}\n").as_bytes(), "{args:?}");
+        assert_eq!(
+            output.stderr,
+            format!("tar: {message}\n").as_bytes(),
+            "{args:?}"
+        );
     }
 }
 
@@ -548,11 +651,32 @@ fn verbose_listing_grows_owner_size_width_and_formats_links_devices_and_escapes(
     second.set_username("abcdefghijklmnopqrst").unwrap();
     second.set_groupname("staff").unwrap();
     second.set_mode(0o2640);
-    append(&mut builder, Encoding::Header, "second", None, second, b"xx");
-    member(&mut builder, Encoding::Header, "hard", EntryType::Link, Some("first"), b"");
+    append(
+        &mut builder,
+        Encoding::Header,
+        "second",
+        None,
+        second,
+        b"xx",
+    );
+    member(
+        &mut builder,
+        Encoding::Header,
+        "hard",
+        EntryType::Link,
+        Some("first"),
+        b"",
+    );
     let mut link = header(EntryType::Symlink);
     link.set_mode(0o777);
-    append(&mut builder, Encoding::Gnu, "space name\n\\\t\x01", Some("first\n"), link, b"");
+    append(
+        &mut builder,
+        Encoding::Gnu,
+        "space name\n\\\t\x01",
+        Some("first\n"),
+        link,
+        b"",
+    );
     for (kind, name, major, minor, mode) in [
         (EntryType::Char, "char", 4, 64, 0o600),
         (EntryType::Block, "block", 8, 1, 0o660),
@@ -576,7 +700,10 @@ fn verbose_listing_grows_owner_size_width_and_formats_links_devices_and_escapes(
         "0", "0", "4,64", "8,1"
     );
     assert_eq!(output.stdout, expected.as_bytes());
-    let output = run_tar(scratch.path(), &["tf", archive.to_str().unwrap(), "space name\n\\\t\x01"]);
+    let output = run_tar(
+        scratch.path(),
+        &["tf", archive.to_str().unwrap(), "space name\n\\\t\x01"],
+    );
     assert_status(&output, 0);
     assert_eq!(output.stdout, b"space name\\n\\\\\\t\\001\n");
 }
@@ -596,13 +723,23 @@ fn verbose_permissions_show_executing_and_nonexecuting_setid_and_sticky_bits() {
     for (index, (mode, _)) in cases.iter().enumerate() {
         let mut entry = header(EntryType::Regular);
         entry.set_mode(*mode);
-        append(&mut builder, Encoding::Header, &format!("entry-{index}"), None, entry, b"");
+        append(
+            &mut builder,
+            Encoding::Header,
+            &format!("entry-{index}"),
+            None,
+            entry,
+            b"",
+        );
     }
     let archive = scratch.archive(builder);
     let output = run_tar(scratch.path(), &["tvf", archive.to_str().unwrap()]);
     assert_status(&output, 0);
     let output = String::from_utf8(output.stdout).unwrap();
-    let modes: Vec<&str> = output.lines().map(|line| line.split_once(' ').unwrap().0).collect();
+    let modes: Vec<&str> = output
+        .lines()
+        .map(|line| line.split_once(' ').unwrap().0)
+        .collect();
     assert_eq!(modes, cases.map(|(_, mode)| mode));
 }
 
@@ -625,7 +762,14 @@ fn listing_escapes_non_utf8_name_bytes_without_lossy_replacement() {
 fn listing_preserves_completed_records_when_a_later_header_is_truncated() {
     let scratch = Scratch::new();
     let mut builder = Builder::new(Vec::new());
-    member(&mut builder, Encoding::Header, "first", EntryType::Regular, None, b"");
+    member(
+        &mut builder,
+        Encoding::Header,
+        "first",
+        EntryType::Regular,
+        None,
+        b"",
+    );
     let mut bytes = builder.into_inner().unwrap();
     bytes.truncate(512);
     bytes.extend_from_slice(&[b'x'; 256]);
@@ -640,7 +784,14 @@ fn listing_preserves_completed_records_when_a_later_header_is_truncated() {
 fn listing_emits_the_first_record_before_waiting_for_the_rest_of_the_archive() {
     let scratch = Scratch::new();
     let mut builder = Builder::new(Vec::new());
-    member(&mut builder, Encoding::Header, "first", EntryType::Regular, None, b"");
+    member(
+        &mut builder,
+        Encoding::Header,
+        "first",
+        EntryType::Regular,
+        None,
+        b"",
+    );
     let bytes = builder.into_inner().unwrap();
     let mut child = command(scratch.path())
         .args(["--applet", "tar", "--", "-tf", "-"])
@@ -654,10 +805,14 @@ fn listing_emits_the_first_record_before_waiting_for_the_rest_of_the_archive() {
     let (sender, receiver) = mpsc::channel();
     let reader = thread::spawn(move || {
         let mut line = Vec::new();
-        let result = BufReader::new(stdout).read_until(b'\n', &mut line).map(|_| line);
+        let result = BufReader::new(stdout)
+            .read_until(b'\n', &mut line)
+            .map(|_| line);
         let _ = sender.send(result);
     });
-    input.write_all(&bytes[..512]).expect("write first archive header");
+    input
+        .write_all(&bytes[..512])
+        .expect("write first archive header");
     let first = receiver.recv_timeout(Duration::from_secs(10));
     if first.is_err() {
         let _ = child.kill();
@@ -667,7 +822,12 @@ fn listing_emits_the_first_record_before_waiting_for_the_rest_of_the_archive() {
     drop(input);
     let output = child.wait_with_output().expect("wait for streaming tar");
     reader.join().expect("join stdout reader");
-    assert_eq!(first.expect("first listing record must not wait for EOF").unwrap(), b"first\n");
+    assert_eq!(
+        first
+            .expect("first listing record must not wait for EOF")
+            .unwrap(),
+        b"first\n"
+    );
     assert_status(&output, 0);
 }
 

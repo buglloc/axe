@@ -50,7 +50,12 @@ fn run(directory: &Path, applet: &str, args: &[&str], input: &[u8]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn applet");
-    child.stdin.take().expect("piped stdin").write_all(input).expect("write input");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(input)
+        .expect("write input");
     child.wait_with_output().expect("wait for applet")
 }
 
@@ -81,10 +86,7 @@ fn gzip_plain_passthrough_requires_force_and_stdout_but_never_list() {
         assert_eq!(fs::read(scratch.path().join("plain.gz")).unwrap(), plain);
         assert!(!scratch.path().join("plain").exists());
     }
-    for args in [
-        &["-dcf", "plain.gz"][..],
-        &["-cdf", "plain.gz"][..],
-    ] {
+    for args in [&["-dcf", "plain.gz"][..], &["-cdf", "plain.gz"][..]] {
         let output = run(scratch.path(), "gzip", args, b"");
         success(&output);
         assert_eq!(output.stdout, plain);
@@ -94,7 +96,12 @@ fn gzip_plain_passthrough_requires_force_and_stdout_but_never_list() {
         success(&output);
         assert!(output.stdout.is_empty());
     }
-    for input in [b"".as_slice(), b"x".as_slice(), b"\x1f".as_slice(), plain.as_slice()] {
+    for input in [
+        b"".as_slice(),
+        b"x".as_slice(),
+        b"\x1f".as_slice(),
+        plain.as_slice(),
+    ] {
         let output = run(scratch.path(), "gzip", &["-df"], input);
         success(&output);
         assert_eq!(output.stdout, input);
@@ -111,11 +118,21 @@ fn gzip_concatenated_members_and_trailing_bytes_keep_gnu_statuses() {
     for args in [&["-dc"][..], &["-dcq"][..], &["-t"][..]] {
         let output = run(scratch.path(), "gzip", args, &input);
         assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
-        assert_eq!(output.stdout, if args == ["-t"] { b"".as_slice() } else { b"world\nsecond\n".as_slice() });
+        assert_eq!(
+            output.stdout,
+            if args == ["-t"] {
+                b"".as_slice()
+            } else {
+                b"world\nsecond\n".as_slice()
+            }
+        );
         if args == ["-dcq"] {
             assert!(output.stderr.is_empty());
         } else {
-            assert!(String::from_utf8_lossy(&output.stderr).contains("decompression OK, trailing garbage ignored"));
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("decompression OK, trailing garbage ignored")
+            );
         }
     }
     let output = run(scratch.path(), "gzip", &["-dcf"], &input);
@@ -128,7 +145,10 @@ fn gzip_concatenated_members_and_trailing_bytes_keep_gnu_statuses() {
     fs::write(scratch.path().join("members.gz"), &input).unwrap();
     let output = run(scratch.path(), "gzip", &["-df", "members.gz"], b"");
     assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert_eq!(fs::read(scratch.path().join("members")).unwrap(), b"world\nsecond\n");
+    assert_eq!(
+        fs::read(scratch.path().join("members")).unwrap(),
+        b"world\nsecond\n"
+    );
     assert!(!scratch.path().join("members.gz").exists());
 
     input.truncate(valid_length);
@@ -169,10 +189,18 @@ fn file_distinguishes_empty_regular_files_and_empty_standard_input_in_all_modes(
     fs::write(scratch.path().join("empty"), b"").unwrap();
     for (flags, regular, stdin) in [
         (&[][..], "empty", "empty"),
-        (&["-i"][..], "inode/x-empty; charset=binary", "application/x-empty; charset=binary"),
+        (
+            &["-i"][..],
+            "inode/x-empty; charset=binary",
+            "application/x-empty; charset=binary",
+        ),
         (&["--mime-type"][..], "inode/x-empty", "application/x-empty"),
         (&["--mime-encoding"][..], "binary", "binary"),
-        (&["--mime-type", "--mime-encoding"][..], "inode/x-empty; charset=binary", "application/x-empty; charset=binary"),
+        (
+            &["--mime-type", "--mime-encoding"][..],
+            "inode/x-empty; charset=binary",
+            "application/x-empty; charset=binary",
+        ),
     ] {
         let mut args = flags.to_vec();
         args.push("empty");
@@ -184,7 +212,12 @@ fn file_distinguishes_empty_regular_files_and_empty_standard_input_in_all_modes(
         success(&output);
         assert_eq!(output.stdout, format!("/dev/stdin: {stdin}\n").as_bytes());
     }
-    let output = run(scratch.path(), "file", &["--mime-encoding", "-"], b"ascii\n");
+    let output = run(
+        scratch.path(),
+        "file",
+        &["--mime-encoding", "-"],
+        b"ascii\n",
+    );
     success(&output);
     assert_eq!(output.stdout, b"/dev/stdin: us-ascii\n");
 }
@@ -231,10 +264,16 @@ fn file_error_option_reports_failures_and_continues_with_remaining_files() {
     let output = run(scratch.path(), "file", &["missing"], b"");
     success(&output);
     let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.contains("cannot open `missing' (No such file or directory)"), "{text}");
+    assert!(
+        text.contains("cannot open `missing' (No such file or directory)"),
+        "{text}"
+    );
     let output = run(scratch.path(), "file", &["-E", "missing", "empty"], b"");
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(output.stdout, b"missing: ERROR: cannot stat `missing' (No such file or directory)\nempty:   empty\n");
+    assert_eq!(
+        output.stdout,
+        b"missing: ERROR: cannot stat `missing' (No such file or directory)\nempty:   empty\n"
+    );
     assert!(output.stderr.is_empty());
 }
 
@@ -250,16 +289,30 @@ fn file_escapes_names_and_pads_the_escaped_display_width() {
     let invoke = |no_pad: bool| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_axe"));
         command.args(["--applet", "file", "--"]);
-        if no_pad { command.arg("-N"); }
-        command.arg(&unusual).arg("short").current_dir(scratch.path())
-            .env("LC_ALL", "C").env("PATH", "/nonexistent").output().unwrap()
+        if no_pad {
+            command.arg("-N");
+        }
+        command
+            .arg(&unusual)
+            .arg("short")
+            .current_dir(scratch.path())
+            .env("LC_ALL", "C")
+            .env("PATH", "/nonexistent")
+            .output()
+            .unwrap()
     };
     let output = invoke(false);
     success(&output);
-    assert_eq!(output.stdout, b"\\303\\251\\012\\377: empty\nshort:            empty\n");
+    assert_eq!(
+        output.stdout,
+        b"\\303\\251\\012\\377: empty\nshort:            empty\n"
+    );
     let output = invoke(true);
     success(&output);
-    assert_eq!(output.stdout, b"\\303\\251\\012\\377: empty\nshort: empty\n");
+    assert_eq!(
+        output.stdout,
+        b"\\303\\251\\012\\377: empty\nshort: empty\n"
+    );
 }
 
 #[cfg(unix)]
@@ -270,7 +323,15 @@ fn file_device_numbers_follow_the_platform_libc_encoding() {
     let device = fs::metadata("/dev/null").unwrap().rdev() as libc::dev_t;
     let output = run(scratch.path(), "file", &["-b", "/dev/null"], b"");
     success(&output);
-    assert_eq!(output.stdout, format!("character special ({}/{})\n", libc::major(device), libc::minor(device)).as_bytes());
+    assert_eq!(
+        output.stdout,
+        format!(
+            "character special ({}/{})\n",
+            libc::major(device),
+            libc::minor(device)
+        )
+        .as_bytes()
+    );
     let output = run(scratch.path(), "file", &["-bi", "/dev/null"], b"");
     success(&output);
     assert_eq!(output.stdout, b"inode/chardevice; charset=binary\n");
@@ -297,12 +358,19 @@ fn tree_human_sizes_accept_clusters_repetition_patterns_and_literal_paths() {
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.lines().any(|line| line == "[4.9K]  big"), "{text}");
         assert!(!text.contains(" KB"));
-        if flags.contains(&"1") { assert!(!text.contains("leaf"), "{text}"); }
+        if flags.contains(&"1") {
+            assert!(!text.contains("leaf"), "{text}");
+        }
     }
     let output = run(scratch.path(), "tree", &["-ha", "root"], b"");
     success(&output);
     assert!(String::from_utf8_lossy(&output.stdout).contains(".hidden"));
-    let output = run(scratch.path(), "tree", &["-iP", "-h", "--noreport", "root"], b"");
+    let output = run(
+        scratch.path(),
+        "tree",
+        &["-iP", "-h", "--noreport", "root"],
+        b"",
+    );
     success(&output);
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.lines().any(|line| line == "-h"), "{text}");
@@ -329,11 +397,23 @@ fn tree_size_metadata_precedes_names_and_includes_directory_entries() {
     let output = run(scratch.path(), "tree", &["-ih", "--noreport"], b"");
     success(&output);
     let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.lines().any(|line| line.starts_with('[') && line.ends_with("]  .")), "{text}");
-    assert!(text.lines().any(|line| line.starts_with('[') && line.ends_with("]  nested")), "{text}");
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with('[') && line.ends_with("]  .")),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with('[') && line.ends_with("]  nested")),
+        "{text}"
+    );
     let output = run(scratch.path(), "tree", &["-is", "--noreport"], b"");
     success(&output);
-    assert!(String::from_utf8_lossy(&output.stdout).lines().any(|line| line == "[       5000]  big"));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line == "[       5000]  big")
+    );
 }
 
 #[test]
@@ -368,7 +448,8 @@ fn file_special_kinds_share_mime_modes_and_broken_link_errors_remain_mode_specif
     nix::unistd::mkfifo(
         &scratch.path().join("fifo"),
         nix::sys::stat::Mode::from_bits_truncate(0o600),
-    ).unwrap();
+    )
+    .unwrap();
     for (name, media_type) in [
         ("directory", "inode/directory"),
         ("socket", "inode/socket"),
@@ -389,7 +470,10 @@ fn file_special_kinds_share_mime_modes_and_broken_link_errors_remain_mode_specif
     symlink("missing", scratch.path().join("broken")).unwrap();
     let output = run(scratch.path(), "file", &["-bE", "broken"], b"");
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(output.stdout, b"ERROR: broken symbolic link to missing (No such file or directory)\n");
+    assert_eq!(
+        output.stdout,
+        b"ERROR: broken symbolic link to missing (No such file or directory)\n"
+    );
     let output = run(scratch.path(), "file", &["-bEi", "broken"], b"");
     success(&output);
     assert_eq!(output.stdout, b"inode/symlink\n");
@@ -406,15 +490,26 @@ fn tree_size_output_retains_filtering_pruning_and_output_file_options() {
     fs::write(root.join("empty/miss.bin"), b"no match").unwrap();
     fs::write(root.join("skip/match.txt"), b"excluded").unwrap();
     let args = [
-        "-ihP", "*.txt", "-I", "skip", "--prune", "--dirsfirst", "--noreport",
-        "-o", "listing", "root",
+        "-ihP",
+        "*.txt",
+        "-I",
+        "skip",
+        "--prune",
+        "--dirsfirst",
+        "--noreport",
+        "-o",
+        "listing",
+        "root",
     ];
     let output = run(scratch.path(), "tree", &args, b"");
     success(&output);
     assert!(output.stdout.is_empty());
     let text = fs::read_to_string(scratch.path().join("listing")).unwrap();
     assert!(text.lines().any(|line| line.ends_with("]  keep")), "{text}");
-    assert!(text.lines().any(|line| line == "[4.9K]  match.txt"), "{text}");
+    assert!(
+        text.lines().any(|line| line == "[4.9K]  match.txt"),
+        "{text}"
+    );
     assert!(!text.contains("empty"), "{text}");
     assert!(!text.contains("skip"), "{text}");
     assert!(!text.contains("miss.bin"), "{text}");
@@ -427,6 +522,12 @@ fn gzip_rejects_plain_force_input_before_touching_an_existing_destination() {
     fs::write(scratch.path().join("plain"), b"keep destination\n").unwrap();
     let output = run(scratch.path(), "gzip", &["-df", "plain.gz"], b"");
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(fs::read(scratch.path().join("plain.gz")).unwrap(), b"not gzip\n");
-    assert_eq!(fs::read(scratch.path().join("plain")).unwrap(), b"keep destination\n");
+    assert_eq!(
+        fs::read(scratch.path().join("plain.gz")).unwrap(),
+        b"not gzip\n"
+    );
+    assert_eq!(
+        fs::read(scratch.path().join("plain")).unwrap(),
+        b"keep destination\n"
+    );
 }

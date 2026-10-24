@@ -174,7 +174,8 @@ fn mount_never_uses_an_empty_filesystem_type_for_partition_metadata() {
     let image = scratch.image("mbr.img", &bytes, 128 * 512);
     let target = scratch.0.join("mnt");
     fs::create_dir(&target).expect("create mount target");
-    let filesystems = fs::read_to_string("/proc/filesystems").expect("read kernel filesystem types");
+    let filesystems =
+        fs::read_to_string("/proc/filesystems").expect("read kernel filesystem types");
     let excluded = filesystems
         .lines()
         .filter(|line| !line.starts_with("nodev"))
@@ -208,7 +209,10 @@ fn luks_headers_require_their_versioned_header_and_expose_luks2_label() {
     let output = run("blkid", &["-o", "export"], &[&image]);
     let text = success(&output);
     assert!(text.contains("LABEL=secrets\n"), "{text}");
-    assert!(text.contains("UUID=12345678-1234-5678-9abc-123456789abc\n"), "{text}");
+    assert!(
+        text.contains("UUID=12345678-1234-5678-9abc-123456789abc\n"),
+        "{text}"
+    );
     assert!(text.contains("TYPE=crypto_LUKS\n"), "{text}");
     assert!(!text.contains("VERSION="), "{text}");
     let output = run("blkid", &["-p", "-s", "VERSION", "-o", "value"], &[&image]);
@@ -230,7 +234,13 @@ fn luks_headers_require_their_versioned_header_and_expose_luks2_label() {
 
 fn swap_header(page: usize, version: u32, last_page: u32, big_endian: bool) -> Vec<u8> {
     let mut bytes = vec![0; page];
-    let encode = |value: u32| if big_endian { value.to_be_bytes() } else { value.to_le_bytes() };
+    let encode = |value: u32| {
+        if big_endian {
+            value.to_be_bytes()
+        } else {
+            value.to_le_bytes()
+        }
+    };
     bytes[1024..1028].copy_from_slice(&encode(version));
     bytes[1028..1032].copy_from_slice(&encode(last_page));
     bytes[1036..1052].fill(0x11);
@@ -278,7 +288,11 @@ fn crc32(bytes: &[u8]) -> u32 {
     for byte in bytes {
         crc ^= u32::from(*byte);
         for _ in 0..8 {
-            crc = if crc & 1 == 0 { crc >> 1 } else { (crc >> 1) ^ 0xedb8_8320 };
+            crc = if crc & 1 == 0 {
+                crc >> 1
+            } else {
+                (crc >> 1) ^ 0xedb8_8320
+            };
         }
     }
     !crc
@@ -292,7 +306,11 @@ fn gpt_image(sector: usize, backup_only: bool) -> Vec<u8> {
     bytes[458..462].copy_from_slice(&(last_lba as u32).to_le_bytes());
     bytes[510..512].copy_from_slice(&[0x55, 0xaa]);
     let entries_length: usize = 128 * 128;
-    let entries_lba = if backup_only { last_lba - entries_length.div_ceil(sector) } else { 2 };
+    let entries_lba = if backup_only {
+        last_lba - entries_length.div_ceil(sector)
+    } else {
+        2
+    };
     let header_lba = if backup_only { last_lba } else { 1 };
     let entries_start = entries_lba * sector;
     bytes[entries_start..entries_start + 16].fill(0x11);
@@ -322,7 +340,11 @@ fn gpt_uses_logical_sector_size_and_checks_both_crcs_and_protective_mbr() {
     for sector in [512, 4096] {
         for backup_only in [false, true] {
             let bytes = gpt_image(sector, backup_only);
-            let image = scratch.image(&format!("gpt-{sector}-{backup_only}.img"), &bytes, bytes.len() as u64);
+            let image = scratch.image(
+                &format!("gpt-{sector}-{backup_only}.img"),
+                &bytes,
+                bytes.len() as u64,
+            );
             let output = run("blkid", &["-o", "export"], &[&image]);
             assert_eq!(
                 success(&output),
@@ -351,7 +373,11 @@ fn blkid_token_lookup_is_case_sensitive_and_list_one_stops_after_first_match() {
     let scratch = Scratch::new("lookup");
     let first = scratch.image("first.img", &fat16_header(), 16 * 1024 * 1024);
     let second = scratch.image("second.img", &fat16_header(), 16 * 1024 * 1024);
-    let output = run("blkid", &["-l", "-t", "TYPE=vfat", "-o", "device"], &[&first, &second]);
+    let output = run(
+        "blkid",
+        &["-l", "-t", "TYPE=vfat", "-o", "device"],
+        &[&first, &second],
+    );
     assert_eq!(success(&output), format!("{}\n", first.display()));
     let output = run("blkid", &["-t", "type=vfat"], &[&first]);
     assert_eq!(output.status.code(), Some(2));
@@ -394,10 +420,19 @@ fn blockdev_report_is_first_argument_only_and_continues_after_explicit_failures(
     let second = scratch.0.join("missing-second");
     let output = run("blockdev", &["--report"], &[&first, &second]);
     assert_eq!(output.status.code(), Some(1));
-    assert_eq!(output.stdout, b"RO    RA   SSZ   BSZ        StartSec            Size   Device\n");
+    assert_eq!(
+        output.stdout,
+        b"RO    RA   SSZ   BSZ        StartSec            Size   Device\n"
+    );
     let text = String::from_utf8_lossy(&output.stderr);
-    assert!(text.contains(first.to_str().expect("UTF-8 first path")), "{text}");
-    assert!(text.contains(second.to_str().expect("UTF-8 second path")), "{text}");
+    assert!(
+        text.contains(first.to_str().expect("UTF-8 first path")),
+        "{text}"
+    );
+    assert!(
+        text.contains(second.to_str().expect("UTF-8 second path")),
+        "{text}"
+    );
 
     let output = run("blockdev", &["-v", "--report"], &[]);
     assert_eq!(output.status.code(), Some(1));
@@ -441,6 +476,14 @@ fn blockdev_opens_report_and_command_devices_without_waiting_for_fifo_writers() 
 fn default_blockdev_report_is_quiet_and_returns_the_aggregate_status() {
     let output = run("blockdev", &["--report"], &[]);
     assert!(matches!(output.status.code(), Some(0 | 1)));
-    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
-    assert!(output.stdout.starts_with(b"RO    RA   SSZ   BSZ        StartSec            Size   Device\n"));
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output
+            .stdout
+            .starts_with(b"RO    RA   SSZ   BSZ        StartSec            Size   Device\n")
+    );
 }

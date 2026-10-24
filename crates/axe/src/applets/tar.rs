@@ -380,7 +380,9 @@ impl Options {
             }
         }
         if missing {
-            Err(invalid("Exiting with failure status due to previous errors"))
+            Err(invalid(
+                "Exiting with failure status due to previous errors",
+            ))
         } else {
             Ok(())
         }
@@ -515,7 +517,11 @@ fn write_verbose_entry<W: Write, R: Read>(
     )?;
     write_escaped(output, path.as_os_str().as_encoded_bytes())?;
     if kind.is_symlink() || kind.is_hard_link() {
-        output.write_all(if kind.is_symlink() { b" -> " } else { b" link to " })?;
+        output.write_all(if kind.is_symlink() {
+            b" -> "
+        } else {
+            b" link to "
+        })?;
         if let Some(target) = entry.link_name_bytes() {
             write_escaped(output, &target)?;
         }
@@ -684,7 +690,9 @@ fn extraction_destination(root: &Path, path: &Path) -> io::Result<PathBuf> {
             parent = validate_inside(root, &parent)?;
         }
     }
-    let name = path.file_name().ok_or_else(|| invalid("empty member name"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| invalid("empty member name"))?;
     Ok(parent.join(name))
 }
 

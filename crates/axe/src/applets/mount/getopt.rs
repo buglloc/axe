@@ -89,11 +89,7 @@ pub(super) struct Getopt {
 }
 
 impl Getopt {
-    pub(super) fn new(
-        args: Vec<OsString>,
-        applet: Applet,
-        options: &'static [OptionSpec],
-    ) -> Self {
+    pub(super) fn new(args: Vec<OsString>, applet: Applet, options: &'static [OptionSpec]) -> Self {
         let mut args = args.into_iter();
         args.next();
         Self {
@@ -139,10 +135,8 @@ impl Getopt {
                 )));
             }
             (Argument::Required, None) => Some(self.args.next().ok_or_else(|| {
-                self.applet.bad_usage(format!(
-                    "option '--{}' requires an argument",
-                    option.name
-                ))
+                self.applet
+                    .bad_usage(format!("option '--{}' requires an argument", option.name))
             })?),
             (_, inline) => inline,
         };
@@ -162,8 +156,7 @@ impl Getopt {
                     .chars()
                     .next()
                     .unwrap_or(char::REPLACEMENT_CHARACTER);
-                self.applet
-                    .bad_usage(format!("invalid option -- '{flag}'"))
+                self.applet.bad_usage(format!("invalid option -- '{flag}'"))
             })?;
         let rest = &bytes[offset + 1..];
         let value = match option.argument {
@@ -173,18 +166,14 @@ impl Getopt {
                 }
                 None
             }
-            Argument::Required if rest.is_empty() => {
-                Some(self.args.next().ok_or_else(|| {
-                    self.applet.bad_usage(format!(
-                        "option requires an argument -- '{}'",
-                        char::from(flag)
-                    ))
-                })?)
-            }
+            Argument::Required if rest.is_empty() => Some(self.args.next().ok_or_else(|| {
+                self.applet.bad_usage(format!(
+                    "option requires an argument -- '{}'",
+                    char::from(flag)
+                ))
+            })?),
             Argument::Optional if rest.is_empty() => None,
-            Argument::Required | Argument::Optional => {
-                Some(OsString::from_vec(rest.to_vec()))
-            }
+            Argument::Required | Argument::Optional => Some(OsString::from_vec(rest.to_vec())),
         };
         Ok(Item::Option(option.name, value, Spelling::Short(flag)))
     }

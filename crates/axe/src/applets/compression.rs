@@ -303,11 +303,15 @@ impl Options {
 
     fn run(self) -> io::Result<i32> {
         if self.list {
-            return self.list_contents().map(|warning| if warning { 2 } else { 0 });
+            return self
+                .list_contents()
+                .map(|warning| if warning { 2 } else { 0 });
         }
 
         if self.files.is_empty() {
-            return self.filter_stdin().map(|warning| if warning { 2 } else { 0 });
+            return self
+                .filter_stdin()
+                .map(|warning| if warning { 2 } else { 0 });
         }
 
         let mut warning = false;
@@ -378,7 +382,11 @@ impl Options {
     }
 
     fn transcode_file(&self, input: impl Read, path: &Path) -> io::Result<bool> {
-        let mut output = DeferredOutput { path, force: self.force, file: None };
+        let mut output = DeferredOutput {
+            path,
+            force: self.force,
+            file: None,
+        };
         let result = self.transcode(input, &mut output, false);
         if result.is_ok() || output.file.is_none() {
             return result;
@@ -398,12 +406,7 @@ impl Options {
         }
     }
 
-    fn transcode(
-        &self,
-        input: impl Read,
-        output: impl Write,
-        to_stdout: bool,
-    ) -> io::Result<bool> {
+    fn transcode(&self, input: impl Read, output: impl Write, to_stdout: bool) -> io::Result<bool> {
         if self.decompress {
             self.decode(input, output, to_stdout)
                 .map(|decoded| decoded.trailing_garbage)
@@ -471,12 +474,10 @@ impl Options {
         to_stdout: bool,
     ) -> io::Result<Decoded> {
         let decoded = match self.format {
-            Format::Gzip => decode_gzip(
-                input,
-                &mut output,
-                self.force && to_stdout && !self.list,
-            )?,
-            Format::Bzip2 => Decoded::clean(io::copy(&mut MultiBzDecoder::new(input), &mut output)?),
+            Format::Gzip => decode_gzip(input, &mut output, self.force && to_stdout && !self.list)?,
+            Format::Bzip2 => {
+                Decoded::clean(io::copy(&mut MultiBzDecoder::new(input), &mut output)?)
+            }
             Format::Xz => Decoded::clean(io::copy(&mut XzReader::new(input, true), &mut output)?),
             Format::Zstd => Decoded::clean(io::copy(
                 &mut zstd::stream::read::Decoder::new(input)?,
@@ -528,7 +529,8 @@ impl Options {
             println!(
                 "{}",
                 match self.format {
-                    Format::Gzip => "         compressed        uncompressed  ratio uncompressed_name",
+                    Format::Gzip =>
+                        "         compressed        uncompressed  ratio uncompressed_name",
                     Format::Bzip2 | Format::Xz => {
                         "Strms  Blocks   Compressed Uncompressed  Ratio  Check   Filename"
                     }
@@ -574,11 +576,7 @@ impl Decoded {
     }
 }
 
-fn decode_gzip(
-    input: impl Read,
-    mut output: impl Write,
-    passthrough: bool,
-) -> io::Result<Decoded> {
+fn decode_gzip(input: impl Read, mut output: impl Write, passthrough: bool) -> io::Result<Decoded> {
     let mut input = io::BufReader::new(input);
     let mut decoded = Decoded::clean(0);
     let mut members = 0_u64;
@@ -816,10 +814,14 @@ mod tests {
         }
         let mut output = Vec::new();
         let decoded = decode_gzip(
-            ShortReads { input: &compressed, interrupted: true },
+            ShortReads {
+                input: &compressed,
+                interrupted: true,
+            },
             &mut output,
             true,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(output, b"firstsecond");
         assert_eq!(decoded.bytes, output.len() as u64);
         assert!(!decoded.trailing_garbage);

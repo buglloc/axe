@@ -10,8 +10,8 @@ use std::process::Command;
 
 use super::getopt::{Applet, Getopt, Item, OptionSpec};
 use super::{
-    EXIT_FAILURE, EXIT_SOME_FAILED, Failure, HELPER_DIRS, MountDevice, MountEntry, failed,
-    matches_options, matches_types, mount_table, split_options, strerror,
+    EXIT_FAILURE, Failure, HELPER_DIRS, MountDevice, MountEntry, failed, matches_options,
+    matches_types, mount_table, split_options, strerror,
 };
 
 const USAGE: &str = "\
@@ -385,7 +385,10 @@ impl<'a> PreparedSpec<'a> {
         let by_source = table.iter().enumerate().rev().find(|(index, entry)| {
             active[*index]
                 && (entry.source == self.operand.spec
-                    || self.resolved.as_ref().is_some_and(|path| entry.source == path.as_os_str()))
+                    || self
+                        .resolved
+                        .as_ref()
+                        .is_some_and(|path| entry.source == path.as_os_str()))
         });
         if let Some((index, _)) = by_source {
             return Some(index);
@@ -477,23 +480,6 @@ impl MountGraph {
     }
 }
 
-#[derive(Default)]
-struct Status {
-    active: Vec<bool>,
-    succeeded: usize,
-    failed: usize,
-}
-
-impl Status {
-    fn code(&self) -> i32 {
-        match (self.succeeded, self.failed) {
-            (_, 0) => 0,
-            (0, _) => EXIT_FAILURE,
-            _ => EXIT_SOME_FAILED,
-        }
-    }
-}
-
 fn process(
     table: &[MountEntry],
     args: &Args,
@@ -501,10 +487,7 @@ fn process(
     output: &mut impl Write,
 ) -> Result<i32, Failure> {
     let graph = args.recursive.then(|| MountGraph::new(table));
-    let mut status = Status {
-        active: vec![true; table.len()],
-        ..Status::default()
-    };
+    let mut active = vec![true; table.len()];
     if args.all {
         let plan = table
             .iter()
@@ -512,67 +495,68 @@ fn process(
             .rev()
             .filter(|(_, entry)| args.selects(entry))
             .map(|(index, _)| index);
-        execute_plan(
-            table,
-            plan,
-            None,
-            args,
-            &mut status,
-            &mut unmount,
-            output,
-        )?;
-    } else {
-        for operand in &args.operands {
-            let prepared = PreparedSpec::new(operand, args.no_canonicalize);
-            let Some(root) =
-                prepared.resolve(table, &status.active, args.recursive && !args.all_targets)
-            else {
-                status.failed += 1;
-                if !args.quiet {
-                    writeln!(
-                        output,
-                        "umount: {}: {}",
-                        operand.spec.display(),
-                        prepared.missing_message(args.no_canonicalize)
-                    )
+        let failed = execute_plan(table, plan, None, args, &mut active, &mut unmount, output)?;
+        return Ok(if failed { EXIT_FAILURE } else { 0 });
+    }
+
+    // Explicit operands contribute their final status, not each step in a chain.
+    let mut code = 0;
+    for operand in &args.operands {
+        let prepared = PreparedSpec::new(operand, args.no_canonicalize);
+        let Some(root) = prepared.resolve(table, &active, args.recursive && !args.all_targets)
+        else {
+            let chain = args.all_targets || args.recursive;
+            code = (code + if chain { 1 } else { EXIT_FAILURE }).min(255);
+            if !args.quiet {
+                let message = if chain {
+                    if Path::new(&operand.spec).exists() {
+                        "not mounted"
+                    } else {
+                        "not found"
+                    }
+                } else {
+                    prepared.missing_message(args.no_canonicalize)
+                };
+                writeln!(output, "umount: {}: {message}", operand.spec.display())
                     .map_err(output_failure)?;
-                }
+            }
+            continue;
+        };
+        let roots = if args.all_targets {
+            0..table.len()
+        } else {
+            root..root + 1
+        };
+        let mut failed = false;
+        for selected in roots.rev() {
+            if args.all_targets && table[selected].device != table[root].device {
                 continue;
-            };
-            let roots = if args.all_targets {
-                0..table.len()
-            } else {
-                root..root + 1
-            };
-            for selected in roots.rev() {
-                if args.all_targets && table[selected].device != table[root].device {
-                    continue;
-                }
-                if !status.active[selected] {
-                    continue;
-                }
-                let plan = graph
-                    .as_ref()
-                    .map(|graph| graph.plan(table, selected, &status.active));
-                let plan = plan
-                    .as_deref()
-                    .unwrap_or(std::slice::from_ref(&selected));
-                let failed = execute_plan(
-                    table,
-                    plan.iter().copied(),
-                    Some((root, operand.spec.as_os_str())),
-                    args,
-                    &mut status,
-                    &mut unmount,
-                    output,
-                )?;
-                if failed && args.all_targets {
-                    break;
-                }
+            }
+            if !active[selected] {
+                continue;
+            }
+            let plan = graph
+                .as_ref()
+                .map(|graph| graph.plan(table, selected, &active));
+            let plan = plan.as_deref().unwrap_or(std::slice::from_ref(&selected));
+            failed = execute_plan(
+                table,
+                plan.iter().copied(),
+                Some((root, operand.spec.as_os_str())),
+                args,
+                &mut active,
+                &mut unmount,
+                output,
+            )?;
+            if failed {
+                break;
             }
         }
+        if failed {
+            code = (code + EXIT_FAILURE).min(255);
+        }
     }
-    Ok(status.code())
+    Ok(code)
 }
 
 fn execute_plan(
@@ -580,7 +564,7 @@ fn execute_plan(
     plan: impl IntoIterator<Item = usize>,
     operand: Option<(usize, &OsStr)>,
     args: &Args,
-    status: &mut Status,
+    active: &mut [bool],
     unmount: &mut impl FnMut(&MountEntry, &Args) -> Result<Outcome, UmountError>,
     output: &mut impl Write,
 ) -> Result<bool, Failure> {
@@ -589,9 +573,8 @@ fn execute_plan(
         let entry = &table[index];
         match unmount(entry, args) {
             Ok(outcome) => {
-                status.succeeded += 1;
                 if matches!(outcome, Outcome::Unmounted) {
-                    status.active[index] = false;
+                    active[index] = false;
                 }
                 if args.verbose || matches!(outcome, Outcome::ReadOnly) {
                     let action = match outcome {
@@ -608,7 +591,6 @@ fn execute_plan(
                 }
             }
             Err(error) => {
-                status.failed += 1;
                 failed = true;
                 let message = match error {
                     UmountError::Syscall(error)
@@ -629,7 +611,7 @@ fn execute_plan(
                         .filter(|(root, _)| *root == index)
                         .map_or(entry.target.as_os_str(), |(_, spec)| spec);
                     writeln!(output, "umount: {}: {message}", spec.display())
-                    .map_err(output_failure)?;
+                        .map_err(output_failure)?;
                 }
                 if args.recursive || args.all_targets {
                     break;
@@ -693,7 +675,10 @@ fn umount_one(entry: &MountEntry, args: &Args) -> Result<Outcome, UmountError> {
             }
         }
         if entry.fs_type.contains('.')
-            && !helper.as_os_str().as_bytes().ends_with(entry.fs_type.as_bytes())
+            && !helper
+                .as_os_str()
+                .as_bytes()
+                .ends_with(entry.fs_type.as_bytes())
         {
             command.arg("-t").arg(&entry.fs_type);
         }
@@ -825,7 +810,7 @@ mod tests {
         assert_eq!(calls, [12, 10]);
 
         let (code, calls, _) = record(&table, &args(&["-cA", "/missing"]));
-        assert_eq!(code, EXIT_FAILURE);
+        assert_eq!(code, 1);
         assert!(calls.is_empty());
     }
 
@@ -850,10 +835,7 @@ mod tests {
             "10 1 0:10 / /tree rw - tmpfs lower rw\n\
              11 10 0:11 / /tree rw - tmpfs upper rw",
         );
-        for flags in [
-            vec!["-ac", "-t", "tmpfs"],
-            vec!["-c", "/tree", "/tree"],
-        ] {
+        for flags in [vec!["-ac", "-t", "tmpfs"], vec!["-c", "/tree", "/tree"]] {
             let (code, calls, _) = record(&table, &args(&flags));
             assert_eq!(code, 0);
             assert_eq!(calls, [11, 10]);
@@ -861,65 +843,130 @@ mod tests {
     }
 
     #[test]
-    fn recursive_failure_stops_the_chain_but_not_other_operands() {
+    fn recursive_failures_count_once_per_operand_and_stop_only_that_chain() {
         let table = table(
             "10 1 0:10 / /tree rw - tmpfs lower rw\n\
              11 10 0:11 / /tree/early rw - tmpfs early rw\n\
-             12 10 0:12 / /tree/last rw - tmpfs last rw\n\
-             20 1 0:20 / /independent rw - tmpfs other rw",
+             12 10 0:12 / /tree/busy rw - tmpfs busy rw\n\
+             13 10 0:13 / /tree/removed rw - tmpfs removed rw\n\
+             20 1 0:20 / /independent rw - tmpfs other rw\n\
+             30 1 0:30 / /other-busy rw - tmpfs busy rw",
         );
-        let args = args(&["-cR", "/tree", "/independent"]);
-        let mut calls = Vec::new();
-        let mut output = Vec::new();
-        let code = process(
-            &table,
-            &args,
-            |entry, _| {
-                calls.push(entry.id);
-                if entry.id == 12 {
-                    Err(io::Error::from_raw_os_error(libc::EBUSY).into())
-                } else {
-                    Ok(Outcome::Unmounted)
-                }
-            },
-            &mut output,
-        )
-        .unwrap();
-        assert_eq!(calls, [12, 20]);
-        assert_eq!(code, EXIT_SOME_FAILED);
-        assert_eq!(
-            output,
-            b"umount: /tree/last: target is busy.\n"
-        );
+        for (options, expected_code, expected_calls) in [
+            (vec!["-cR", "/tree"], EXIT_FAILURE, vec![13, 12]),
+            (
+                vec!["-cR", "/tree", "/independent"],
+                EXIT_FAILURE,
+                vec![13, 12, 20],
+            ),
+            (
+                vec!["-cR", "/tree", "/other-busy", "/independent"],
+                2 * EXIT_FAILURE,
+                vec![13, 12, 30, 20],
+            ),
+        ] {
+            let mut calls = Vec::new();
+            let code = process(
+                &table,
+                &args(&options),
+                |entry, _| {
+                    calls.push(entry.id);
+                    if matches!(entry.id, 12 | 30) {
+                        Err(io::Error::from_raw_os_error(libc::EBUSY).into())
+                    } else {
+                        Ok(Outcome::Unmounted)
+                    }
+                },
+                &mut Vec::new(),
+            )
+            .unwrap();
+            assert_eq!(calls, expected_calls);
+            assert_eq!(code, expected_code, "{options:?}");
+        }
     }
 
     #[test]
-    fn all_targets_stops_after_the_first_failure() {
+    fn all_targets_stops_at_failure_without_counting_prior_successes() {
         let table = table(
             "10 1 0:10 / /first rw - tmpfs same rw\n\
              11 1 0:10 / /last rw - tmpfs same rw",
         );
-        let mut calls = Vec::new();
-        let code = process(
-            &table,
-            &args(&["-cA", "/first"]),
-            |entry, _| {
-                calls.push(entry.id);
-                Err(io::Error::from_raw_os_error(libc::EBUSY).into())
-            },
-            &mut Vec::new(),
-        )
-        .unwrap();
-        assert_eq!(calls, [11]);
-        assert_eq!(code, EXIT_FAILURE);
+        for options in ["-cA", "-cAR"] {
+            for failed_id in [10, 11] {
+                let mut calls = Vec::new();
+                let code = process(
+                    &table,
+                    &args(&[options, "/first"]),
+                    |entry, _| {
+                        calls.push(entry.id);
+                        if entry.id == failed_id {
+                            Err(io::Error::from_raw_os_error(libc::EBUSY).into())
+                        } else {
+                            Ok(Outcome::Unmounted)
+                        }
+                    },
+                    &mut Vec::new(),
+                )
+                .unwrap();
+                let expected = if failed_id == 11 {
+                    vec![11]
+                } else {
+                    vec![11, 10]
+                };
+                assert_eq!(calls, expected);
+                assert_eq!(code, EXIT_FAILURE);
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_operands_add_failures_but_all_combines_them() {
+        let table = table(
+            "10 1 0:10 / /busy rw - tmpfs busy rw\n\
+             11 1 0:11 / /other-busy rw - tmpfs busy rw\n\
+             20 1 0:20 / /present rw - tmpfs present rw",
+        );
+        for (options, expected_code, expected_calls) in [
+            (vec!["-c", "/busy", "/present"], EXIT_FAILURE, vec![10, 20]),
+            (
+                vec!["-c", "/busy", "/other-busy", "/present"],
+                2 * EXIT_FAILURE,
+                vec![10, 11, 20],
+            ),
+            (vec!["-ac", "-t", "tmpfs"], EXIT_FAILURE, vec![20, 11, 10]),
+            (
+                vec![
+                    "-c", "/busy", "/busy", "/busy", "/busy", "/busy", "/busy", "/busy", "/busy",
+                ],
+                255,
+                vec![10; 8],
+            ),
+        ] {
+            let mut calls = Vec::new();
+            let code = process(
+                &table,
+                &args(&options),
+                |entry, _| {
+                    calls.push(entry.id);
+                    if entry.id == 20 {
+                        Ok(Outcome::Unmounted)
+                    } else {
+                        Err(io::Error::from_raw_os_error(libc::EBUSY).into())
+                    }
+                },
+                &mut Vec::new(),
+            )
+            .unwrap();
+            assert_eq!(calls, expected_calls);
+            assert_eq!(code, expected_code, "{options:?}");
+        }
     }
 
     #[test]
     fn unresolved_operands_do_not_prevent_independent_work() {
         let table = table("10 1 0:10 / /present rw - tmpfs source rw");
-        let (code, calls, errors) =
-            record(&table, &args(&["-c", "/does-not-exist", "/present"]));
-        assert_eq!(code, EXIT_SOME_FAILED);
+        let (code, calls, errors) = record(&table, &args(&["-c", "/does-not-exist", "/present"]));
+        assert_eq!(code, EXIT_FAILURE);
         assert_eq!(calls, [10]);
         assert!(errors.contains("/does-not-exist: no mount point specified."));
 
@@ -927,6 +974,26 @@ mod tests {
         assert_eq!(code, EXIT_FAILURE);
         assert!(calls.is_empty());
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn unresolved_chain_operands_contribute_usage_status() {
+        let table = table("10 1 0:10 / /present rw - tmpfs source rw");
+        for options in ["-cR", "-cA", "-cAR"] {
+            let (code, calls, errors) =
+                record(&table, &args(&[options, "/does-not-exist", "/present"]));
+            assert_eq!(code, 1);
+            assert_eq!(calls, [10]);
+            assert_eq!(errors, "umount: /does-not-exist: not found\n");
+
+            let (code, calls, errors) = record(
+                &table,
+                &args(&[options, "-q", "/does-not-exist", "/does-not-exist"]),
+            );
+            assert_eq!(code, 2);
+            assert!(calls.is_empty());
+            assert!(errors.is_empty());
+        }
     }
 
     #[test]
@@ -968,8 +1035,7 @@ mod tests {
              11 1 0:11 / /other rw - tmpfs other rw,size=4096\n\
              12 1 0:12 / /third rw,nosuid - tmpfs other rw,size=8192",
         );
-        let (code, calls, _) =
-            record(&table, &args(&["-ac", "-O", "rw,size=4096,+nosuid"]));
+        let (code, calls, _) = record(&table, &args(&["-ac", "-O", "rw,size=4096,+nosuid"]));
         assert_eq!(code, 0);
         assert_eq!(calls, [10]);
     }
@@ -1028,7 +1094,11 @@ mod tests {
                 .err()
                 .expect("invalid invocation");
             assert_eq!(failure.code, 1);
-            assert!(failure.message.ends_with("Try 'umount --help' for more information."));
+            assert!(
+                failure
+                    .message
+                    .ends_with("Try 'umount --help' for more information.")
+            );
             assert!(!failure.message.contains("'mount --help'"));
         }
     }
@@ -1060,7 +1130,10 @@ mod tests {
         for (errno, expected) in [
             (libc::EINVAL, ""),
             (libc::EBUSY, "umount: /target: target is busy.\n"),
-            (libc::EPERM, "umount: /target: must be superuser to unmount.\n"),
+            (
+                libc::EPERM,
+                "umount: /target: must be superuser to unmount.\n",
+            ),
         ] {
             let mut output = Vec::new();
             let code = process(
@@ -1081,12 +1154,8 @@ mod tests {
         table[0].target = std::env::current_dir()
             .unwrap()
             .join("axe-synthetic-stale-mount");
-        let (code, calls, _) = record(
-            &table,
-            &args(&["-c", "--target=axe-synthetic-stale-mount"]),
-        );
+        let (code, calls, _) = record(&table, &args(&["-c", "--target=axe-synthetic-stale-mount"]));
         assert_eq!(code, 0);
         assert_eq!(calls, [10]);
     }
 }
-

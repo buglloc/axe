@@ -97,8 +97,8 @@ fn run_blockdev(args: Vec<OsString>) -> Result<bool, String> {
     }
 
     for device in devices {
-        let file = open_block_device(Path::new(&device))
-            .map_err(|error| format!("{device}: {error}"))?;
+        let file =
+            open_block_device(Path::new(&device)).map_err(|error| format!("{device}: {error}"))?;
         let mut verbose = false;
         for action in &actions {
             match *action {
@@ -128,8 +128,7 @@ fn run_blockdev(args: Vec<OsString>) -> Result<bool, String> {
                     }
                 }
                 BlockAction::NoArgument(description, request) => {
-                    ioctl_value(&file, request, 0)
-                        .map_err(|error| format!("{device}: {error}"))?;
+                    ioctl_value(&file, request, 0).map_err(|error| format!("{device}: {error}"))?;
                     if verbose {
                         println!("{description} succeeded.");
                     }
@@ -258,8 +257,8 @@ fn get_ioctl_value(file: &File, request: u32, kind: IoctlValue) -> std::io::Resu
 }
 
 fn report_block_device(device: &str) -> Result<(), String> {
-    let file = open_block_device(Path::new(device))
-        .map_err(|error| format!("{device}: {error}"))?;
+    let file =
+        open_block_device(Path::new(device)).map_err(|error| format!("{device}: {error}"))?;
     let read_only = get_ioctl_value(&file, BLKROGET, IoctlValue::Int)
         .map_err(|error| format!("{device}: {error}"))?;
     let readahead = get_ioctl_value(&file, BLKRAGET, IoctlValue::Long)
@@ -400,8 +399,11 @@ fn run_blkid(args: Vec<OsString>) -> Result<bool, String> {
     if lookup && token_filter.is_none() {
         return Err("The lookup option requires a search type specified using -t".into());
     }
-    if lookup && output == Output::Device
-        && token_filter.as_ref().is_some_and(|(tag, _)| matches!(tag.as_str(), "LABEL" | "UUID"))
+    if lookup
+        && output == Output::Device
+        && token_filter
+            .as_ref()
+            .is_some_and(|(tag, _)| matches!(tag.as_str(), "LABEL" | "UUID"))
     {
         evaluate = true;
     }
@@ -439,7 +441,9 @@ fn run_blkid(args: Vec<OsString>) -> Result<bool, String> {
             }
         };
         if let Some((tag, want)) = &token_filter
-            && signature.tag_value(tag, low_level_probe).is_none_or(|value| value != want)
+            && signature
+                .tag_value(tag, low_level_probe)
+                .is_none_or(|value| value != want)
         {
             continue;
         }
@@ -521,10 +525,12 @@ pub(super) fn probe(path: &Path) -> io::Result<Option<Signature>> {
     } else {
         None
     };
-    Ok(probe_partition_table(&mut file, &bytes, length, sector_size)?.map(|table| Signature {
-        partition_table: Some(table),
-        ..Signature::default()
-    }))
+    Ok(
+        probe_partition_table(&mut file, &bytes, length, sector_size)?.map(|table| Signature {
+            partition_table: Some(table),
+            ..Signature::default()
+        }),
+    )
 }
 
 fn probe_filesystem(bytes: &[u8], length: u64) -> Option<Signature> {
@@ -696,7 +702,8 @@ fn detect_fat(bytes: &[u8]) -> Option<Signature> {
         return None;
     }
     let directory_sectors = (root_entries * 32).div_ceil(sector_size);
-    let data_sectors = total_sectors.checked_sub(reserved + fat_length * fats + directory_sectors)?;
+    let data_sectors =
+        total_sectors.checked_sub(reserved + fat_length * fats + directory_sectors)?;
     let clusters = data_sectors / cluster_size;
     if clusters == 0 {
         return None;
@@ -772,7 +779,9 @@ fn detect_swap(bytes: &[u8], length: u64) -> Option<Signature> {
         return Some(Signature {
             fs_type: Some("swap"),
             uuid: has_metadata.then(|| uuid(&bytes[1036..1052])).flatten(),
-            label: has_metadata.then(|| text_label(&bytes[1052..1068])).flatten(),
+            label: has_metadata
+                .then(|| text_label(&bytes[1052..1068]))
+                .flatten(),
             version: Some("1".into()),
             ..Signature::default()
         });
@@ -789,8 +798,8 @@ fn probe_partition_table(
     if bytes.get(510..512) != Some(&[0x55, 0xaa]) {
         return Ok(None);
     }
-    let entries = &bytes[446..510];
-    if entries.chunks_exact(16).any(|entry| entry[4] == 0xee) {
+    let entries = bytes[446..510].as_chunks::<16>().0;
+    if entries.iter().any(|entry| entry[4] == 0xee) {
         let candidates = sector_size.map_or([512, 4096], |size| [size, size]);
         for (index, size) in candidates.into_iter().enumerate() {
             if index != 0 && sector_size.is_some() {
@@ -808,7 +817,7 @@ fn probe_partition_table(
         }
         return Ok(None);
     }
-    if entries.chunks_exact(16).any(|entry| !matches!(entry[0], 0 | 0x80)) {
+    if entries.iter().any(|entry| !matches!(entry[0], 0 | 0x80)) {
         return Ok(None);
     }
     let id = le_u32(bytes, 440).unwrap_or_default();
@@ -849,18 +858,19 @@ fn detect_gpt(
     let mut crc = crc32_update(!0, &header[..16]);
     crc = crc32_update(crc, &[0; 4]);
     crc = crc32_update(crc, &header[20..header_size]);
-    if !crc != le_u32(header, 16).unwrap_or_default()
-        || le_u64(header, 24) != Some(lba)
-    {
+    if !crc != le_u32(header, 16).unwrap_or_default() || le_u64(header, 24) != Some(lba) {
         return Ok(None);
     }
     let last_lba = length / sector_size - 1;
     let first = le_u64(header, 40).unwrap_or_default();
     let last = le_u64(header, 48).unwrap_or_default();
     let alternate = le_u64(header, 32).unwrap_or_default();
-    if first <= 1 || first > last || last >= last_lba
+    if first <= 1
+        || first > last
+        || last >= last_lba
         || (first..=last).contains(&lba)
-        || alternate > last_lba || alternate == lba
+        || alternate > last_lba
+        || alternate == lba
     {
         return Ok(None);
     }
@@ -874,8 +884,11 @@ fn detect_gpt(
     let Some(entries_end) = entries_offset.checked_add(entries_length) else {
         return Ok(None);
     };
-    if entry_size != 128 || entries_length == 0 || entries_length >= u64::from(u32::MAX)
-        || entries_lba < 2 || entries_end > length
+    if entry_size != 128
+        || entries_length == 0
+        || entries_length >= u64::from(u32::MAX)
+        || entries_lba < 2
+        || entries_end > length
         || (entries_offset < offset + sector_size && entries_end > offset)
         || (entries_offset < (last + 1) * sector_size && entries_end > first * sector_size)
     {
@@ -883,8 +896,10 @@ fn detect_gpt(
     }
     let expected_crc = le_u32(header, 88).unwrap_or_default();
     let mut crc = !0;
-    if let (Ok(start), Ok(end)) = (usize::try_from(entries_offset), usize::try_from(entries_end))
-        && let Some(entries) = bytes.get(start..end)
+    if let (Ok(start), Ok(end)) = (
+        usize::try_from(entries_offset),
+        usize::try_from(entries_end),
+    ) && let Some(entries) = bytes.get(start..end)
     {
         crc = crc32_update(crc, entries);
     } else {
@@ -928,11 +943,23 @@ fn print_signature(
         println!("{}", path.display());
         return;
     }
-    let mut fields = ["LABEL", "UUID", "BLOCK_SIZE", "VERSION", "TYPE", "PTUUID", "PTTYPE"]
-        .into_iter()
-        .filter(|name| tags.is_empty() || tags.iter().any(|tag| tag == name))
-        .filter_map(|name| signature.tag_value(name, low_level).map(|value| (name, value)))
-        .peekable();
+    let mut fields = [
+        "LABEL",
+        "UUID",
+        "BLOCK_SIZE",
+        "VERSION",
+        "TYPE",
+        "PTUUID",
+        "PTTYPE",
+    ]
+    .into_iter()
+    .filter(|name| tags.is_empty() || tags.iter().any(|tag| tag == name))
+    .filter_map(|name| {
+        signature
+            .tag_value(name, low_level)
+            .map(|value| (name, value))
+    })
+    .peekable();
     if fields.peek().is_none() {
         return;
     }
@@ -1025,7 +1052,8 @@ fn print_topology(path: &Path, output: Output) -> Result<(), String> {
 }
 
 fn system_block_devices() -> io::Result<Vec<PathBuf>> {
-    fs::read_to_string("/proc/partitions").map(|partitions| block_devices_from_partitions(&partitions))
+    fs::read_to_string("/proc/partitions")
+        .map(|partitions| block_devices_from_partitions(&partitions))
 }
 
 fn block_devices_from_partitions(partitions: &str) -> Vec<PathBuf> {
@@ -1104,23 +1132,33 @@ fn text_label(bytes: &[u8]) -> Option<String> {
 }
 
 fn le_u16(bytes: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(bytes.get(offset..offset + 2)?.try_into().ok()?))
+    Some(u16::from_le_bytes(
+        bytes.get(offset..offset + 2)?.try_into().ok()?,
+    ))
 }
 
 fn be_u16(bytes: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_be_bytes(bytes.get(offset..offset + 2)?.try_into().ok()?))
+    Some(u16::from_be_bytes(
+        bytes.get(offset..offset + 2)?.try_into().ok()?,
+    ))
 }
 
 fn be_u32(bytes: &[u8], offset: usize) -> Option<u32> {
-    Some(u32::from_be_bytes(bytes.get(offset..offset + 4)?.try_into().ok()?))
+    Some(u32::from_be_bytes(
+        bytes.get(offset..offset + 4)?.try_into().ok()?,
+    ))
 }
 
 fn be_u64(bytes: &[u8], offset: usize) -> Option<u64> {
-    Some(u64::from_be_bytes(bytes.get(offset..offset + 8)?.try_into().ok()?))
+    Some(u64::from_be_bytes(
+        bytes.get(offset..offset + 8)?.try_into().ok()?,
+    ))
 }
 
 fn le_u64(bytes: &[u8], offset: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(bytes.get(offset..offset + 8)?.try_into().ok()?))
+    Some(u64::from_le_bytes(
+        bytes.get(offset..offset + 8)?.try_into().ok()?,
+    ))
 }
 
 fn le_u32(bytes: &[u8], offset: usize) -> Option<u32> {

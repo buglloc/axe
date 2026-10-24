@@ -58,7 +58,11 @@ pub fn tree(args: Vec<OsString>) -> i32 {
         list_directory(&cli.path, &options)
     } else if let Some(path) = &options.output_file {
         fs::File::create(path).and_then(|file| {
-            list_filesystem(Path::new(&cli.path), &options, &mut io::BufWriter::new(file))
+            list_filesystem(
+                Path::new(&cli.path),
+                &options,
+                &mut io::BufWriter::new(file),
+            )
         })
     } else {
         list_filesystem(
@@ -92,11 +96,7 @@ struct Listing<'a> {
     files: u64,
 }
 
-fn list_filesystem(
-    path: &Path,
-    options: &TreeOptions,
-    writer: &mut impl Write,
-) -> io::Result<()> {
+fn list_filesystem(path: &Path, options: &TreeOptions, writer: &mut impl Write) -> io::Result<()> {
     let metadata = fs::metadata(path)?;
     let mut listing = Listing {
         options,
@@ -115,7 +115,11 @@ fn list_filesystem(
             writer,
             "\n{} {}",
             listing.directories,
-            if listing.directories == 1 { "directory" } else { "directories" }
+            if listing.directories == 1 {
+                "directory"
+            } else {
+                "directories"
+            }
         )?;
         if !options.dir_only {
             write!(
@@ -131,8 +135,17 @@ fn list_filesystem(
 }
 
 impl Listing<'_> {
-    fn read_entries(&self, path: &Path, depth: usize, matched_parent: bool) -> io::Result<Vec<Entry>> {
-        if self.options.level.is_some_and(|level| depth >= level as usize) {
+    fn read_entries(
+        &self,
+        path: &Path,
+        depth: usize,
+        matched_parent: bool,
+    ) -> io::Result<Vec<Entry>> {
+        if self
+            .options
+            .level
+            .is_some_and(|level| depth >= level as usize)
+        {
             return Ok(Vec::new());
         }
         let mut entries = Vec::new();
@@ -143,15 +156,24 @@ impl Listing<'_> {
             let name = entry.file_name();
             let text = name.to_string_lossy();
             if (!self.options.all_files && text.starts_with('.'))
-                || self.options.exclude_patterns.iter().any(|pattern| pattern.matches(&text))
+                || self
+                    .options
+                    .exclude_patterns
+                    .iter()
+                    .any(|pattern| pattern.matches(&text))
             {
                 continue;
             }
             let metadata = entry.metadata()?;
             let is_directory = metadata.is_dir();
             if (!is_directory && self.options.dir_only)
-                || (!is_directory && !matched_parent
-                    && self.options.pattern_glob.as_ref().is_some_and(|pattern| !pattern.matches(&text)))
+                || (!is_directory
+                    && !matched_parent
+                    && self
+                        .options
+                        .pattern_glob
+                        .as_ref()
+                        .is_some_and(|pattern| !pattern.matches(&text)))
             {
                 continue;
             }
@@ -174,11 +196,19 @@ impl Listing<'_> {
             };
             directories.then_with(|| {
                 let order = if self.options.sort_by_time {
-                    left.metadata.modified().ok().cmp(&right.metadata.modified().ok())
+                    left.metadata
+                        .modified()
+                        .ok()
+                        .cmp(&right.metadata.modified().ok())
                 } else {
                     std::cmp::Ordering::Equal
-                }.then_with(|| left.name.cmp(&right.name));
-                if self.options.reverse { order.reverse() } else { order }
+                }
+                .then_with(|| left.name.cmp(&right.name));
+                if self.options.reverse {
+                    order.reverse()
+                } else {
+                    order
+                }
             })
         });
         if self.options.prune
@@ -192,7 +222,10 @@ impl Listing<'_> {
             }
             entries.retain(|entry| {
                 !entry.metadata.is_dir()
-                    || entry.children.as_ref().is_some_and(|children| !children.is_empty())
+                    || entry
+                        .children
+                        .as_ref()
+                        .is_some_and(|children| !children.is_empty())
                     || self.directory_matches(entry)
             });
         }
@@ -200,8 +233,12 @@ impl Listing<'_> {
     }
 
     fn directory_matches(&self, entry: &Entry) -> bool {
-        self.options.match_dirs && self.options.pattern_glob.as_ref()
-            .is_some_and(|pattern| pattern.matches(&entry.name.to_string_lossy()))
+        self.options.match_dirs
+            && self
+                .options
+                .pattern_glob
+                .as_ref()
+                .is_some_and(|pattern| pattern.matches(&entry.name.to_string_lossy()))
     }
 
     fn write_entries(
@@ -216,14 +253,28 @@ impl Listing<'_> {
             let last = index + 1 == count;
             if !self.options.no_indent {
                 for is_last in parents_last.iter() {
-                    write!(writer, "{}", if *is_last { "    " } else if self.options.ascii { "|   " } else { "│   " })?;
+                    write!(
+                        writer,
+                        "{}",
+                        if *is_last {
+                            "    "
+                        } else if self.options.ascii {
+                            "|   "
+                        } else {
+                            "│   "
+                        }
+                    )?;
                 }
-                write!(writer, "{}", match (last, self.options.ascii) {
-                    (true, true) => "`-- ",
-                    (false, true) => "|-- ",
-                    (true, false) => "└── ",
-                    (false, false) => "├── ",
-                })?;
+                write!(
+                    writer,
+                    "{}",
+                    match (last, self.options.ascii) {
+                        (true, true) => "`-- ",
+                        (false, true) => "|-- ",
+                        (true, false) => "└── ",
+                        (false, false) => "├── ",
+                    }
+                )?;
             }
             self.write_metadata(writer, &entry.metadata)?;
             if self.options.icons {
@@ -233,7 +284,8 @@ impl Listing<'_> {
                 entry.path.as_os_str()
             } else {
                 &entry.name
-            }.to_string_lossy();
+            }
+            .to_string_lossy();
             if self.options.color && !self.options.no_color {
                 write!(writer, "{}", colorize(&entry.entry, &name))?;
             } else {
@@ -261,8 +313,10 @@ impl Listing<'_> {
     }
 
     fn write_metadata(&self, writer: &mut impl Write, metadata: &fs::Metadata) -> io::Result<()> {
-        if !(self.options.print_permissions || self.options.print_size
-            || self.options.human_readable || self.options.print_mod_date)
+        if !(self.options.print_permissions
+            || self.options.print_size
+            || self.options.human_readable
+            || self.options.print_mod_date)
         {
             return Ok(());
         }
@@ -273,7 +327,8 @@ impl Listing<'_> {
             {
                 use std::os::unix::fs::PermissionsExt;
                 let permissions = rust_tree::rust_tree::display::format_permissions_unix(
-                    metadata.permissions().mode(), metadata.is_dir(),
+                    metadata.permissions().mode(),
+                    metadata.is_dir(),
                 );
                 write!(writer, "{}", &permissions[1..permissions.len() - 1])?;
                 separated = true;
@@ -345,8 +400,8 @@ fn classify(metadata: &fs::Metadata) -> &'static str {
 #[cfg(unix)]
 fn modification_date(time: std::time::SystemTime) -> String {
     let seconds = match time.duration_since(std::time::UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs() as libc::time_t,
-        Err(error) => -(error.duration().as_secs() as libc::time_t),
+        Ok(duration) => duration.as_secs() as libc::c_long,
+        Err(error) => -(error.duration().as_secs() as libc::c_long),
     };
     let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
     // SAFETY: seconds is initialized, and local is writable storage for one tm.
@@ -354,7 +409,9 @@ fn modification_date(time: std::time::SystemTime) -> String {
         return "Unknown date".into();
     }
     let format = if time > std::time::SystemTime::now()
-        || std::time::SystemTime::now().duration_since(time).is_ok_and(|age| age.as_secs() > 6 * 31 * 24 * 60 * 60)
+        || std::time::SystemTime::now()
+            .duration_since(time)
+            .is_ok_and(|age| age.as_secs() > 6 * 31 * 24 * 60 * 60)
     {
         c"%b %e  %Y"
     } else {
@@ -364,15 +421,22 @@ fn modification_date(time: std::time::SystemTime) -> String {
     // SAFETY: localtime_r initialized local; buffer is writable and its length
     // is passed to strftime, and format is NUL-terminated.
     let length = unsafe {
-        libc::strftime(buffer.as_mut_ptr().cast(), buffer.len(), format.as_ptr(), local.as_ptr())
+        libc::strftime(
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            format.as_ptr(),
+            local.as_ptr(),
+        )
     };
     String::from_utf8_lossy(&buffer[..length]).into_owned()
 }
 
 #[cfg(not(unix))]
 fn modification_date(time: std::time::SystemTime) -> String {
-    time.duration_since(std::time::UNIX_EPOCH)
-        .map_or_else(|_| "Unknown date".into(), |duration| duration.as_secs().to_string())
+    time.duration_since(std::time::UNIX_EPOCH).map_or_else(
+        |_| "Unknown date".into(),
+        |duration| duration.as_secs().to_string(),
+    )
 }
 
 #[cfg(test)]

@@ -75,7 +75,7 @@ impl Fixture {
             match fs::create_dir(&root) {
                 Ok(()) => {
                     return Self {
-                        root,
+                        root: root.canonicalize().expect("canonicalize fixture root"),
                         mounted: Vec::new(),
                     };
                 }
@@ -139,7 +139,8 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let mut clean = true;
         for target in self.mounted.iter().rev() {
-            let path = CString::new(target.as_os_str().as_bytes()).expect("fixture path has no NUL");
+            let path =
+                CString::new(target.as_os_str().as_bytes()).expect("fixture path has no NUL");
             // SAFETY: only this fixture's scratch mountpoints are detached;
             // the NUL-terminated path outlives the syscall.
             if unsafe { libc::umount2(path.as_ptr(), libc::MNT_DETACH) } != 0
@@ -188,7 +189,12 @@ fn namespace_real_smoke() {
     let output = Command::new("unshare")
         .args(["-rm", "--"])
         .arg(std::env::current_exe().unwrap())
-        .args(["--ignored", "--exact", "namespace_real_smoke", "--nocapture"])
+        .args([
+            "--ignored",
+            "--exact",
+            "namespace_real_smoke",
+            "--nocapture",
+        ])
         .env(PARENT_NAMESPACE, namespace)
         .output()
         .expect("run isolated unmount smoke");
@@ -226,7 +232,11 @@ fn namespace_fixture() {
         alias.as_os_str(),
     ]));
     assert!(fake.stdout.is_empty());
-    assert!(String::from_utf8(fake.stderr).unwrap().contains("(upper) unmounted"));
+    assert!(
+        String::from_utf8(fake.stderr)
+            .unwrap()
+            .contains("(upper) unmounted")
+    );
     assert_eq!(fixture.count(&tree), 2);
 
     let removed = success(axe(&[
@@ -257,12 +267,8 @@ fn namespace_fixture() {
     fixture.bind(&shared, &alias);
     let child = fixture.directory("shared/child");
     fixture.tmpfs(&child, "different-filesystem", "size=1m");
-    let partial = axe(&[
-        OsStr::new("umount"),
-        OsStr::new("-Aiv"),
-        shared.as_os_str(),
-    ]);
-    assert_eq!(partial.status.code(), Some(64));
+    let partial = axe(&[OsStr::new("umount"), OsStr::new("-Aiv"), shared.as_os_str()]);
+    assert_eq!(partial.status.code(), Some(32));
     assert_eq!(fixture.count(&alias), 0);
     assert_eq!(fixture.count(&shared), 1);
     assert_eq!(fixture.count(&child), 1);
@@ -296,11 +302,23 @@ fn namespace_fixture() {
     fixture.tmpfs(&early, "early", "size=1m");
     let busy = fixture.directory("chain/busy");
     fixture.tmpfs(&busy, "busy", "size=1m");
+    let removed = fixture.directory("chain/removed");
+    fixture.tmpfs(&removed, "removed", "size=1m");
     let independent = fixture.directory("independent");
     fixture.tmpfs(&independent, "independent", "size=1m");
     let missing = fixture.root.join("missing");
+    let other_busy = fixture.directory("other-busy");
+    fixture.tmpfs(&other_busy, "other-busy", "size=1m");
     {
         let _working_directory = WorkingDirectory::enter(&busy);
+        let partial = axe(&[OsStr::new("umount"), OsStr::new("-Ric"), chain.as_os_str()]);
+        assert_eq!(partial.status.code(), Some(32));
+        assert_eq!(fixture.count(&removed), 0);
+        assert_eq!(fixture.count(&chain), 1);
+        assert_eq!(fixture.count(&early), 1);
+        assert_eq!(fixture.count(&busy), 1);
+        assert_eq!(fixture.count(&independent), 1);
+
         let partial = axe(&[
             OsStr::new("umount"),
             OsStr::new("-Ric"),
@@ -308,10 +326,23 @@ fn namespace_fixture() {
             missing.as_os_str(),
             independent.as_os_str(),
         ]);
-        assert_eq!(partial.status.code(), Some(64));
+        assert_eq!(partial.status.code(), Some(33));
         let stderr = String::from_utf8(partial.stderr).unwrap();
         assert!(stderr.contains("target is busy."));
-        assert!(stderr.contains("no mount point specified."));
+        assert!(stderr.contains("not found"));
+        assert_eq!(fixture.count(&independent), 0);
+
+        let _held = fs::File::open(&other_busy).expect("hold second busy mount");
+        fixture.tmpfs(&independent, "independent-again", "size=1m");
+        let partial = axe(&[
+            OsStr::new("umount"),
+            OsStr::new("-Ric"),
+            chain.as_os_str(),
+            other_busy.as_os_str(),
+            independent.as_os_str(),
+        ]);
+        assert_eq!(partial.status.code(), Some(64));
+        assert_eq!(fixture.count(&other_busy), 1);
     }
     assert_eq!(fixture.count(&chain), 1);
     assert_eq!(fixture.count(&early), 1);
@@ -321,6 +352,7 @@ fn namespace_fixture() {
         OsStr::new("umount"),
         OsStr::new("-Ric"),
         chain.as_os_str(),
+        other_busy.as_os_str(),
     ]));
 
     let source = fixture.root.join("source");

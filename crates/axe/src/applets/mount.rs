@@ -340,7 +340,6 @@ impl Args {
     }
 }
 
-
 fn mkdir_mode(value: Option<&OsStr>) -> Result<u32, Failure> {
     let Some(value) = value else {
         return Ok(0o755);
@@ -1476,7 +1475,6 @@ fn fs_context_error(context: &OwnedFd) -> Option<String> {
     last
 }
 
-
 fn mount_all(args: &Args) -> Result<i32, Failure> {
     let entries = read_fstab(FSTAB)?;
     let mut table = mount_table()?;
@@ -1920,9 +1918,8 @@ mod tests {
 
     #[test]
     fn long_option_abbreviations_follow_getopt() {
-        let long_option = |name| {
-            getopt::long_option(OPTIONS, Applet::Mount, name).map(|option| option.name)
-        };
+        let long_option =
+            |name| getopt::long_option(OPTIONS, Applet::Mount, name).map(|option| option.name);
         assert_eq!(long_option("ty").unwrap(), "types");
         assert_eq!(long_option("rw").unwrap(), "rw");
         let ambiguous = long_option("t").unwrap_err().message;

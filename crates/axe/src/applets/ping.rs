@@ -437,9 +437,16 @@ mod tests {
     #[test]
     fn ping_accepts_counts_beyond_the_wire_sequence_space() {
         let options = parse_ping(
-            vec!["ping".into(), "-c".into(), "65536".into(), "127.0.0.1".into()],
+            vec![
+                "ping".into(),
+                "-c".into(),
+                "65536".into(),
+                "127.0.0.1".into(),
+            ],
             false,
-        ).unwrap().unwrap();
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(options.count, Some(65_536));
     }
 

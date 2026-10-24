@@ -15,7 +15,7 @@ impl Scratch {
         ));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create df scratch directory");
-        Self(path)
+        Self(fs::canonicalize(path).expect("resolve df scratch directory"))
     }
 
     fn path(&self) -> &Path {
@@ -122,7 +122,8 @@ fn bind_mounts_keep_only_the_best_device_row() {
         use std::os::unix::ffi::OsStrExt;
 
         fn mount(source: &CStr, target: &Path, filesystem: Option<&CStr>, flags: libc::c_ulong) {
-            let target = CString::new(target.as_os_str().as_bytes()).expect("mount path has no NUL");
+            let target =
+                CString::new(target.as_os_str().as_bytes()).expect("mount path has no NUL");
             // SAFETY: the C strings remain valid for the call. This test child
             // owns its user and mount namespaces; no host mount is changed.
             let result = unsafe {
