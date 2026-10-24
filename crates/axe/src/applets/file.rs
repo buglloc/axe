@@ -49,26 +49,37 @@ pub fn file(args: Vec<OsString>) -> i32 {
         }
     };
 
-    let mut failed = false;
+    let width = args
+        .files
+        .iter()
+        .map(|path| path.display().to_string().len())
+        .max()
+        .unwrap_or(0);
     for path in &args.files {
         let result = describe(path, args.dereference, args.mime, args.mime_type);
         match result {
-            Ok(description) => print_description(path, &description, args.brief),
+            Ok(description) => print_description(path, &description, args.brief, width),
             Err(error) => {
-                failed = true;
-                let description = format!("ERROR: {error}");
-                print_description(path, &description, args.brief);
+                let reason = error
+                    .to_string()
+                    .split_once(" (os error")
+                    .map_or_else(|| error.to_string(), |(reason, _)| reason.to_string());
+                let description = format!("cannot open `{}' ({reason})", path.display());
+                print_description(path, &description, args.brief, width);
             }
         }
     }
-    i32::from(failed)
+    // GNU file exits zero even when files cannot be opened; only -E fails hard.
+    0
 }
 
-fn print_description(path: &Path, description: &str, brief: bool) {
+fn print_description(path: &Path, description: &str, brief: bool, width: usize) {
     if brief {
         println!("{description}");
     } else {
-        println!("{}: {description}", path.display());
+        let name = format!("{}:", path.display());
+        let pad = (width + 2).saturating_sub(name.len()).max(1);
+        println!("{}{:pad$}{description}", name, "");
     }
 }
 
@@ -93,35 +104,46 @@ fn describe(path: &Path, dereference: bool, mime: bool, mime_type: bool) -> io::
 
     if file_type.is_symlink() {
         let target = fs::read_link(path)?;
+        if mime || mime_type {
+            return Ok(mime_line("inode/symlink", mime));
+        }
         return Ok(format!("symbolic link to {}", target.display()));
     }
 
     if file_type.is_dir() {
+        if mime || mime_type {
+            return Ok(mime_line("inode/directory", mime));
+        }
         return Ok("directory".into());
     }
-
-    if metadata.len() == 0 {
-        return Ok("empty".into());
-    }
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::FileTypeExt;
         let special = if file_type.is_socket() {
-            Some("socket")
+            Some(("socket".to_string(), "inode/socket"))
         } else if file_type.is_fifo() {
-            Some("fifo (named pipe)")
+            Some(("fifo (named pipe)".to_string(), "inode/fifo"))
         } else if file_type.is_block_device() {
-            Some("block special")
+            Some((device_text(path, "block special"), "inode/blockdevice"))
         } else if file_type.is_char_device() {
-            Some("character special")
+            Some((device_text(path, "character special"), "inode/chardevice"))
         } else {
             None
         };
 
-        if let Some(description) = special {
-            return Ok(description.into());
+        if let Some((text, mime_name)) = special {
+            if mime || mime_type {
+                return Ok(mime_line(mime_name, mime));
+            }
+            return Ok(text);
         }
+    }
+
+    if metadata.len() == 0 {
+        if mime || mime_type {
+            return Ok(mime_line("application/x-empty", mime));
+        }
+        return Ok("empty".into());
     }
 
     let format = FileFormat::from_file(path)?;
@@ -180,5 +202,30 @@ fn format_description(
         "Unicode text, UTF-8 text".into()
     } else {
         format.name().into()
+    }
+}
+
+/// GNU appends "; charset=binary" to inode and empty MIME types for `file -i`
+/// (but not `file --mime-type`).
+fn mime_line(kind: &str, mime: bool) -> String {
+    if mime {
+        format!("{kind}; charset=binary")
+    } else {
+        kind.to_string()
+    }
+}
+
+/// GNU file appends the major/minor numbers to device nodes.
+fn device_text(path: &Path, kind: &str) -> String {
+    use std::os::unix::fs::MetadataExt;
+    match fs::metadata(path) {
+        Ok(meta) => {
+            let rdev = meta.rdev();
+            // Linux packed encoding of major/minor device numbers.
+            let major = ((rdev >> 8) & 0xfff) | ((rdev >> 32) & !0xfffu64);
+            let minor = (rdev & 0xff) | ((rdev >> 12) & !0xffu64);
+            format!("{kind} ({major}/{minor})")
+        }
+        Err(_) => kind.to_string(),
     }
 }
