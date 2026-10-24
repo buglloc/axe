@@ -12,10 +12,14 @@ use std::process::Command;
 
 use libc::c_ulong;
 
+use super::errno::strerror;
 use super::linux_storage::probe;
 
+mod getopt;
 mod loop_device;
+mod umount;
 
+use getopt::{Applet, Getopt, Item, OptionSpec, Spelling};
 use loop_device::{LoopError, LoopRequest};
 
 const MOUNTINFO: &str = "/proc/self/mountinfo";
@@ -96,258 +100,8 @@ pub fn mount(args: Vec<OsString>) -> i32 {
     }
 }
 
-const UMOUNT_USAGE: &str = "\
-Usage: umount [-hV]
-       umount -a [-d] [-f] [-l] [-n] [-r] [-v] [-t <fstype>]
-       umount [--source] <source> | [--target] <directory>
-       umount <directory> | <source> [-d] [-f] [-l] [-n] [-R] [-r] [-v]
-
-Unmount filesystems.
-
-Options:
- -a, --all           unmount all filesystems (except proc, sysfs, devtmpfs, devpts)
- -A, --all-targets   unmount all mountpoints below the given target
- -d, --detach-loop   accepted for compatibility (loop devices detach automatically)
- -f, --force         force unmount (MNT_FORCE)
- -l, --lazy          detach now, clean up references later (MNT_DETACH)
- -R, --recursive     unmount the target and all mountpoints below it
- -r, --read-only     in case unmounting fails, try to remount read-only
- -t, --types <list>  limit the set of filesystem types
- -n, --no-mtab       accepted for compatibility (no mtab is written)
- -v, --verbose       say what is being done";
-
-/// Filesystems `umount -a` leaves alone, as util-linux does.
-const UMOUNT_SKIP_TYPES: [&str; 5] = ["proc", "sysfs", "devtmpfs", "devpts", "mqueue"];
-
 pub fn umount(args: Vec<OsString>) -> i32 {
-    match run_umount(args) {
-        Ok(()) => 0,
-        Err(failure) => {
-            if !failure.message.is_empty() {
-                eprintln!("umount: {}", failure.message);
-            }
-            failure.code
-        }
-    }
-}
-
-#[derive(Default)]
-struct UmountArgs {
-    all: bool,
-    all_targets: bool,
-    recursive: bool,
-    lazy: bool,
-    force: bool,
-    read_only: bool,
-    verbose: bool,
-    types: Option<String>,
-    targets: Vec<OsString>,
-}
-
-fn run_umount(args: Vec<OsString>) -> Result<(), Failure> {
-    let mut parsed = UmountArgs::default();
-    let mut iter = args.into_iter().skip(1).peekable();
-    while let Some(arg) = iter.next() {
-        let Some(text) = arg.to_str() else {
-            parsed.targets.push(arg);
-            continue;
-        };
-        match text {
-            "-h" | "--help" => {
-                println!("{UMOUNT_USAGE}");
-                return Err(Failure {
-                    code: 0,
-                    message: String::new(),
-                    missing_source: false,
-                });
-            }
-            "-V" | "--version" => {
-                println!("umount from axe {}", env!("CARGO_PKG_VERSION"));
-                return Err(Failure {
-                    code: 0,
-                    message: String::new(),
-                    missing_source: false,
-                });
-            }
-            "-t" | "--types" => {
-                parsed.types = Some(
-                    iter.next()
-                        .map(|value| value.to_string_lossy().into_owned())
-                        .ok_or_else(|| usage("option requires an argument -- 't'"))?,
-                );
-            }
-            "--source" | "--target" | "-d" | "--detach-loop" | "-n" | "--no-mtab" | "--fake" => {}
-            "--all" => parsed.all = true,
-            "--all-targets" => parsed.all_targets = true,
-            "--recursive" => parsed.recursive = true,
-            "--lazy" => parsed.lazy = true,
-            "--force" => parsed.force = true,
-            "--read-only" => parsed.read_only = true,
-            "--verbose" => parsed.verbose = true,
-            value if value.starts_with('-') && value.len() > 1 && !value.starts_with("--") => {
-                for flag in value[1..].chars() {
-                    match flag {
-                        'a' => parsed.all = true,
-                        'A' => parsed.all_targets = true,
-                        'R' => parsed.recursive = true,
-                        'f' => parsed.force = true,
-                        'l' => parsed.lazy = true,
-                        'r' => parsed.read_only = true,
-                        'v' => parsed.verbose = true,
-                        'd' | 'n' | 'q' => {}
-                        other => return Err(bad_usage(format!("invalid option -- '{other}'"))),
-                    }
-                }
-            }
-            _ => parsed.targets.push(arg),
-        }
-    }
-
-    let mut table = mount_table()?;
-    if let Some(types) = &parsed.types
-        && !types.is_empty()
-    {
-        table.retain(|entry| matches_types(types, &entry.fs_type));
-    }
-
-    let mut plans: Vec<Vec<PathBuf>> = Vec::new();
-    if parsed.all || parsed.all_targets {
-        let selected: Vec<PathBuf> = if parsed.all_targets {
-            table
-                .iter()
-                .filter(|entry| {
-                    parsed.targets.is_empty()
-                        || parsed
-                            .targets
-                            .iter()
-                            .any(|target| under_target(&entry.target, Path::new(target)))
-                })
-                .map(|entry| entry.target.clone())
-                .collect()
-        } else {
-            table
-                .iter()
-                .filter(|entry| !UMOUNT_SKIP_TYPES.contains(&entry.fs_type.as_str()))
-                .map(|entry| entry.target.clone())
-                .collect()
-        };
-        // Deepest paths first so submounts detach before their parents.
-        plans.push(sort_deepest_first(selected));
-    } else {
-        if parsed.targets.is_empty() {
-            return Err(usage("one of <directory> or <source> is required"));
-        }
-        for target in &parsed.targets {
-            let entry = resolve_umount_target(&table, target).ok_or_else(|| Failure {
-                code: EXIT_USAGE,
-                message: format!("{}: not mounted.", target.to_string_lossy()),
-                missing_source: false,
-            })?;
-            if parsed.recursive {
-                let nested: Vec<PathBuf> = table
-                    .iter()
-                    .filter(|candidate| under_target(&candidate.target, &entry.target))
-                    .map(|candidate| candidate.target.clone())
-                    .chain(std::iter::once(entry.target.clone()))
-                    .collect();
-                plans.push(sort_deepest_first(nested));
-            } else {
-                plans.push(vec![entry.target.clone()]);
-            }
-        }
-    }
-
-    let mut failed_any = false;
-    for plan in plans {
-        for target in plan {
-            match umount_one(&target, &parsed) {
-                Ok(()) => {
-                    if parsed.verbose {
-                        println!("{} unmounted", target.display());
-                    }
-                }
-                Err(error) => {
-                    eprintln!("umount: {}: {}", target.display(), error);
-                    failed_any = true;
-                }
-            }
-        }
-    }
-    if failed_any {
-        Err(Failure {
-            code: EXIT_USAGE,
-            message: String::new(),
-            missing_source: false,
-        })
-    } else {
-        Ok(())
-    }
-}
-
-fn resolve_umount_target<'a>(table: &'a [MountEntry], spec: &OsStr) -> Option<&'a MountEntry> {
-    let path = Path::new(spec);
-    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    table
-        .iter()
-        .find(|entry| same_path(&entry.target, path))
-        .or_else(|| {
-            table
-                .iter()
-                .find(|entry| same_path(&entry.target, &canonical))
-        })
-        .or_else(|| {
-            // By source: util-linux unmounts the most recently mounted match.
-            table.iter().rev().find(|entry| entry.source == spec)
-        })
-}
-
-fn under_target(path: &Path, target: &Path) -> bool {
-    path.starts_with(target)
-}
-
-fn sort_deepest_first(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
-    paths.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-    paths.dedup();
-    paths
-}
-
-fn umount_one(target: &Path, args: &UmountArgs) -> Result<(), String> {
-    let mut flags = 0;
-    if args.lazy {
-        flags |= libc::MNT_DETACH;
-    }
-    if args.force {
-        flags |= libc::MNT_FORCE;
-    }
-    let path = CString::new(target.as_os_str().as_bytes()).map_err(|error| error.to_string())?;
-    // SAFETY: `path` is a valid NUL-terminated path for the duration of the call.
-    let result = unsafe { libc::umount2(path.as_ptr(), flags) };
-    if result == 0 {
-        return Ok(());
-    }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::EBUSY) && args.read_only {
-        // SAFETY: remounting the same path read-only is a valid mount(2) use.
-        let remount = libc::MS_REMOUNT | libc::MS_RDONLY;
-        let result = unsafe {
-            libc::mount(
-                std::ptr::null(),
-                path.as_ptr(),
-                std::ptr::null(),
-                remount,
-                std::ptr::null(),
-            )
-        };
-        if result == 0 {
-            return Ok(());
-        }
-    }
-    Err(match error.raw_os_error() {
-        Some(libc::EINVAL) => "not mounted.".to_string(),
-        Some(libc::EBUSY) => "target is busy.".to_string(),
-        Some(code) => format!("{} ({code})", error),
-        None => error.to_string(),
-    })
+    umount::run(args)
 }
 
 #[derive(Debug)]
@@ -358,7 +112,6 @@ struct Failure {
     missing_source: bool,
 }
 
-const TRY_HELP: &str = "Try 'mount --help' for more information.";
 const DMESG_HINT: &str =
     "       dmesg(1) may have more information after failed mount system call.";
 
@@ -372,7 +125,7 @@ fn usage(message: impl Into<String>) -> Failure {
 
 /// Command-line errors util-linux follows with its `--help` hint.
 fn bad_usage(message: impl std::fmt::Display) -> Failure {
-    usage(format!("{message}\n{TRY_HELP}"))
+    Applet::Mount.bad_usage(message)
 }
 
 fn failed(message: impl Into<String>) -> Failure {
@@ -458,153 +211,70 @@ struct Args {
     operands: Vec<OsString>,
 }
 
-/// util-linux `mount` long options in its `getopt_long` table order, which
-/// also orders the candidates of an ambiguous abbreviation.
-const LONG_OPTIONS: [&str; 45] = [
-    "all",
-    "fake",
-    "fork",
-    "fstab",
-    "help",
-    "no-mtab",
-    "options",
-    "test-opts",
-    "pass-fd",
-    "read-only",
-    "rw",
-    "read-write",
-    "sloppy",
-    "show-labels",
-    "internal-only",
-    "types",
-    "uuid",
-    "label",
-    "no-canonicalize",
-    "version",
-    "verbose",
-    "bind",
-    "move",
-    "rbind",
-    "make-shared",
-    "make-slave",
-    "make-private",
-    "make-unbindable",
-    "make-rshared",
-    "make-rslave",
-    "make-rprivate",
-    "make-runbindable",
-    "mkdir",
-    "namespace",
-    "map-users",
-    "map-groups",
-    "target",
-    "target-prefix",
-    "source",
-    "options-mode",
-    "options-source",
-    "options-source-force",
-    "onlyonce",
-    "exclusive",
-    "beneath",
+/// The table order also defines ambiguous long-option candidates.
+const OPTIONS: &[OptionSpec] = &[
+    OptionSpec::flag("all", b'a'),
+    OptionSpec::flag("fake", b'f'),
+    OptionSpec::flag("fork", b'F'),
+    OptionSpec::value("fstab", b'T'),
+    OptionSpec::flag("help", b'h'),
+    OptionSpec::flag("no-mtab", b'n'),
+    OptionSpec::value("options", b'o'),
+    OptionSpec::value("test-opts", b'O'),
+    OptionSpec::value("pass-fd", b'p'),
+    OptionSpec::flag("read-only", b'r'),
+    OptionSpec::flag("rw", b'w'),
+    OptionSpec::flag("read-write", 0),
+    OptionSpec::flag("sloppy", b's'),
+    OptionSpec::flag("show-labels", b'l'),
+    OptionSpec::flag("internal-only", b'i'),
+    OptionSpec::value("types", b't'),
+    OptionSpec::value("uuid", b'U'),
+    OptionSpec::value("label", b'L'),
+    OptionSpec::flag("no-canonicalize", b'c'),
+    OptionSpec::flag("version", b'V'),
+    OptionSpec::flag("verbose", b'v'),
+    OptionSpec::flag("bind", b'B'),
+    OptionSpec::flag("move", b'M'),
+    OptionSpec::flag("rbind", b'R'),
+    OptionSpec::flag("make-shared", 0),
+    OptionSpec::flag("make-slave", 0),
+    OptionSpec::flag("make-private", 0),
+    OptionSpec::flag("make-unbindable", 0),
+    OptionSpec::flag("make-rshared", 0),
+    OptionSpec::flag("make-rslave", 0),
+    OptionSpec::flag("make-rprivate", 0),
+    OptionSpec::flag("make-runbindable", 0),
+    OptionSpec::optional("mkdir", b'm'),
+    OptionSpec::value("namespace", b'N'),
+    OptionSpec::value("map-users", 0),
+    OptionSpec::value("map-groups", 0),
+    OptionSpec::value("target", 0),
+    OptionSpec::value("target-prefix", 0),
+    OptionSpec::value("source", 0),
+    OptionSpec::value("options-mode", 0),
+    OptionSpec::value("options-source", 0),
+    OptionSpec::flag("options-source-force", 0),
+    OptionSpec::flag("onlyonce", 0),
+    OptionSpec::flag("exclusive", 0),
+    OptionSpec::flag("beneath", 0),
 ];
-
-/// Resolves a long option name, accepting unambiguous abbreviations like `getopt_long`.
-fn long_option(name: &str) -> Result<&'static str, Failure> {
-    if let Some(exact) = LONG_OPTIONS.iter().find(|option| **option == name) {
-        return Ok(exact);
-    }
-    let candidates: Vec<&str> = LONG_OPTIONS
-        .iter()
-        .copied()
-        .filter(|option| !name.is_empty() && option.starts_with(name))
-        .collect();
-    match candidates.as_slice() {
-        [single] => Ok(single),
-        [] => Err(bad_usage(format!("unrecognized option '--{name}'"))),
-        _ => Err(bad_usage(format!(
-            "option '--{name}' is ambiguous; possibilities:{}",
-            candidates
-                .iter()
-                .map(|option| format!(" '--{option}'"))
-                .collect::<String>()
-        ))),
-    }
-}
 
 impl Args {
     fn parse(args: Vec<OsString>) -> Result<Parsed, Failure> {
         let mut parsed = Self::default();
-        let mut iter = args.into_iter().skip(1);
-        while let Some(arg) = iter.next() {
-            let bytes = arg.as_bytes();
-            if bytes == b"--" {
-                parsed.operands.extend(iter.by_ref());
-                break;
-            }
-            let flow = if let Some(long) = bytes.strip_prefix(b"--") {
-                let long = std::str::from_utf8(long)
-                    .map_err(|_| bad_usage(format!("unrecognized option '{}'", arg.display())))?;
-                let (name, inline) = match long.split_once('=') {
-                    Some((name, value)) => (name, Some(OsString::from(value))),
-                    None => (long, None),
-                };
-                let name = long_option(name)?;
-                if name == "mkdir" {
-                    parsed.mkdir = Some(mkdir_mode(inline.as_deref())?);
-                    continue;
+        let mut options = Getopt::new(args, Applet::Mount, OPTIONS);
+        while let Some(item) = options.next()? {
+            match item {
+                Item::Operand(operand) => parsed.operands.push(operand),
+                Item::Option("mkdir", value, _) => {
+                    parsed.mkdir = Some(mkdir_mode(value.as_deref())?);
                 }
-                let value = if takes_value(name) {
-                    match inline {
-                        Some(value) => Some(value),
-                        None => Some(iter.next().ok_or_else(|| {
-                            bad_usage(format!("option '--{name}' requires an argument"))
-                        })?),
-                    }
-                } else if inline.is_some() {
-                    return Err(bad_usage(format!(
-                        "option '--{name}' doesn't allow an argument"
-                    )));
-                } else {
-                    None
-                };
-                parsed.apply(name, value, &format!("--{name}"))?
-            } else if bytes.len() > 1 && bytes[0] == b'-' {
-                let cluster = std::str::from_utf8(&bytes[1..])
-                    .map_err(|_| bad_usage(format!("invalid option -- '{}'", arg.display())))?;
-                let mut flow = None;
-                for (index, flag) in cluster.char_indices() {
-                    let rest = &cluster[index + flag.len_utf8()..];
-                    if flag == 'm' {
-                        parsed.mkdir =
-                            Some(mkdir_mode((!rest.is_empty()).then(|| OsStr::new(rest)))?);
-                        break;
-                    }
-                    let name = short_name(flag)
-                        .ok_or_else(|| bad_usage(format!("invalid option -- '{flag}'")))?;
-                    let value = if takes_value(name) {
-                        Some(if rest.is_empty() {
-                            iter.next().ok_or_else(|| {
-                                bad_usage(format!("option requires an argument -- '{flag}'"))
-                            })?
-                        } else {
-                            OsString::from(rest)
-                        })
-                    } else {
-                        None
-                    };
-                    let consumed = value.is_some();
-                    flow = parsed.apply(name, value, &format!("-{flag}"))?;
-                    if flow.is_some() || consumed {
-                        break;
+                Item::Option(name, value, spelling) => {
+                    if let Some(flow) = parsed.apply(name, value, spelling)? {
+                        return Ok(flow);
                     }
                 }
-                flow
-            } else {
-                parsed.operands.push(arg);
-                None
-            };
-            if let Some(flow) = flow {
-                return Ok(flow);
             }
         }
         Ok(Parsed::Run(parsed))
@@ -615,7 +285,7 @@ impl Args {
         &mut self,
         name: &str,
         value: Option<OsString>,
-        spelled: &str,
+        spelling: Spelling,
     ) -> Result<Option<Parsed>, Failure> {
         let text = |value: Option<OsString>| {
             value.unwrap_or_default().into_string().map_err(|value| {
@@ -659,62 +329,17 @@ impl Args {
             "target" => self.target = value,
             "help" => return Ok(Some(Parsed::Help)),
             "version" => return Ok(Some(Parsed::Version)),
-            _ => return Err(usage(format!("unsupported option '{spelled}'"))),
+            _ => {
+                return Err(usage(format!(
+                    "unsupported option '{}'",
+                    spelling.display(name)
+                )));
+            }
         }
         Ok(None)
     }
 }
 
-fn short_name(flag: char) -> Option<&'static str> {
-    Some(match flag {
-        'a' => "all",
-        'f' => "fake",
-        'v' => "verbose",
-        'i' => "internal-only",
-        's' => "sloppy",
-        'n' => "no-mtab",
-        'c' => "no-canonicalize",
-        'l' => "show-labels",
-        'r' => "read-only",
-        'w' => "rw",
-        'B' => "bind",
-        'R' => "rbind",
-        'M' => "move",
-        't' => "types",
-        'o' => "options",
-        'L' => "label",
-        'U' => "uuid",
-        'h' => "help",
-        'V' => "version",
-        'F' => "fork",
-        'T' => "fstab",
-        'O' => "test-opts",
-        'N' => "namespace",
-        'p' => "pass-fd",
-        _ => return None,
-    })
-}
-
-fn takes_value(name: &str) -> bool {
-    matches!(
-        name,
-        "types"
-            | "options"
-            | "label"
-            | "uuid"
-            | "source"
-            | "target"
-            | "fstab"
-            | "test-opts"
-            | "namespace"
-            | "pass-fd"
-            | "target-prefix"
-            | "options-mode"
-            | "options-source"
-            | "map-users"
-            | "map-groups"
-    )
-}
 
 fn mkdir_mode(value: Option<&OsStr>) -> Result<u32, Failure> {
     let Some(value) = value else {
@@ -1850,14 +1475,6 @@ fn fs_context_error(context: &OwnedFd) -> Option<String> {
     last
 }
 
-/// `io::Error` text without the trailing ` (os error N)`.
-fn strerror(error: &io::Error) -> String {
-    let text = error.to_string();
-    match text.find(" (os error ") {
-        Some(index) => text[..index].to_owned(),
-        None => text,
-    }
-}
 
 fn mount_all(args: &Args) -> Result<i32, Failure> {
     let entries = read_fstab(FSTAB)?;
@@ -2014,7 +1631,16 @@ fn list(args: &Args) -> Result<(), Failure> {
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct MountDevice {
+    major: u32,
+    minor: u32,
+}
+
 struct MountEntry {
+    id: u64,
+    parent_id: u64,
+    device: MountDevice,
     source: OsString,
     target: PathBuf,
     fs_type: String,
@@ -2081,6 +1707,15 @@ fn parse_mountinfo_line(line: &[u8]) -> Option<MountEntry> {
         return None;
     }
     Some(MountEntry {
+        id: std::str::from_utf8(left[0]).ok()?.parse().ok()?,
+        parent_id: std::str::from_utf8(left[1]).ok()?.parse().ok()?,
+        device: {
+            let (major, minor) = std::str::from_utf8(left[2]).ok()?.split_once(':')?;
+            MountDevice {
+                major: major.parse().ok()?,
+                minor: minor.parse().ok()?,
+            }
+        },
         source: OsString::from_vec(unescape(right[1])),
         target: PathBuf::from(OsString::from_vec(unescape(left[4]))),
         fs_type: String::from_utf8_lossy(&unescape(right[0])).into_owned(),
@@ -2284,6 +1919,9 @@ mod tests {
 
     #[test]
     fn long_option_abbreviations_follow_getopt() {
+        let long_option = |name| {
+            getopt::long_option(OPTIONS, Applet::Mount, name).map(|option| option.name)
+        };
         assert_eq!(long_option("ty").unwrap(), "types");
         assert_eq!(long_option("rw").unwrap(), "rw");
         let ambiguous = long_option("t").unwrap_err().message;
