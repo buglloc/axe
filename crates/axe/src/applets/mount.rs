@@ -986,9 +986,10 @@ fn filesystem_types(
     // answer for each candidate type decides the error.
     let path = Path::new(source);
     if let Ok(Some(signature)) = probe(path)
-        && allowed(signature.fs_type)
+        && let Some(fs_type) = signature.fs_type
+        && allowed(fs_type)
     {
-        return Ok(vec![signature.fs_type.to_owned()]);
+        return Ok(vec![fs_type.to_owned()]);
     }
     let filesystems = fs::read_to_string(FILESYSTEMS)
         .map_err(|error| failed(format!("{FILESYSTEMS}: {}", strerror(&error))))?;
