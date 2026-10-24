@@ -1,0 +1,940 @@
+--- a/src/cmd/main.go
++++ b/src/cmd/main.go
+@@ -3,13 +3,9 @@
+ import (
+ 	"context"
+ 	"embed"
+-	"encoding/json"
+ 	"fmt"
+-	"io"
+ 	"log/slog"
+-	"net/http"
+ 	"os"
+-	"time"
+ 
+ 	"github.com/yorukot/superfile/src/internal/common"
+ 	"github.com/yorukot/superfile/src/pkg/utils"
+@@ -17,7 +13,6 @@
+ 	tea "charm.land/bubbletea/v2"
+ 	"charm.land/lipgloss/v2"
+ 	"github.com/urfave/cli/v3"
+-	"golang.org/x/mod/semver"
+ 
+ 	variable "github.com/yorukot/superfile/src/config"
+ 	internal "github.com/yorukot/superfile/src/internal"
+@@ -28,14 +23,17 @@
+ 	// Enable custom colored help output
+ 	cli.HelpPrinter = CustomHelpPrinter //nolint:reassign // Intentionally reassigning to customize help output
+ 
+-	// Before we open log file, set all "non debug" logs to stdout
+-	utils.SetRootLoggerToStdout(false)
++	slog.SetDefault(slog.New(slog.NewTextHandler(
++		os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
+ 
+ 	common.LoadInitialPrerenderedVariables()
+-	common.LoadAllDefaultConfig(content)
++
++	if err := common.LoadConfigStringGlobals(content); err != nil {
++		utils.PrintfAndExitf("Error loading embedded configuration: %v", err)
++	}
+ 
+ 	app := &cli.Command{
+-		Name:        "superfile",
++		Name:        "spf",
+ 		Version:     variable.CurrentVersion + variable.PreReleaseSuffix,
+ 		Description: "Pretty fancy and modern terminal file manager ",
+ 		ArgsUsage:   "[PATH]...",
+@@ -146,20 +144,10 @@
+ 		firstPanelPaths = c.Args().Slice()
+ 	}
+ 
+-	InitConfigFile()
+-
+-	firstUse := checkFirstUse()
+-
+-	p := tea.NewProgram(internal.InitialModel(firstPanelPaths, firstUse))
++	p := tea.NewProgram(internal.InitialModel(firstPanelPaths, false))
+ 	if _, err := p.Run(); err != nil {
+ 		utils.PrintfAndExitf("Alas, there's been an error: %v", err)
+ 	}
+-
+-	// This must be after calling internal.InitialModel()
+-	// so that we know `common.Config` is loaded
+-	// Should not be a goroutine, Otherwise the main
+-	// goroutine will exit first, and this will not be able to finish
+-	CheckForUpdates()
+ 
+ 	if variable.PrintLastDir {
+ 		fmt.Println(variable.LastDir)
+@@ -167,160 +155,3 @@
+ 
+ 	return nil
+ }
+-
+-// Create proper directories for storing configuration and write default
+-// configurations to Config and Hotkeys toml
+-func InitConfigFile() {
+-	// Create directories
+-	if err := utils.CreateDirectories(
+-		variable.SuperFileMainDir,
+-		variable.SuperFileDataDir,
+-		variable.SuperFileStateDir,
+-		variable.ThemeFolder,
+-	); err != nil {
+-		utils.PrintlnAndExit("Error creating directories:", err)
+-	}
+-
+-	// Create files
+-	if err := utils.CreateFiles(
+-		variable.ToggleDotFile,
+-		variable.LogFile,
+-		variable.ThemeFileVersion,
+-		variable.ToggleFooter,
+-	); err != nil {
+-		utils.PrintlnAndExit("Error creating files:", err)
+-	}
+-
+-	// Write config file
+-	if err := writeConfigFile(variable.ConfigFile, common.ConfigTomlString); err != nil {
+-		utils.PrintlnAndExit("Error writing config file:", err)
+-	}
+-
+-	if err := writeConfigFile(variable.HotkeysFile, common.HotkeysTomlString); err != nil {
+-		utils.PrintlnAndExit("Error writing config file:", err)
+-	}
+-}
+-
+-// Check if is the first time initializing the app, if it is create
+-// use check file
+-func checkFirstUse() bool {
+-	file := variable.FirstUseCheck
+-	firstUse := false
+-	if _, err := os.Stat(file); os.IsNotExist(err) {
+-		firstUse = true
+-		if err = os.WriteFile(file, nil, utils.ConfigFilePerm); err != nil {
+-			utils.PrintfAndExitf("Failed to create file: %v", err)
+-		}
+-	}
+-	return firstUse
+-}
+-
+-// Write data to the path file if it does not exists
+-func writeConfigFile(path, data string) error {
+-	if _, err := os.Stat(path); os.IsNotExist(err) {
+-		if err = os.WriteFile(path, []byte(data), utils.ConfigFilePerm); err != nil {
+-			return fmt.Errorf("failed to write config file %s: %w", path, err)
+-		}
+-	}
+-	return nil
+-}
+-
+-func writeLastCheckTime(t time.Time) {
+-	err := os.WriteFile(variable.LastCheckVersion, []byte(t.Format(time.RFC3339)), utils.ConfigFilePerm)
+-	if err != nil {
+-		slog.Error("Error writing LastCheckVersion file", "error", err)
+-	}
+-}
+-
+-// Check for the need of updates if AutoCheckUpdate is on, if its the first time
+-// that version is checked or if has more than 24h since the last version check,
+-// look into the repo if  there's any more recent version
+-func CheckForUpdates() {
+-	if !common.Config.AutoCheckUpdate {
+-		return
+-	}
+-
+-	currentTime := time.Now().UTC()
+-	lastCheckTime := readLastCheckTime()
+-
+-	if !shouldCheckForUpdate(currentTime, lastCheckTime) {
+-		return
+-	}
+-
+-	defer writeLastCheckTime(currentTime)
+-	checkAndNotifyUpdate()
+-}
+-
+-// Default to zero time if file doesn't exist, is empty, or has errors
+-func readLastCheckTime() time.Time {
+-	content, err := os.ReadFile(variable.LastCheckVersion)
+-	if err != nil || len(content) == 0 {
+-		return time.Time{}
+-	}
+-
+-	parsedTime, parseErr := time.Parse(time.RFC3339, string(content))
+-	if parseErr != nil {
+-		slog.Error("Failed to parse LastCheckVersion timestamp", "error", parseErr)
+-		return time.Time{}
+-	}
+-
+-	return parsedTime.UTC()
+-}
+-
+-func shouldCheckForUpdate(now, last time.Time) bool {
+-	return last.IsZero() || now.Sub(last) >= 24*time.Hour
+-}
+-
+-func checkAndNotifyUpdate() {
+-	ctx, cancel := context.WithTimeout(context.Background(), common.DefaultCLIContextTimeout)
+-	defer cancel()
+-
+-	resp, err := fetchLatestRelease(ctx)
+-	if err != nil {
+-		slog.Error("Failed to fetch update", "error", err)
+-		return
+-	}
+-	defer resp.Body.Close()
+-
+-	body, err := io.ReadAll(resp.Body)
+-	if err != nil {
+-		slog.Error("Failed to read update response", "error", err)
+-		return
+-	}
+-
+-	type GitHubRelease struct {
+-		TagName string `json:"tag_name"`
+-	}
+-
+-	var release GitHubRelease
+-	if err := json.Unmarshal(body, &release); err != nil {
+-		slog.Error("Failed to parse GitHub JSON", "error", err)
+-		return
+-	}
+-
+-	if semver.Compare(release.TagName, variable.CurrentVersion) > 0 {
+-		notifyUpdateAvailable(release.TagName)
+-	}
+-}
+-
+-func fetchLatestRelease(ctx context.Context) (*http.Response, error) {
+-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, variable.LatestVersionURL, nil)
+-	if err != nil {
+-		return nil, err
+-	}
+-	return (&http.Client{}).Do(req)
+-}
+-
+-func notifyUpdateAvailable(latest string) {
+-	fmt.Println(
+-		lipgloss.NewStyle().Foreground(lipgloss.Color("#FF69E1")).Render("┃ ") +
+-			lipgloss.NewStyle().Foreground(lipgloss.Color("#FFBA52")).Bold(true).Render("A new version ") +
+-			lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFF2")).Bold(true).Italic(true).Render(latest) +
+-			lipgloss.NewStyle().Foreground(lipgloss.Color("#FFBA52")).Bold(true).Render(" is available."),
+-	)
+-	fmt.Printf(
+-		lipgloss.NewStyle().Foreground(lipgloss.Color("#FF69E1")).Render("┃ ")+"Please update.\n┏\n\n      => %s\n\n",
+-		variable.LatestVersionGithub,
+-	)
+-	fmt.Println("                                                               ┛")
+-}
+--- a/src/config/fixed_variable.go
++++ b/src/config/fixed_variable.go
+@@ -17,16 +17,11 @@
+ 	// Set this to "" for production releases
+ 	PreReleaseSuffix = ""
+ 
+-	// This gives most recent non-prerelease, non-draft release
+-	LatestVersionURL    = "https://api.github.com/repos/yorukot/superfile/releases/latest"
+-	LatestVersionGithub = "github.com/yorukot/superfile/releases/latest"
+-
+ 	// This will not break in windows. This is a relative path for Embed FS. It uses "/" only
+-	EmbedConfigDir           = "src/superfile_config"
+-	EmbedConfigFile          = EmbedConfigDir + "/config.toml"
+-	EmbedHotkeysFile         = EmbedConfigDir + "/hotkeys.toml"
+-	EmbedThemeDir            = EmbedConfigDir + "/theme"
+-	EmbedThemeCatppuccinFile = EmbedThemeDir + "/catppuccin-mocha.toml"
++	EmbedConfigDir   = "src/superfile_config"
++	EmbedConfigFile  = EmbedConfigDir + "/config.toml"
++	EmbedHotkeysFile = EmbedConfigDir + "/hotkeys.toml"
++	EmbedThemeDir    = EmbedConfigDir + "/theme"
+ )
+ 
+ var (
+@@ -40,12 +35,9 @@
+ 	ThemeFolder = filepath.Join(SuperFileMainDir, "theme")
+ 
+ 	// DataDir files
+-	LastCheckVersion = filepath.Join(SuperFileDataDir, "lastCheckVersion")
+-	ThemeFileVersion = filepath.Join(SuperFileDataDir, "themeFileVersion")
+-	FirstUseCheck    = filepath.Join(SuperFileDataDir, "firstUseCheck")
+-	PinnedFile       = filepath.Join(SuperFileDataDir, "pinned.json")
+-	ToggleDotFile    = filepath.Join(SuperFileDataDir, "toggleDotFile")
+-	ToggleFooter     = filepath.Join(SuperFileDataDir, "toggleFooter")
++	PinnedFile    = filepath.Join(SuperFileDataDir, "pinned.json")
++	ToggleDotFile = filepath.Join(SuperFileDataDir, "toggleDotFile")
++	ToggleFooter  = filepath.Join(SuperFileDataDir, "toggleFooter")
+ 
+ 	// StateDir files
+ 	LogFile     = filepath.Join(SuperFileStateDir, "superfile.log")
+--- a/src/internal/common/config_type.go
++++ b/src/internal/common/config_type.go
+@@ -71,7 +71,6 @@
+ 	// The table (map) for editor by file extension
+ 	OpenWith map[string]string `toml:"open_with" comment:"\nCustom open commands by file extension."`
+ 
+-	AutoCheckUpdate        bool   `toml:"auto_check_update" comment:"\nAuto check for update"`
+ 	CdOnQuit               bool   `toml:"cd_on_quit" comment:"\nCd on quit (For more details, please check out https://superfile.dev/configure/superfile-config/#cd_on_quit)"`
+ 	DefaultOpenFilePreview bool   `toml:"default_open_file_preview" comment:"\nWhether to open file preview automatically every time superfile is opened."`
+ 	ShowImagePreview       bool   `toml:"show_image_preview" comment:"\nWhether to show image preview."`
+--- a/src/internal/common/default_config.go
++++ b/src/internal/common/default_config.go
+@@ -2,9 +2,8 @@
+ 
+ // Variables for holding default configurations of each settings
+ var (
+-	HotkeysTomlString  string
+-	ConfigTomlString   string
+-	DefaultThemeString string
++	HotkeysTomlString string
++	ConfigTomlString  string
+ )
+ 
+ var Theme ThemeType
+--- a/src/internal/common/load_config.go
++++ b/src/internal/common/load_config.go
+@@ -18,6 +18,8 @@
+ 	variable "github.com/yorukot/superfile/src/config"
+ 	"github.com/yorukot/superfile/src/config/icon"
+ )
++
++var embeddedConfig embed.FS
+ 
+ // Load configurations from the configuration file. Compares the content
+ // with the default values and modify the config file to include default configs
+@@ -185,16 +187,21 @@
+ 	}
+ }
+ 
+-// LoadThemeFile : Load configurations from theme file into &theme
+-// set default values if we cant read user's theme file
++// LoadThemeFile prefers user themes and otherwise reads the selected embedded theme.
+ func LoadThemeFile() {
+ 	themeFile := filepath.Join(variable.ThemeFolder, Config.Theme+".toml")
+-	if err := LoadUserTheme(themeFile, &Theme); err != nil {
+-		slog.Error("Could not read user's theme file. Falling back to default theme", "error", err)
+-		err = toml.Unmarshal([]byte(DefaultThemeString), &Theme)
+-		if err != nil {
+-			utils.PrintfAndExitf("Unexpected error while reading default theme file : %v. Exiting...", err)
+-		}
++	err := LoadUserTheme(themeFile, &Theme)
++	if errors.Is(err, os.ErrNotExist) {
++		data, readErr := embeddedConfig.ReadFile(variable.EmbedThemeDir + "/" + Config.Theme + ".toml")
++		if readErr != nil {
++			utils.PrintfAndExitf("Error loading theme %q: %v", Config.Theme, readErr)
++		}
++
++		err = toml.Unmarshal(data, &Theme)
++	}
++
++	if err != nil {
++		utils.PrintfAndExitf("Error loading theme %q: %v", Config.Theme, err)
+ 	}
+ 
+ 	// Validations
+@@ -219,46 +226,9 @@
+ 	return nil
+ }
+ 
+-// LoadAllDefaultConfig : Load all default configurations from embedded superfile_config folder into global
+-// configurations variables and write theme files if its needed.
+-func LoadAllDefaultConfig(content embed.FS) {
+-	err := LoadConfigStringGlobals(content)
+-	if err != nil {
+-		slog.Error("Could not load default config from embed FS", "error", err)
+-		return
+-	}
+-
+-	currentThemeVersion, err := os.ReadFile(variable.ThemeFileVersion)
+-	if err != nil && !os.IsNotExist(err) {
+-		slog.Error("Unexpected error reading from file:", "error", err)
+-		return
+-	}
+-
+-	if string(currentThemeVersion) == variable.CurrentVersion {
+-		// We don't need to update themes as its already up to date
+-		return
+-	}
+-
+-	// Write theme files to theme directory
+-	err = WriteThemeFiles(content)
+-	if err != nil {
+-		slog.Error("Error while writing default theme directories", "error", err)
+-		return
+-	}
+-
+-	// Prevent failure for first time app run by making sure parent directories exists
+-	if err = os.MkdirAll(filepath.Dir(variable.ThemeFileVersion), utils.ConfigDirPerm); err != nil {
+-		slog.Error("Error creating theme file parent directory", "error", err)
+-		return
+-	}
+-
+-	err = os.WriteFile(variable.ThemeFileVersion, []byte(variable.CurrentVersion), utils.ConfigFilePerm)
+-	if err != nil {
+-		slog.Error("Error writing theme file version", "error", err)
+-	}
+-}
+-
+ func LoadConfigStringGlobals(content embed.FS) error {
++	embeddedConfig = content
++
+ 	hotkeyData, err := content.ReadFile(variable.EmbedHotkeysFile)
+ 	if err != nil {
+ 		return err
+@@ -271,53 +241,6 @@
+ 	}
+ 	ConfigTomlString = string(configData)
+ 
+-	themeData, err := content.ReadFile(variable.EmbedThemeCatppuccinFile)
+-	if err != nil {
+-		return err
+-	}
+-	DefaultThemeString = string(themeData)
+-	return nil
+-}
+-
+-func WriteThemeFiles(content embed.FS) error {
+-	_, err := os.Stat(variable.ThemeFolder)
+-
+-	if os.IsNotExist(err) {
+-		if err = os.MkdirAll(variable.ThemeFolder, utils.ConfigDirPerm); err != nil {
+-			slog.Error("Error creating theme directory", "error", err)
+-			return err
+-		}
+-	}
+-
+-	files, err := content.ReadDir(variable.EmbedThemeDir)
+-	if err != nil {
+-		slog.Error("Error reading theme directory from embed", "error", err)
+-		return err
+-	}
+-
+-	for _, file := range files {
+-		if file.IsDir() {
+-			continue
+-		}
+-		// This will not break in windows. This is a relative path for Embed FS. It uses "/" only
+-		src, err := content.ReadFile(variable.EmbedThemeDir + "/" + file.Name())
+-		if err != nil {
+-			slog.Error("Error reading theme file from embed", "error", err)
+-			return err
+-		}
+-
+-		curThemeFile, err := os.Create(filepath.Join(variable.ThemeFolder, file.Name()))
+-		if err != nil {
+-			slog.Error("Error creating theme file from embed", "error", err)
+-			return err
+-		}
+-		defer curThemeFile.Close()
+-		_, err = curThemeFile.Write(src)
+-		if err != nil {
+-			slog.Error("Error writing theme file from embed", "error", err)
+-			return err
+-		}
+-	}
+ 	return nil
+ }
+ 
+--- a/src/internal/config_function.go
++++ b/src/internal/config_function.go
+@@ -30,24 +30,26 @@
+ // This is the only usecase of named returns, distinguish between multiple return values
+ func initialConfig(firstPanelPaths []string) (toggleDotFile bool, //nolint: nonamedreturns // See above
+ 	toggleFooter bool, zClient *zoxidelib.Client) {
+-	// Open log stream
+-	file, err := os.OpenFile(variable.LogFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, utils.LogFilePerm)
+-
+-	// TODO : This could be improved if we want to make superfile more resilient to errors
+-	// For example if the log file directories have access issues.
+-	// we could pass a dummy object to log.SetOutput() and the app would still function.
+-	if err != nil {
+-		utils.PrintfAndExitf("Error while opening superfile.log file : %v", err)
+-	}
+ 	common.LoadConfigFile()
+ 
+-	logLevel := slog.LevelInfo
++	output := os.Stderr
++	logLevel := slog.LevelWarn
+ 	if common.Config.Debug {
++		if err := utils.CreateDirectories(variable.SuperFileStateDir); err != nil {
++			utils.PrintfAndExitf("Error creating debug log directory: %v", err)
++		}
++
++		file, err := os.OpenFile(variable.LogFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, utils.LogFilePerm)
++		if err != nil {
++			utils.PrintfAndExitf("Error opening debug log: %v", err)
++		}
++
++		output = file
+ 		logLevel = slog.LevelDebug
+ 	}
+ 
+ 	slog.SetDefault(slog.New(slog.NewTextHandler(
+-		file, &slog.HandlerOptions{Level: logLevel})))
++		output, &slog.HandlerOptions{Level: logLevel})))
+ 
+ 	printRuntimeInfo()
+ 
+@@ -63,6 +65,7 @@
+ 	// TODO: Make sure to clean it up. Via et.Close()
+ 	// Note: All the tool we use to interact with OS, should be abstracted behind a struc
+ 	// Have exiftool manager, Zoxide Manager, OS Manager, Xtractor, Zipper, Command Executor
++	var err error
+ 	if common.Config.Metadata {
+ 		et, err = exiftool.NewExiftool()
+ 		if err != nil {
+--- a/src/internal/default_config.go
++++ b/src/internal/default_config.go
+@@ -12,7 +12,6 @@
+ 	"github.com/yorukot/superfile/src/internal/ui/processbar"
+ 	"github.com/yorukot/superfile/src/internal/ui/sidebar"
+ 
+-	"github.com/yorukot/superfile/src/internal/common"
+ 	"github.com/yorukot/superfile/src/internal/ui/prompt"
+ 	zoxideui "github.com/yorukot/superfile/src/internal/ui/zoxide"
+ )
+@@ -42,6 +41,6 @@
+ 		modelQuitState:  notQuitting,
+ 		toggleFooter:    toggleFooter,
+ 		firstUse:        firstUse,
+-		hasTrash:        common.InitTrash(),
++		hasTrash:        true,
+ 	}
+ }
+--- a/src/internal/handle_file_operations.go
++++ b/src/internal/handle_file_operations.go
+@@ -218,6 +218,10 @@
+ 	if (panel.PanelMode == filepanel.SelectMode && panel.SelectedCount() == 0) ||
+ 		(panel.PanelMode == filepanel.BrowserMode && panel.Empty()) {
+ 		return nil
++	}
++
++	if !deletePermanent && !isExternalDiskPath(panel.Location) {
++		m.hasTrash = common.InitTrash()
+ 	}
+ 
+ 	reqID := m.nextIoReqCnt()
+--- a/src/internal/model.go
++++ b/src/internal/model.go
+@@ -613,6 +613,12 @@
+ 	variable.SetLastDir(currentDir)
+ 
+ 	if cdOnQuit {
++		if err := utils.CreateDirectories(variable.SuperFileStateDir); err != nil {
++			slog.Error("Error creating lastdir directory", "error", err)
++
++			m.modelQuitState = quitDone
++			return
++		}
+ 		// escape single quote
+ 		currentDir = strings.ReplaceAll(currentDir, "'", "'\\''")
+ 		err := os.WriteFile(variable.LastDirFile, []byte("cd '"+currentDir+"'"), utils.ConfigFilePerm)
+--- a/src/internal/ui/preview/model.go
++++ b/src/internal/ui/preview/model.go
+@@ -1,8 +1,6 @@
+ package preview
+ 
+ import (
+-	"log/slog"
+-
+ 	"github.com/yorukot/superfile/src/internal/common"
+ 
+ 	filepreview "github.com/yorukot/superfile/src/pkg/file_preview"
+@@ -25,11 +23,6 @@
+ }
+ 
+ func New() Model {
+-	generator, err := filepreview.NewThumbnailGenerator()
+-	if err != nil {
+-		slog.Error("Could not NewThumbnailGenerator object", "error", err)
+-	}
+-
+ 	return Model{
+ 		open: common.Config.DefaultOpenFilePreview,
+ 		// TODO: This causes unnecessary terminal cell size detection
+@@ -41,7 +34,7 @@
+ 		// Some of these processes are IO operations so maybe it should
+ 		// be done via an Init() function
+ 		imagePreviewer:     filepreview.NewImagePreviewer(),
+-		thumbnailGenerator: generator,
++		thumbnailGenerator: filepreview.NewThumbnailGenerator(),
+ 		// TODO:  This is an IO operation, move to async ?
+ 		batCmd: checkBatCmd(),
+ 	}
+--- a/src/internal/ui/preview/render.go
++++ b/src/internal/ui/preview/render.go
+@@ -201,7 +201,8 @@
+ 		return renderDirectoryPreview(r, itemPath, contentHeight), kittyClear
+ 	}
+ 
+-	if m.thumbnailGenerator != nil && m.thumbnailGenerator.SupportsExt(ext) {
++	if m.open && common.Config.ShowImagePreview &&
++		m.thumbnailGenerator != nil && m.thumbnailGenerator.SupportsExt(ext) {
+ 		thumbnailPath, err := m.thumbnailGenerator.GetThumbnailOrGenerate(itemPath)
+ 		if err != nil {
+ 			slog.Error("Error generating thumbnail", "error", err)
+--- a/src/internal/ui/sidebar/pinned.go
++++ b/src/internal/ui/sidebar/pinned.go
+@@ -15,10 +15,6 @@
+ }
+ 
+ func NewPinnedFileManager(filePath string) PinnedManager {
+-	if err := utils.InitJSONFile(filePath); err != nil {
+-		slog.Error("Error initializing pinned JSON file", "error", err)
+-	}
+-
+ 	return PinnedManager{
+ 		filePath: filePath,
+ 	}
+@@ -30,7 +26,9 @@
+ 
+ 	jsonData, err := os.ReadFile(mgr.filePath)
+ 	if err != nil {
+-		slog.Error("Error reading pinned directories file", "error", err)
++		if !os.IsNotExist(err) {
++			slog.Error("Error reading pinned directories file", "error", err)
++		}
+ 		return directories
+ 	}
+ 
+@@ -51,6 +49,10 @@
+ 	data, err := json.Marshal(dirs)
+ 	if err != nil {
+ 		return fmt.Errorf("error marshaling pinned directories: %w", err)
++	}
++
++	if err := os.MkdirAll(filepath.Dir(mgr.filePath), utils.ConfigDirPerm); err != nil {
++		return fmt.Errorf("error creating pinned directories parent: %w", err)
+ 	}
+ 
+ 	if err := os.WriteFile(mgr.filePath, data, utils.ConfigFilePerm); err != nil {
+@@ -87,7 +89,7 @@
+ 	return nil
+ }
+ 
+-// Clean removes non-existing directories and optionally saves the updated list
++// Clean filters non-existing directories without changing the saved list.
+ func (mgr *PinnedManager) Clean(dirs []directory) []directory {
+ 	cleanedDirs := make([]directory, 0, len(dirs))
+ 	for _, dir := range dirs {
+@@ -98,13 +100,5 @@
+ 		}
+ 	}
+ 
+-	if len(cleanedDirs) == len(dirs) {
+-		return cleanedDirs
+-	}
+-
+-	if err := mgr.Save(cleanedDirs); err != nil {
+-		slog.Error("error saving pinned directories", "error", err)
+-	}
+-
+ 	return cleanedDirs
+ }
+--- a/src/internal/ui/sidebar/pinned_test.go
++++ b/src/internal/ui/sidebar/pinned_test.go
+@@ -96,6 +96,30 @@
+ 			assert.Equal(t, tt.expected, tt.pinnedMgr.Load())
+ 		})
+ 	}
++}
++
++func TestPinnedManagerLoadDoesNotWrite(t *testing.T) {
++	root := t.TempDir()
++	path := filepath.Join(root, "data", "pinned.json")
++	manager := NewPinnedFileManager(path)
++	assert.Empty(t, manager.Load())
++
++	_, err := os.Stat(filepath.Dir(path))
++	assert.True(t, os.IsNotExist(err))
++
++	dirs := []directory{
++		{Location: root, Name: "existing"},
++		{Location: filepath.Join(root, "missing"), Name: "missing"},
++	}
++	require.NoError(t, manager.Save(dirs))
++
++	before, err := os.ReadFile(path)
++	require.NoError(t, err)
++	assert.Equal(t, dirs[:1], manager.Load())
++
++	after, err := os.ReadFile(path)
++	require.NoError(t, err)
++	assert.Equal(t, before, after)
+ }
+ 
+ func Test_Save(t *testing.T) {
+@@ -249,12 +273,12 @@
+ 		{
+ 			name:      "Some Directories Exist",
+ 			pinnedMgr: PinnedManager{filePath: pinnedFile},
+-			modified:  true,
++			modified:  false,
+ 			expected:  cleanDirs,
+ 			argDirs:   badDirs,
+ 		},
+ 		{
+-			name:      "Save Fails",
++			name:      "Directory Path",
+ 			pinnedMgr: PinnedManager{filePath: pinnedDir},
+ 			modified:  false,
+ 			expected:  cleanDirs,
+--- a/src/pkg/file_preview/thumbnail_generator.go
++++ b/src/pkg/file_preview/thumbnail_generator.go
+@@ -150,12 +150,7 @@
+ 	generators     []thumbnailGeneratorInterface
+ }
+ 
+-func NewThumbnailGenerator() (*ThumbnailGenerator, error) {
+-	tmp, err := os.MkdirTemp("", "superfiles-*")
+-	if err != nil {
+-		return nil, err
+-	}
+-
++func NewThumbnailGenerator() *ThumbnailGenerator {
+ 	generators := []thumbnailGeneratorInterface{}
+ 
+ 	pdf, err := newPdfGenerator()
+@@ -181,11 +176,10 @@
+ 
+ 	thumbnailGenerator := &ThumbnailGenerator{
+ 		tempFilesCache: make(map[string]string),
+-		tempDirectory:  tmp,
+ 		generators:     generators,
+ 	}
+ 
+-	return thumbnailGenerator, nil
++	return thumbnailGenerator
+ }
+ 
+ func (g *ThumbnailGenerator) SupportsExt(ext string) bool {
+@@ -237,7 +231,21 @@
+ 		filename := filepath.Base(path)
+ 		baseName := filename[:len(filename)-len(fileExt)]
+ 
+-		outputPathWithoutExt := filepath.Join(g.tempDirectory,
++		g.mu.Lock()
++		if g.tempDirectory == "" {
++			tmp, err := os.MkdirTemp("", "superfiles-*")
++			if err != nil {
++				g.mu.Unlock()
++				return "", fmt.Errorf("create thumbnail directory: %w", err)
++			}
++
++			g.tempDirectory = tmp
++		}
++
++		tempDirectory := g.tempDirectory
++		g.mu.Unlock()
++
++		outputPathWithoutExt := filepath.Join(tempDirectory,
+ 			fmt.Sprintf("%s-%d", baseName, time.Now().UnixNano()))
+ 
+ 		outputPath, err := generator.generateThumbnail(path, outputPathWithoutExt)
+@@ -252,7 +260,14 @@
+ }
+ 
+ func (g *ThumbnailGenerator) CleanUp() error {
+-	return os.RemoveAll(g.tempDirectory)
++	g.mu.Lock()
++	tempDirectory := g.tempDirectory
++	g.mu.Unlock()
++
++	if tempDirectory == "" {
++		return nil
++	}
++	return os.RemoveAll(tempDirectory)
+ }
+ 
+ func isPopplerInstalled() bool {
+--- a/src/pkg/utils/bool_file_store.go
++++ b/src/pkg/utils/bool_file_store.go
+@@ -1,8 +1,10 @@
+ package utils
+ 
+ import (
++	"fmt"
+ 	"log/slog"
+ 	"os"
++	"path/filepath"
+ 	"strconv"
+ )
+ 
+@@ -12,7 +14,9 @@
+ func ReadBoolFile(path string, defaultValue bool) bool {
+ 	data, err := os.ReadFile(path)
+ 	if err != nil {
+-		slog.Error("Error in readBoolFile", "path", path, "error", err)
++		if !os.IsNotExist(err) {
++			slog.Error("Error in readBoolFile", "path", path, "error", err)
++		}
+ 		return defaultValue
+ 	}
+ 
+@@ -31,5 +35,8 @@
+ }
+ 
+ func WriteBoolFile(path string, value bool) error {
++	if err := os.MkdirAll(filepath.Dir(path), ConfigDirPerm); err != nil {
++		return fmt.Errorf("create state directory for %s: %w", path, err)
++	}
+ 	return os.WriteFile(path, []byte(strconv.FormatBool(value)), ConfigFilePerm)
+ }
+--- a/src/pkg/utils/bool_file_store_test.go
++++ b/src/pkg/utils/bool_file_store_test.go
+@@ -145,12 +145,16 @@
+ 	}
+ }
+ 
++func TestWriteBoolFileCreatesParent(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "state", "toggle")
++	require.NoError(t, WriteBoolFile(path, true))
++	assert.True(t, ReadBoolFile(path, false))
++}
++
+ func TestWriteBoolFileError(t *testing.T) {
+-	tempDir := t.TempDir()
+-	nonExistentDir := filepath.Join(tempDir, "non_existent_dir", "file.txt")
+-
+-	err := WriteBoolFile(nonExistentDir, true)
+-	assert.Error(t, err)
++	parent := filepath.Join(t.TempDir(), "not-a-directory")
++	require.NoError(t, os.WriteFile(parent, nil, ConfigFilePerm))
++	assert.Error(t, WriteBoolFile(filepath.Join(parent, "toggle"), true))
+ }
+ 
+ func TestReadBoolFilePermissionDenied(t *testing.T) {
+--- a/src/pkg/utils/file_utils.go
++++ b/src/pkg/utils/file_utils.go
+@@ -39,14 +39,43 @@
+ // errorPrefix is appended before every error message
+ func LoadTomlFile(filePath string, defaultData string, target interface{},
+ 	fixFlag bool, ignoreMissingFields bool) error {
+-	// Initialize with default config
+-	_ = toml.Unmarshal([]byte(defaultData), target)
++	if err := toml.Unmarshal([]byte(defaultData), target); err != nil {
++		return &TomlLoadError{
++			userMessage:  "error decoding embedded defaults",
++			wrappedError: err,
++			isFatal:      true,
++		}
++	}
+ 
+ 	data, err := os.ReadFile(filePath)
++	if errors.Is(err, os.ErrNotExist) {
++		if !fixFlag {
++			return nil
++		}
++
++		if err := os.MkdirAll(filepath.Dir(filePath), ConfigDirPerm); err != nil {
++			return &TomlLoadError{
++				userMessage:  "error creating config directory",
++				wrappedError: err,
++				isFatal:      true,
++			}
++		}
++
++		if err := os.WriteFile(filePath, []byte(defaultData), ConfigFilePerm); err != nil {
++			return &TomlLoadError{
++				userMessage:  "error writing default config",
++				wrappedError: err,
++				isFatal:      true,
++			}
++		}
++		return nil
++	}
++
+ 	if err != nil {
+ 		return &TomlLoadError{
+-			userMessage:  "config file doesn't exist",
++			userMessage:  "error reading config file",
+ 			wrappedError: err,
++			isFatal:      true,
+ 		}
+ 	}
+ 
+@@ -280,12 +309,3 @@
+ 	// returns the first non-EOF error that was encountered by the [Scanner]
+ 	return resultBuilder.String(), scanner.Err()
+ }
+-
+-func InitJSONFile(path string) error {
+-	if _, err := os.Stat(path); os.IsNotExist(err) {
+-		if err = os.WriteFile(path, []byte("null"), ConfigFilePerm); err != nil {
+-			return fmt.Errorf("failed to initialize json file %s: %w", path, err)
+-		}
+-	}
+-	return nil
+-}
+--- a/src/pkg/utils/file_utils_test.go
++++ b/src/pkg/utils/file_utils_test.go
+@@ -144,6 +144,40 @@
+ 			}
+ 		})
+ 	}
++}
++
++func TestLoadTomlFileEmbeddedDefaults(t *testing.T) {
++	root := t.TempDir()
++	configPath := filepath.Join(root, "config", "config.toml")
++	defaultData := "sample_str = 'embedded'\n"
++	var target struct {
++		Value string `toml:"sample_str"`
++	}
++
++	require.NoError(t, LoadTomlFile(configPath, defaultData, &target, false, false))
++	assert.Equal(t, "embedded", target.Value)
++
++	_, err := os.Stat(filepath.Dir(configPath))
++	assert.True(t, os.IsNotExist(err))
++
++	require.NoError(t, LoadTomlFile(configPath, defaultData, &target, true, false))
++	data, err := os.ReadFile(configPath)
++	require.NoError(t, err)
++	assert.Equal(t, defaultData, string(data))
++
++	require.NoError(t, os.WriteFile(configPath, []byte("sample_str = 'user'\n"), ConfigFilePerm))
++	require.NoError(t, LoadTomlFile(configPath, defaultData, &target, false, false))
++	assert.Equal(t, "user", target.Value)
++
++	require.NoError(t, os.WriteFile(configPath, []byte("sample_str = ["), ConfigFilePerm))
++	err = LoadTomlFile(configPath, defaultData, &target, false, false)
++	var loadErr *TomlLoadError
++	require.ErrorAs(t, err, &loadErr)
++	assert.True(t, loadErr.IsFatal())
++
++	err = LoadTomlFile(root, defaultData, &target, false, false)
++	require.ErrorAs(t, err, &loadErr)
++	assert.True(t, loadErr.IsFatal())
+ }
+ 
+ func TestLoadTomlFileIgnorer(t *testing.T) {
+@@ -211,17 +245,6 @@
+ 			checkTomlVal:    true,
+ 			expectedTomlVal: defaultTomlVal.WithIgnoreMissing(true),
+ 		},
+-		{
+-			name:       "Config2 Non Existent config",
+-			configName: "non_existent_config.toml",
+-			fixFlag:    false,
+-			noError:    false,
+-			expectedError: &TomlLoadError{
+-				userMessage: "config file doesn't exist",
+-			},
+-			verifyWrappedErr: false,
+-			checkTomlVal:     false,
+-		},
+ 		{
+ 			name:       "Config2 Invalid format",
+ 			configName: "invalid_format.toml",
+--- a/src/superfile_config/config.toml
++++ b/src/superfile_config/config.toml
+@@ -18,9 +18,6 @@
+ #-- Directory Editor
+ # 
+ dir_editor = ""
+-
+-#-- Auto check for update
+-auto_check_update = true
+ 
+ #-- cd on quit
+ # Should we cd the shell to the last directory open in superfile when the

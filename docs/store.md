@@ -25,6 +25,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `betterleaks` | `security/betterleaks` | Scan files, stdin, and Git history for secrets with optional validation | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `binwalk` | `debugging/binwalk` | Analyze firmware images and embedded files | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `bpftool` | `debugging/bpftool` | Inspect and manage Linux eBPF objects | `aarch64-linux`, `x86_64-linux` |
+| `broot` | `files/broot` | Browse directory trees with fuzzy search and file previews | `aarch64-linux`, `x86_64-linux` |
 | `bwrap` | `containers/bwrap` | Run commands in isolated Linux namespaces | `aarch64-linux`, `x86_64-linux` |
 | `caddy` | `network/caddy` | Serve HTTP and reverse proxy traffic with automatic HTTPS | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `capsh` | `security/capsh` | Inspect and change Linux capabilities | `aarch64-linux`, `x86_64-linux` |
@@ -78,6 +79,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `setcap` | `security/setcap` | Set Linux file capabilities | `aarch64-linux`, `x86_64-linux` |
 | `sftp` | `network/sftp` | Transfer files over OpenSSH SFTP | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `socat` | `network/socat` | Transfer data between sockets and streams | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `spf` | `files/spf` | Browse and manage files in a terminal interface with built-in previews | `aarch64-linux`, `x86_64-linux` |
 | `sqlite3` | `text/sqlite3` | Read and modify SQLite databases | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `ss` | `network/ss` | Show sockets and network connections | `aarch64-linux`, `x86_64-linux` |
 | `ssh` | `network/ssh` | Connect to hosts over OpenSSH | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
@@ -160,6 +162,29 @@ The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinn
 ```
 
 `python` includes pinned pure-Python HTTP, WebSocket, and HTML libraries and a certifi CA bundle. The package excludes pip, ensurepip, and virtual-environment tooling; update its interpreter and wheels together in the package definition.
+
+### File managers and read-only filesystems
+
+`broot` and `spf` (superfile) load embedded defaults when user configuration is absent. Ordinary directory navigation and built-in text previews do not require writable configuration, state, cache, or temporary directories. Existing user configuration takes precedence; malformed or unreadable files remain errors. Both need a usable interactive terminal and a readable directory to browse.
+
+| Dependency | `broot` | `spf` |
+| --- | --- | --- |
+| User configuration | `BROOT_CONFIG_DIR`, otherwise `$XDG_CONFIG_HOME/broot` or `~/.config/broot` | `$XDG_CONFIG_HOME/superfile` or `~/.config/superfile`; `--config-file` and `--hotkey-file` select existing files |
+| System data | Git configuration and ignore files affect filtering; missing passwd/group entries use numeric IDs | Missing passwd/group entries do not prevent browsing; `/proc` mount information supplies the optional disk sidebar |
+| Terminal data | No terminfo tree required for normal terminal sizing; a failed sizing query can try `tput` | Terminfo is optional; normal key decoding has built-in mappings |
+| MIME and syntax data | Embedded signatures, syntax definitions, and highlighting themes | Built-in type detection and text highlighting; no external magic/MIME database |
+| Fonts | Terminal font draws the UI; SVG text previews use host fonts | Terminal font draws the UI; Nerd Font icons are optional |
+| Temporary storage | Configured preview converters, default Kitty file-based image transmission, and explicit IPC server sockets | PDF, PostScript, and video thumbnails need writable `$TMPDIR` and their external converter |
+
+`broot` does not prompt to install shell integration. Use `broot --print-shell-function bash` for explicit setup. `--write-default-conf` and `--install` write only when requested. Normal startup does not enable file logging; `BROOT_LOG` opts into a log in the working directory. Set `kitty_graphics_transmission: chunks` to avoid temporary files for Kitty image previews. SVG preview fonts and explicit preview converters remain host dependencies. Linux clipboard integration uses X11 when available.
+
+`spf` does not extract configuration or themes, create trash directories, or open a log at startup. Explicit pin/toggle changes use `$XDG_DATA_HOME/superfile`; `debug = true` and `cd_on_quit = true` use `$XDG_STATE_HOME/superfile`. Defaults are `~/.local/share` and `~/.local/state`. Trash operations need a writable trash destination. Config repair flags and chooser output also need writable destinations.
+
+Without `/proc`, `spf` emits disk-discovery diagnostics but directory navigation remains available. On a read-only filesystem, explicit file changes, state persistence, and preview conversions that need temporary files still require an appropriate writable destination; ordinary navigation does not silently create a temporary configuration tree.
+
+Neither package bundles external commands. Editors, file openers, shell commands, and configured `broot` verbs require their programs on `PATH`. Optional `spf` integrations use `exiftool`, `zoxide`, `bat`/`batcat`, and clipboard tools; thumbnail converters use `pdftoppm`, `gs`, or `ffmpeg`. These are not needed for basic navigation or built-in text previews.
+
+Neither tool sends telemetry or checks for application updates automatically. Superfile's update client is removed from the Store build.
 
 ## Security source updates
 

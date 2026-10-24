@@ -1,0 +1,45 @@
+diff --git a/src/cli/install_launch_args.rs b/src/cli/install_launch_args.rs
+--- a/src/cli/install_launch_args.rs
++++ b/src/cli/install_launch_args.rs
+@@ -6,7 +6,6 @@ use {
+         },
+         errors::ProgramError,
+     },
+-    std::env,
+ };
+ 
+ /// launch arguments related to installation
+@@ -18,20 +17,7 @@ pub struct InstallLaunchArgs {
+ }
+ impl InstallLaunchArgs {
+     pub fn from(args: &Args) -> Result<Self, ProgramError> {
+-        let mut install = None;
+-        if let Ok(s) = env::var("BR_INSTALL") {
+-            if s == "yes" {
+-                install = Some(true);
+-            } else if s == "no" {
+-                install = Some(false);
+-            } else {
+-                warn!("Unexpected value of BR_INSTALL: {s:?}");
+-            }
+-        }
+-        // the cli arguments may override the env var value
+-        if args.install {
+-            install = Some(true);
+-        }
++        let install = Some(args.install);
+         let print_shell_function = args.print_shell_function.clone();
+         let set_install_state = args.set_install_state;
+         Ok(Self {
+diff --git a/src/cli/mod.rs b/src/cli/mod.rs
+--- a/src/cli/mod.rs
++++ b/src/cli/mod.rs
+@@ -61,7 +61,7 @@ static INTRO: &str = "
+ 
+ **broot** lets you explore file hierarchies with a tree-like view, manipulate and preview files, launch actions, and define your own shortcuts.
+ 
+-**broot** is best launched as `br`: this shell function gives you access to more commands, especially `cd.` The br shell function is interactively installed on first broot launch.
++**broot** is best launched as `br`: this shell function gives you access to more commands, especially `cd.` Use `broot --print-shell-function bash` to print the function for Bash.
+ 
+ Flags and options can be classically passed on launch but also written in the configuration file. Each flag has a counter-flag so that you can cancel at command line a flag which has been set in the configuration file.
+ 

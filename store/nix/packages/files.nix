@@ -6,7 +6,7 @@
   packageSetFor,
   staticSetFor,
   ...
-}: let
+} @ helpers: let
   system = "x86_64-linux";
   buildPkgs = pkgsFor system;
 
@@ -56,6 +56,9 @@
     package = fdPackage "aarch64-darwin";
   };
 in {
+  broot = import ./files/broot.nix helpers;
+  spf = import ./files/superfile.nix helpers;
+
   fd =
     fdLinux
     // {

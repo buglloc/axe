@@ -1,0 +1,269 @@
+--- a/src/conf/conf.rs
++++ b/src/conf/conf.rs
+@@ -1,5 +1,4 @@
+-//! manage reading the verb shortcuts from the configuration file,
+-//! initializing if if it doesn't yet exist
++//! Read configuration files and embedded defaults.
+ 
+ use {
+     super::*,
+@@ -19,13 +18,13 @@
+         syntactic::SyntaxTheme,
+         verb::ExecPattern,
+     },
+-    crokey::crossterm::style::Attribute,
+     rustc_hash::FxHashMap,
+     serde::Deserialize,
+     std::{
+         collections::HashMap,
++        io,
+         num::NonZeroUsize,
+-        path::PathBuf,
++        path::{Path, PathBuf},
+     },
+ };
+ 
+@@ -87,7 +86,7 @@
+ 
+     pub file_sum_threads_count: Option<usize>,
+ 
+-    /// the files used to load this configuration
++    /// Paths used to resolve configuration imports, including embedded files.
+     #[serde(skip)]
+     pub files: Vec<PathBuf>,
+ 
+@@ -195,37 +194,31 @@
+         hjson_file
+     }
+ 
+-    /// read the configuration file from the default OS specific location.
+-    /// Create it if it doesn't exist
++    /// Read the default configuration without writing missing files.
+     pub fn from_default_location() -> Result<Conf, ProgramError> {
+-        let conf_dir = super::dir();
+         let conf_filepath = Conf::default_location();
+-        if !conf_filepath.exists() {
+-            write_default_conf_in(conf_dir)?;
+-            println!(
+-                "New Configuration files written in {}{:?}{}.",
+-                Attribute::Bold,
+-                conf_dir,
+-                Attribute::Reset,
+-            );
+-            println!(
+-                "You should have a look at them: their comments will help you configure broot."
+-            );
+-            println!("You should especially set up your favourite editor in verbs.hjson.");
+-        }
+         let mut conf = Conf::default();
+-        conf.read_file(conf_filepath)?;
++        if conf_filepath.try_exists()? {
++            conf.read_file(conf_filepath)?;
++        } else {
++            let default_dir = normalize_path(super::dir());
++            conf.read_file_with_defaults(default_dir.join("conf.hjson"), Some(&default_dir))?;
++        }
+         Ok(conf)
+     }
+ 
+-    pub fn solve_conf_path(
++    fn solve_conf_path(
+         &self,
+         path: &str,
++        default_dir: Option<&Path>,
+     ) -> Option<PathBuf> {
+         if path_has_ext(path, "toml") || path_has_ext(path, "hjson") {
+             for conf_file in self.files.iter().rev() {
+                 let solved = path_from(conf_file, PathAnchor::Parent, path);
+-                if solved.exists() {
++                let embedded = default_dir
++                    .and_then(|dir| solved.strip_prefix(dir).ok())
++                    .and_then(super::default::embedded_conf);
++                if solved.exists() || embedded.is_some() {
+                     return Some(solved);
+                 }
+             }
+@@ -241,8 +234,26 @@
+         &mut self,
+         path: PathBuf,
+     ) -> Result<(), ProgramError> {
++        self.read_file_with_defaults(path, None)
++    }
++
++    fn read_file_with_defaults(
++        &mut self,
++        path: PathBuf,
++        default_dir: Option<&Path>,
++    ) -> Result<(), ProgramError> {
+         debug!("reading conf file: {:?}", path);
+-        let mut conf: Conf = SerdeFormat::read_file(&path)?;
++        let embedded = default_dir
++            .and_then(|dir| path.strip_prefix(dir).ok())
++            .and_then(super::default::embedded_conf);
++        let mut conf: Conf = match embedded {
++            Some(file) if !path.try_exists()? => {
++                let content = std::str::from_utf8(file.contents())
++                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
++                SerdeFormat::read_string(&path, content)?
++            }
++            _ => SerdeFormat::read_file(&path)?,
++        };
+         overwrite!(self, default_flags, conf);
+         overwrite!(self, date_time_format, conf);
+         overwrite!(self, icon_theme, conf);
+@@ -290,17 +301,76 @@
+                 debug!("skipping not applying conf file : {file:?}");
+                 continue;
+             }
+-            let import_path =
+-                self.solve_conf_path(file)
+-                    .ok_or_else(|| ConfError::ImportNotFound {
+-                        path: file.to_string(),
+-                    })?;
++            let import_path = self.solve_conf_path(file, default_dir).ok_or_else(|| {
++                ConfError::ImportNotFound {
++                    path: file.to_string(),
++                }
++            })?;
+             if self.files.contains(&import_path) {
+                 debug!("skipping import already read: {import_path:?}");
+                 continue;
+             }
+-            self.read_file(import_path)?;
++            self.read_file_with_defaults(import_path, default_dir)?;
+         }
+         Ok(())
+     }
+ }
++
++#[cfg(test)]
++mod embedded_default_tests {
++    use super::*;
++
++    #[test]
++    fn loads_defaults_and_imports_without_creating_files() {
++        let temp = tempfile::tempdir().unwrap();
++        let dir = temp.path().join("broot");
++        let mut conf = Conf::default();
++        conf.read_file_with_defaults(dir.join("conf.hjson"), Some(&dir))
++            .unwrap();
++        assert_eq!(conf.show_selection_mark, Some(true));
++        assert_eq!(conf.content_search_max_file_size, Some(10_000_000));
++        assert!(
++            conf.verbs
++                .iter()
++                .any(|v| v.invocation.as_deref() == Some("edit"))
++        );
++        assert!(conf.skin.as_ref().is_some_and(|skin| !skin.is_empty()));
++        assert!(!dir.exists());
++    }
++
++    #[test]
++    fn uses_existing_imports_and_rejects_malformed_ones() {
++        let temp = tempfile::tempdir().unwrap();
++        let dir = temp.path();
++        let verbs = dir.join("verbs.hjson");
++        std::fs::write(&verbs, "show_selection_mark: false").unwrap();
++        let mut conf = Conf::default();
++        conf.read_file_with_defaults(dir.join("conf.hjson"), Some(dir))
++            .unwrap();
++        assert_eq!(conf.show_selection_mark, Some(false));
++        assert!(conf.verbs.is_empty());
++        assert!(!dir.join("conf.hjson").exists());
++
++        std::fs::write(&verbs, "verbs: [ }").unwrap();
++        assert!(
++            Conf::default()
++                .read_file_with_defaults(dir.join("conf.hjson"), Some(dir))
++                .is_err()
++        );
++        assert!(!dir.join("conf.hjson").exists());
++    }
++
++    #[test]
++    fn existing_configs_do_not_use_embedded_import_fallback() {
++        let temp = tempfile::tempdir().unwrap();
++        let path = temp.path().join("conf.hjson");
++        std::fs::write(&path, r#"{"imports":["verbs.hjson"]}"#).unwrap();
++        assert!(matches!(
++            Conf::default().read_file(path),
++            Err(ProgramError::Conf {
++                source: ConfError::ImportNotFound { .. }
++            })
++        ));
++        assert!(!temp.path().join("verbs.hjson").exists());
++    }
++}
+--- a/src/conf/default.rs
++++ b/src/conf/default.rs
+@@ -12,6 +12,10 @@
+ };
+ 
+ static DEFAULT_CONF_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/resources/default-conf");
++
++pub(super) fn embedded_conf(path: &Path) -> Option<&'static include_dir::File<'static>> {
++    DEFAULT_CONF_DIR.get_file(path)
++}
+ 
+ /// Write the default configuration files in the destination directory, not
+ /// overwriting existing ones
+--- a/src/preview/preview_transformer.rs
++++ b/src/preview/preview_transformer.rs
+@@ -1,9 +1,6 @@
+ use {
+-    crate::{
+-        errors::*,
+-        path::path_has_ext,
+-        preview::PreviewMode,
+-    },
++    crate::{errors::*, path::path_has_ext, preview::PreviewMode},
++    once_cell::sync::OnceCell,
+     serde::Deserialize,
+     std::{
+         fs,
+@@ -27,8 +24,8 @@
+ }
+ pub struct PreviewTransformers {
+     transformers: Vec<PreviewTransformer>,
+-    /// Where the output files are temporarily stored
+-    temp_dir: TempDir,
++    /// Created when a matching preview conversion first needs output files.
++    temp_dir: OnceCell<TempDir>,
+ }
+ #[derive(Debug, Clone, Deserialize)]
+ pub struct PreviewTransformerConf {
+@@ -79,12 +76,9 @@
+         for transformer_conf in transformer_confs {
+             transformers.push(PreviewTransformer::from_conf(transformer_conf)?);
+         }
+-        let temp_dir = tempfile::Builder::new()
+-            .prefix("broot-conversions")
+-            .tempdir()?;
+         Ok(Self {
+             transformers,
+-            temp_dir,
++            temp_dir: OnceCell::new(),
+         })
+     }
+     pub fn transformer(
+@@ -99,8 +93,18 @@
+         mode: Option<PreviewMode>,
+     ) -> Option<PreviewTransform> {
+         let transformer_id = self.find_transformer_for(input_path, mode)?;
+-        let temp_dir = self.temp_dir.path();
+-        match self.transformers[transformer_id.idx].transform(input_path, temp_dir) {
++        let output = self
++            .temp_dir
++            .get_or_try_init(|| {
++                tempfile::Builder::new()
++                    .prefix("broot-conversions")
++                    .tempdir()
++            })
++            .map_err(PreviewTransformerError::from)
++            .and_then(|dir| {
++                self.transformers[transformer_id.idx].transform(input_path, dir.path())
++            });
++        match output {
+             Ok(output_path) => Some(PreviewTransform {
+                 transformer_id,
+                 output_path,
