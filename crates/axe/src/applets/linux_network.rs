@@ -8,8 +8,12 @@ use netlink_packet_route::address::{AddressAttribute, AddressFlags, AddressMessa
 use netlink_packet_route::link::{
     LinkAttribute, LinkFlags, LinkInfo as LinkInfoAttribute, LinkLayerType, LinkMessage, Prop,
 };
-use netlink_packet_route::neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourMessage};
-use netlink_packet_route::route::{RouteAddress, RouteAttribute, RouteMessage};
+use netlink_packet_route::neighbour::{
+    NeighbourAddress, NeighbourAttribute, NeighbourFlags, NeighbourMessage,
+};
+use netlink_packet_route::route::{
+    RouteAddress, RouteAttribute, RouteFlags, RouteMessage, RouteMetric, RouteType,
+};
 use netlink_packet_route::rule::{RuleAttribute, RuleMessage};
 use rtnetlink::IpVersion;
 
@@ -88,14 +92,32 @@ struct IpOptions {
     stats: bool,
     json: bool,
     device: Option<String>,
+    /// `up` selector for `ip link/addr show`.
+    up_only: bool,
+    /// `type KIND` selector for `ip link show`.
+    link_type: Option<String>,
+    /// `master DEVICE` selector for `ip link show`.
+    master: Option<String>,
+    /// `scope NAME` selector for `ip addr show`.
+    scope: Option<String>,
+    /// Route table selector: `None` means the iproute2 default (main),
+    /// `Some("all")` means every table.
+    route_table: Option<String>,
+    route_default_only: bool,
+    route_protocol: Option<String>,
+    route_prefix: Option<String>,
+    neigh_state: Option<String>,
+    neigh_address: Option<String>,
 }
 
 struct RouteGet {
     destination: IpAddr,
     source: Option<IpAddr>,
+    mark: Option<u32>,
 }
 
 fn run_ip(args: Vec<OsString>, forced: Option<Object>) -> Result<(), String> {
+    uucore::panic::mute_sigpipe_panic();
     let mut values = utf8_args(args)?;
     let program = values.first().cloned().unwrap_or_else(|| "ip".into());
     values.remove(0);
@@ -106,16 +128,17 @@ fn run_ip(args: Vec<OsString>, forced: Option<Object>) -> Result<(), String> {
     {
         println!(
             "Usage: {program} [ OPTIONS ] OBJECT {{ show | list }}\n       \
-             {program} route get ADDRESS [from ADDRESS] [dev IFACE]\n       \
+             {program} route get ADDRESS [from ADDRESS] [mark MARK] [dev IFACE]\n       \
              {program} {{ address | link | neighbour | route | rule }} show\n\
-             Options: -4 -6 -o -br -s -j"
+             Options: -4 -6 -o -br -s -j -d"
         );
         return Ok(());
     }
 
     let mut options = IpOptions::default();
     let mut positional = Vec::new();
-    for value in values {
+    let mut values = values.into_iter().peekable();
+    while let Some(value) = values.next() {
         match value.as_str() {
             "-4" => options.family = Some(AddressFamily::Inet),
             "-6" => options.family = Some(AddressFamily::Inet6),
@@ -123,7 +146,31 @@ fn run_ip(args: Vec<OsString>, forced: Option<Object>) -> Result<(), String> {
             "-br" | "--brief" => options.brief = true,
             "-s" | "-stats" | "--stats" | "--statistics" => options.stats = true,
             "-j" | "--json" => options.json = true,
+            "-d" | "--details" => {}
+            "-p" | "--pretty" => {}
             "-c" | "-color" | "--color" => {}
+            "-N" | "--netnsid" => {}
+            "-0" | "-r" | "--resolve" => {}
+            "-V" | "-Version" | "--version" => {
+                println!("ip (axe) {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "-f" | "-family" | "--family" => match values.next().as_deref() {
+                Some("inet") | Some("ipv4") => options.family = Some(AddressFamily::Inet),
+                Some("inet6") | Some("ipv6") => options.family = Some(AddressFamily::Inet6),
+                Some("link") | Some("bridge") | Some("mpls") => {}
+                Some(other) => {
+                    return Err(format!("argument of \"{other}\" is not a valid family"));
+                }
+                None => return Err("option requires an argument -- 'f'".into()),
+            },
+            value if value.starts_with("-f") && matches!(&value[1..], "inet" | "inet6") => {
+                options.family = Some(if &value[1..] == "inet" {
+                    AddressFamily::Inet
+                } else {
+                    AddressFamily::Inet6
+                });
+            }
             value if value.starts_with('-') => return Err(format!("unknown option '{value}'")),
             _ => positional.push(value),
         }
@@ -141,76 +188,83 @@ fn run_ip(args: Vec<OsString>, forced: Option<Object>) -> Result<(), String> {
         parse_object(&value)?
     };
 
-    let route_get =
-        if object == Object::Route && positional.first().is_some_and(|value| value == "get") {
+    let route_get = if object == Object::Route
+        && positional
+            .first()
+            .is_some_and(|value| "get".starts_with(value))
+    {
+        positional.remove(0);
+        if positional.first().is_some_and(|value| value == "to") {
             positional.remove(0);
-            let destination = positional
+        }
+        let destination = parse_shorthand_address(
+            positional
                 .first()
-                .ok_or("route get requires a destination")?
-                .parse::<IpAddr>()
-                .map_err(|_| "invalid route destination")?;
+                .ok_or("route get requires a destination")?,
+        )?;
+        positional.remove(0);
+        let mut source = None;
+        let mut mark = None;
+        while !positional.is_empty() {
+            let keyword = positional.remove(0);
+            let value = positional
+                .first()
+                .ok_or_else(|| format!("'{keyword}' requires an argument"))?
+                .clone();
             positional.remove(0);
-            let mut source = None;
-            while !positional.is_empty() {
-                let keyword = positional.remove(0);
-                let value = positional
-                    .first()
-                    .ok_or_else(|| format!("'{keyword}' requires an argument"))?
-                    .clone();
-                positional.remove(0);
-                match keyword.as_str() {
-                    "from" => {
-                        source = Some(
-                            value
-                                .parse::<IpAddr>()
-                                .map_err(|_| "invalid route source")?,
-                        );
-                    }
-                    "dev" | "oif" => options.device = Some(value),
-                    _ => return Err(format!("unsupported route get selector '{keyword}'")),
+            match keyword.as_str() {
+                "from" => {
+                    source = Some(parse_shorthand_address(&value)?);
                 }
-            }
-            Some(RouteGet {
-                destination,
-                source,
-            })
-        } else {
-            if positional
-                .first()
-                .is_some_and(|value| value == "show" || value == "list")
-            {
-                positional.remove(0);
-            }
-            if positional.first().is_some_and(|value| value == "dev") {
-                positional.remove(0);
-                options.device = positional.first().cloned();
-                if options.device.is_none() {
-                    return Err("'dev' requires an interface name".into());
+                "mark" => {
+                    mark = Some(
+                        value
+                            .parse()
+                            .map_err(|_| format!("invalid mark value '{value}'"))?,
+                    );
                 }
-                positional.remove(0);
-            } else if matches!(object, Object::Address | Object::Link) && positional.len() == 1 {
-                options.device = positional.first().cloned();
-                positional.clear();
+                "dev" | "oif" => options.device = Some(value),
+                keyword => return Err(format!("unsupported route get selector '{keyword}'")),
             }
-            if !positional.is_empty() {
-                return Err("only show/list operations are supported".into());
-            }
-            None
-        };
+        }
+        Some(RouteGet {
+            destination,
+            source,
+            mark,
+        })
+    } else {
+        if positional
+            .first()
+            .is_some_and(|value| "show".starts_with(value) || "list".starts_with(value))
+        {
+            positional.remove(0);
+        }
+        parse_show_selectors(object, &mut positional, &mut options)?;
+        None
+    };
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|error| error.to_string())?;
     runtime.block_on(async move {
-        let snapshot = Snapshot::load().await?;
+        let (snapshot, handle) = Snapshot::load().await?;
+        if matches!(object, Object::Address | Object::Link)
+            && let Some(name) = options.device.as_deref()
+            && !snapshot
+                .links
+                .iter()
+                .any(|link| link_matches(link, &options))
+        {
+            return Err(format!("Device \"{name}\" does not exist."));
+        }
         match object {
             Object::Address => show_addresses(&snapshot, &options),
             Object::Link => show_links(&snapshot, &options),
             Object::Neighbour => show_neighbours(&snapshot, &options),
             Object::Route => {
                 if let Some(query) = route_get {
-                    show_route_get(&snapshot, &options, &query)
+                    route_get_netlink(&handle, &snapshot, &options, &query).await
                 } else {
                     show_routes(&snapshot, &options)
                 }
@@ -220,14 +274,163 @@ fn run_ip(args: Vec<OsString>, forced: Option<Object>) -> Result<(), String> {
     })
 }
 
+/// Parses the selectors iproute2 accepts after `show`/`list`.
+fn parse_show_selectors(
+    object: Object,
+    positional: &mut Vec<String>,
+    options: &mut IpOptions,
+) -> Result<(), String> {
+    if positional.first().is_some_and(|value| value == "dev") {
+        positional.remove(0);
+        options.device = positional.first().cloned();
+        if options.device.is_none() {
+            return Err("'dev' requires an interface name".into());
+        }
+        positional.remove(0);
+    }
+    let mut index = 0;
+    while index < positional.len() {
+        let value = positional[index].clone();
+        let take_argument = |index: &mut usize| -> Option<String> {
+            let argument = positional.get(*index + 1).cloned();
+            if argument.is_some() {
+                *index += 1;
+            }
+            argument
+        };
+        match (object, value.as_str()) {
+            (Object::Link | Object::Address, "up") => options.up_only = true,
+            (Object::Link, "type") => {
+                if let Some(kind) = take_argument(&mut index) {
+                    options.link_type = Some(kind);
+                }
+            }
+            (Object::Link, "master") => {
+                if let Some(master) = take_argument(&mut index) {
+                    options.master = Some(master);
+                }
+            }
+            (Object::Address, "scope") => {
+                if let Some(scope) = take_argument(&mut index) {
+                    options.scope = Some(scope);
+                }
+            }
+            (Object::Route, "default") => options.route_default_only = true,
+            (Object::Route, "table") => {
+                let table = positional
+                    .get(index + 1)
+                    .cloned()
+                    .ok_or("'table' requires an argument")?;
+                index += 1;
+                options.route_table = Some(table);
+            }
+            (Object::Route, "proto") => {
+                if let Some(protocol) = take_argument(&mut index) {
+                    options.route_protocol = Some(protocol);
+                }
+            }
+            (Object::Route, "match") => {
+                if let Some(prefix) = take_argument(&mut index) {
+                    options.route_prefix = Some(prefix);
+                }
+            }
+            (Object::Route, value) if value.parse::<IpNet>().is_ok() => {
+                options.route_prefix = Some(value.to_string());
+            }
+            (Object::Neighbour, "nud") => {
+                if let Some(state) = take_argument(&mut index) {
+                    options.neigh_state = Some(state);
+                }
+            }
+            (Object::Neighbour, "to" | "dev" | "vrf") => {
+                take_argument(&mut index);
+            }
+            (Object::Neighbour, value) if value.contains(':') => {
+                options.neigh_address = Some(value.to_string());
+            }
+            (Object::Address | Object::Link, value)
+                if options.device.is_none() && !value.starts_with('-') =>
+            {
+                options.device = Some(value.to_string());
+            }
+            (_, value) => {
+                return Err(format!(
+                    "unsupported selector '{value}' (only show/list operations are supported)"
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+/// Parses an address the way `getaddr` does for route lookups, accepting the
+/// numeric shorthand forms `10.1` and `10` for IPv4.
+fn parse_shorthand_address(value: &str) -> Result<IpAddr, String> {
+    if let Ok(address) = value.parse::<IpAddr>() {
+        return Ok(address);
+    }
+    if !value.is_empty()
+        && value.len() <= 15
+        && value
+            .split('.')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+    {
+        let mut parts: Vec<u8> = value
+            .split('.')
+            .map(|part| {
+                part.parse()
+                    .map_err(|_| format!("invalid destination '{value}'"))
+            })
+            .collect::<Result<_, _>>()?;
+        while parts.len() < 4 {
+            parts.insert(0, 0);
+        }
+        if parts.len() == 4 {
+            return Ok(IpAddr::V4(Ipv4Addr::new(
+                parts[0], parts[1], parts[2], parts[3],
+            )));
+        }
+    }
+    Err(format!("invalid destination '{value}'"))
+}
+
 fn parse_object(value: &str) -> Result<Object, String> {
-    match value {
-        "a" | "addr" | "address" => Ok(Object::Address),
-        "l" | "link" => Ok(Object::Link),
-        "n" | "neigh" | "neighbor" | "neighbour" => Ok(Object::Neighbour),
-        "r" | "route" => Ok(Object::Route),
-        "ru" | "rule" => Ok(Object::Rule),
-        _ => Err(format!("unknown object '{value}'")),
+    // iproute2 accepts any unambiguous prefix of an object name.
+    const OBJECTS: [(&str, Object); 5] = [
+        ("address", Object::Address),
+        ("link", Object::Link),
+        ("neighbour", Object::Neighbour),
+        ("route", Object::Route),
+        ("rule", Object::Rule),
+    ];
+    if value == "neighbor" {
+        return Ok(Object::Neighbour);
+    }
+    for (name, object) in OBJECTS {
+        if name.starts_with(value) {
+            return Ok(object);
+        }
+    }
+    Err(format!(
+        "Object \"{value}\" is unknown, try \"{value} help\"."
+    ))
+}
+
+/// A parsed `A.B.C.D/N` prefix used by the route `match` selector.
+struct IpNet(IpAddr, u8);
+
+impl std::str::FromStr for IpNet {
+    type Err = ();
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (address, prefix) = value.split_once('/').ok_or(())?;
+        let address = address.parse::<IpAddr>().map_err(|_| ())?;
+        let prefix = prefix.parse::<u8>().map_err(|_| ())?;
+        let width = if address.is_ipv4() { 32 } else { 128 };
+        if prefix > width {
+            return Err(());
+        }
+        Ok(IpNet(address, prefix))
     }
 }
 
@@ -241,7 +444,7 @@ struct Snapshot {
 }
 
 impl Snapshot {
-    async fn load() -> Result<Self, String> {
+    async fn load() -> Result<(Self, rtnetlink::Handle), String> {
         let (connection, handle, _) =
             rtnetlink::new_connection().map_err(|error| error.to_string())?;
         tokio::spawn(connection);
@@ -314,22 +517,92 @@ impl Snapshot {
             }
         }
 
-        Ok(Self {
-            links,
-            addresses,
-            neighbours,
-            routes,
-            rules,
-            names,
-        })
+        Ok((
+            Self {
+                links,
+                addresses,
+                neighbours,
+                routes,
+                rules,
+                names,
+            },
+            handle,
+        ))
     }
 }
 
+fn master_filter(snapshot: &Snapshot, options: &IpOptions) -> Option<u32> {
+    let master = options.master.as_deref()?;
+    Some(
+        snapshot
+            .links
+            .iter()
+            .find(|link| {
+                link.attributes.iter().any(|attribute| match attribute {
+                    LinkAttribute::IfName(name) => name == master,
+                    _ => false,
+                })
+            })
+            .map(|link| link.header.index)
+            .unwrap_or(u32::MAX),
+    )
+}
+
+fn link_under_master(link: &LinkMessage, master_index: Option<u32>) -> bool {
+    master_index.is_none_or(|expected| {
+        link.attributes.iter().any(
+            |attribute| matches!(attribute, LinkAttribute::Controller(index) if *index == expected),
+        )
+    })
+}
+
+fn print_link_header(link: &LinkMessage, info: &LinkInfo) {
+    let flags = ip_flags(link, info).join(",");
+    let link_type = link.header.link_layer_type.to_string().to_ascii_lowercase();
+    // ipaddr output carries no mode field; iplink prints it.
+    let mut line = format!(
+        "{}: {}: <{}> mtu {}",
+        link.header.index,
+        info.name,
+        flags,
+        info.mtu.unwrap_or_default()
+    );
+    if let Some(qdisc) = &info.qdisc {
+        line.push_str(&format!(" qdisc {qdisc}"));
+    }
+    line.push_str(&format!(" state {}", info.state));
+    line.push_str(" group default");
+    if let Some(queue_len) = info.tx_queue_len {
+        line.push_str(&format!(" qlen {queue_len}"));
+    }
+    match &info.address {
+        Some(address) => {
+            line.push_str(&format!(
+                "\n    link/{link_type} {address} brd {}",
+                info.broadcast.clone().unwrap_or_default()
+            ));
+            if let Some(permanent) = &info.permanent_address
+                && permanent != address
+            {
+                line.push_str(&format!(" permaddr {permanent}"));
+            }
+        }
+        None if link_type == "none" => line.push_str("\n    link/none "),
+        _ => {}
+    }
+    for altname in &info.alternate_names {
+        line.push_str(&format!("\n    altname {altname}"));
+    }
+    println!("{line}");
+}
+
 fn show_links(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
+    let master_index = master_filter(snapshot, options);
     let links = snapshot
         .links
         .iter()
         .filter(|link| link_matches(link, options))
+        .filter(|link| link_under_master(link, master_index))
         .collect::<Vec<_>>();
     if options.json {
         let values = links
@@ -354,31 +627,54 @@ fn show_links(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
             );
             continue;
         }
-        let flags = link
-            .header
-            .flags
-            .iter_names()
-            .map(|(name, _)| name)
-            .collect::<Vec<_>>()
-            .join(",");
-        print!(
+        let flags = ip_flags(link, &info).join(",");
+        let link_type = link.header.link_layer_type.to_string().to_ascii_lowercase();
+        let mode = if info.mode.eq_ignore_ascii_case("default") {
+            None
+        } else {
+            Some(info.mode.to_uppercase())
+        };
+        let mut line = format!(
             "{}: {}: <{}> mtu {}",
             link.header.index,
             info.name,
             flags,
             info.mtu.unwrap_or_default()
         );
-        if let Some(qdisc) = info.qdisc {
-            print!(" qdisc {qdisc}");
+        if let Some(qdisc) = &info.qdisc {
+            line.push_str(&format!(" qdisc {qdisc}"));
         }
-        println!(" state {} mode DEFAULT group default", info.state);
-        if let Some(address) = info.address {
-            println!(
-                "    link/{} {} brd {}",
-                link.header.link_layer_type,
-                address,
-                info.broadcast.unwrap_or_default()
-            );
+        line.push_str(&format!(" state {}", info.state));
+        line.push_str(&format!(
+            " mode {}",
+            mode.unwrap_or_else(|| "DEFAULT".into())
+        ));
+        line.push_str(" group default");
+        if let Some(queue_len) = info.tx_queue_len {
+            line.push_str(&format!(" qlen {queue_len}"));
+        }
+        match &info.address {
+            Some(address) => {
+                line.push_str(&format!(
+                    "\n    link/{link_type} {address} brd {}",
+                    info.broadcast.clone().unwrap_or_default()
+                ));
+                if let Some(permanent) = &info.permanent_address
+                    && permanent != address
+                {
+                    line.push_str(&format!(" permaddr {permanent}"));
+                }
+            }
+            None if link_type == "none" => line.push_str("\n    link/none "),
+            _ => {}
+        }
+        for altname in &info.alternate_names {
+            line.push_str(&format!("\n    altname {altname}"));
+        }
+        if options.oneline {
+            println!("{}", line.replace('\n', "\\"));
+        } else {
+            println!("{line}");
         }
         if options.stats
             && let Some(stats) = info.stats
@@ -397,11 +693,16 @@ fn show_links(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
 }
 
 fn show_addresses(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
+    let master_index = master_filter(snapshot, options);
+    let selected = snapshot
+        .links
+        .iter()
+        .filter(|link| link_matches(link, options))
+        .filter(|link| link_under_master(link, master_index))
+        .collect::<Vec<_>>();
     if options.json {
-        let values = snapshot
-            .links
+        let values = selected
             .iter()
-            .filter(|link| link_matches(link, options))
             .map(|link| {
                 let addresses = snapshot
                     .addresses
@@ -425,11 +726,7 @@ fn show_addresses(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String
         return Ok(());
     }
 
-    for link in snapshot
-        .links
-        .iter()
-        .filter(|link| link_matches(link, options))
-    {
+    for link in selected {
         let info = link_info(link);
         let addresses = snapshot
             .addresses
@@ -438,70 +735,110 @@ fn show_addresses(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String
                 address.header.index == link.header.index
                     && family_matches(address.header.family, options.family)
             })
-            .filter_map(address_value)
+            .filter_map(address_text)
+            .filter(|address| {
+                options
+                    .scope
+                    .as_deref()
+                    .is_none_or(|expected| address.scope == expected)
+            })
             .collect::<Vec<_>>();
         if options.brief {
             let values = addresses
                 .iter()
-                .map(|(address, prefix, _)| format!("{address}/{prefix}"))
+                .map(|address| format!("{}/{}", address.address, address.prefix))
                 .collect::<Vec<_>>()
                 .join(" ");
-            println!("{:<16} {:<12} {}", info.name, info.state, values);
-            continue;
-        }
-        if options.oneline {
-            for (address, prefix, scope) in addresses {
-                println!(
-                    "{}: {}    {} {}/{} scope {} {}",
-                    link.header.index,
-                    info.name,
-                    if address.is_ipv4() { "inet" } else { "inet6" },
-                    address,
-                    prefix,
-                    scope,
-                    info.name
-                );
+            if values.is_empty() {
+                println!("{:<16} {:<14} ", info.name, info.state);
+            } else {
+                println!("{:<16} {:<14} {} ", info.name, info.state, values);
             }
             continue;
         }
-        let flags = link
-            .header
-            .flags
-            .iter_names()
-            .map(|(name, _)| name)
-            .collect::<Vec<_>>()
-            .join(",");
-        println!(
-            "{}: {}: <{}> mtu {} state {} group default",
-            link.header.index,
-            info.name,
-            flags,
-            info.mtu.unwrap_or_default(),
-            info.state
-        );
-        if let Some(address) = info.address {
-            println!(
-                "    link/{} {} brd {}",
-                link.header.link_layer_type,
-                address,
-                info.broadcast.unwrap_or_default()
-            );
+        if options.family.is_some() && addresses.is_empty() {
+            continue;
         }
-        for (address, prefix, scope) in addresses {
-            println!(
-                "    {} {}/{} scope {} {}",
-                if address.is_ipv4() { "inet" } else { "inet6" },
-                address,
-                prefix,
-                scope,
-                info.name
-            );
+        if !options.oneline {
+            print_link_header(link, &info);
+        }
+        for address in addresses {
+            let kind = if address.address.is_ipv4() {
+                "inet"
+            } else {
+                "inet6"
+            };
+            let mut line = if options.oneline {
+                format!(
+                    "{}: {}    {kind} {}/{}",
+                    link.header.index, info.name, address.address, address.prefix
+                )
+            } else {
+                format!("    {kind} {}/{}", address.address, address.prefix)
+            };
+            if let Some(broadcast) = &address.broadcast
+                && address.address.is_ipv4()
+            {
+                line.push_str(&format!(" brd {broadcast}"));
+            }
+            line.push_str(&format!(" scope {}", address.scope));
+            let ipv6 = address.address.is_ipv6();
+            if address.secondary {
+                line.push_str(if ipv6 { " temporary" } else { " secondary" });
+            }
+            if address.deprecated {
+                line.push_str(" deprecated");
+            }
+            if address.dynamic {
+                line.push_str(" dynamic");
+            }
+            if address.managed_temporary {
+                line.push_str(" mngtmpaddr");
+            }
+            if address.noprefixroute {
+                line.push_str(" noprefixroute");
+            }
+            match &address.label {
+                Some(label) => line.push_str(&format!(" {label}")),
+                None if !ipv6 => line.push_str(&format!(" {}", info.name)),
+                None => line.push(' '),
+            }
+            if let (Some(valid), Some(preferred)) = (address.valid_lft, address.preferred_lft) {
+                if options.oneline {
+                    println!(
+                        "{line}\\       valid_lft {} preferred_lft {}",
+                        format_lifetime(valid),
+                        format_lifetime(preferred)
+                    );
+                } else {
+                    println!("{line}");
+                    println!(
+                        "       valid_lft {} preferred_lft {}",
+                        format_lifetime(valid),
+                        format_lifetime(preferred)
+                    );
+                }
+            } else {
+                println!("{line}");
+            }
         }
     }
     Ok(())
 }
 
+fn format_lifetime(seconds: u32) -> String {
+    if seconds == u32::MAX {
+        "forever".into()
+    } else {
+        format!("{seconds}sec")
+    }
+}
+
 fn show_neighbours(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
+    let show_all_states = options
+        .neigh_state
+        .as_deref()
+        .is_some_and(|state| state.eq_ignore_ascii_case("all"));
     let values = snapshot
         .neighbours
         .iter()
@@ -514,6 +851,26 @@ fn show_neighbours(snapshot: &Snapshot, options: &IpOptions) -> Result<(), Strin
                     _ => None,
                 })?;
             if !family_matches(message.header.family, options.family) {
+                return None;
+            }
+            let states = neighbour_states(message);
+            // iproute2 hides NONE and NOARP entries unless requested.
+            if !show_all_states
+                && (states.contains(&"NONE".to_string()) || states.contains(&"NOARP".to_string()))
+            {
+                return None;
+            }
+            if let Some(expected) = options.neigh_state.as_deref()
+                && !expected.eq_ignore_ascii_case("all")
+                && !states
+                    .iter()
+                    .any(|state| state.eq_ignore_ascii_case(expected))
+            {
+                return None;
+            }
+            if let Some(expected) = options.neigh_address.as_deref()
+                && destination.to_string() != expected
+            {
                 return None;
             }
             let device = snapshot
@@ -535,123 +892,271 @@ fn show_neighbours(snapshot: &Snapshot, options: &IpOptions) -> Result<(), Strin
                     NeighbourAttribute::LinkLayerAddress(bytes) => Some(mac(bytes)),
                     _ => None,
                 });
-            Some((
-                destination,
-                device,
-                lladdr,
-                message.header.state.to_string(),
-            ))
+            let router = message.header.flags.contains(NeighbourFlags::Router);
+            Some((destination, device, lladdr, states, router))
         })
         .collect::<Vec<_>>();
 
     if options.json {
-        let json = values.iter().map(|(dst, dev, lladdr, state)| serde_json::json!({"dst": dst, "dev": dev, "lladdr": lladdr, "state": state.to_uppercase()})).collect::<Vec<_>>();
+        let json = values
+            .iter()
+            .map(|(dst, dev, lladdr, states, router)| {
+                let mut states: Vec<serde_json::Value> =
+                    states.iter().map(|state| state.clone().into()).collect();
+                if *router {
+                    states.push("ROUTER".into());
+                }
+                serde_json::json!({"dst": dst, "dev": dev, "lladdr": lladdr, "state": states})
+            })
+            .collect::<Vec<_>>();
         println!(
             "{}",
             serde_json::to_string(&json).map_err(|error| error.to_string())?
         );
     } else {
-        for (destination, device, lladdr, state) in values {
+        for (destination, device, lladdr, states, router) in values {
             print!("{destination} dev {device}");
             if let Some(lladdr) = lladdr {
                 print!(" lladdr {lladdr}");
             }
-            println!(" {}", state.to_uppercase());
+            if router {
+                print!(" router");
+            }
+            println!(" {} ", states.join(" "));
         }
     }
     Ok(())
+}
+
+fn neighbour_states(message: &NeighbourMessage) -> Vec<String> {
+    message
+        .header
+        .state
+        .to_string()
+        .split('|')
+        .map(|state| state.to_uppercase())
+        .collect()
+}
+
+/// iproute2 `ip route` shows the IPv4 main table unless `-6` or a `table`
+/// selector says otherwise.
+fn route_family(options: &IpOptions) -> Option<AddressFamily> {
+    options.family.or(Some(AddressFamily::Inet))
+}
+
+fn route_table_selected(options: &IpOptions, table: u32) -> bool {
+    match options.route_table.as_deref() {
+        None => table == 254,
+        Some("all") => true,
+        Some("main") => table == 254,
+        Some("local") => table == 255,
+        Some("default") => table == 253,
+        Some(name) => name.parse().is_ok_and(|value: u32| value == table),
+    }
 }
 
 fn show_routes(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
     let routes = snapshot
         .routes
         .iter()
-        .filter(|route| family_matches(route.header.address_family, options.family))
-        .filter_map(|route| {
-            let mut destination = None;
-            let mut gateway = None;
-            let mut source = None;
-            let mut device = None;
-            let mut metric = None;
-            let mut table = u32::from(route.header.table);
-            for attribute in &route.attributes {
-                match attribute {
-                    RouteAttribute::Destination(value) => destination = route_ip(value),
-                    RouteAttribute::Gateway(value) => gateway = route_ip(value),
-                    RouteAttribute::PrefSource(value) => source = route_ip(value),
-                    RouteAttribute::Oif(index) => device = snapshot.names.get(index).cloned(),
-                    RouteAttribute::Priority(value) => metric = Some(*value),
-                    RouteAttribute::Table(value) => table = *value,
-                    _ => {}
-                }
-            }
-            if options
-                .device
-                .as_deref()
-                .is_some_and(|expected| device.as_deref() != Some(expected))
-            {
-                return None;
-            }
-
-            let destination = destination
-                .map(|address| format!("{address}/{}", route.header.destination_prefix_length))
-                .unwrap_or_else(|| "default".into());
-            Some((
-                destination,
-                gateway,
-                device,
-                source,
-                metric,
-                table,
-                route.header.protocol.to_string(),
-                route.header.scope.to_string(),
-            ))
-        })
+        .filter(|route| family_matches(route.header.address_family, route_family(options)))
+        // The kernel route cache surfaces as RTM_F_CLONED entries; iproute2
+        // only lists them for `ip route show cache`.
+        .filter(|route| !route.header.flags.contains(RouteFlags::Cloned))
+        .filter_map(|route| route_text(snapshot, route, options))
         .collect::<Vec<_>>();
 
     if options.json {
-        let json = routes.iter().map(|(dst, gateway, dev, source, metric, table, protocol, scope)| serde_json::json!({"dst": dst, "gateway": gateway, "dev": dev, "prefsrc": source, "metric": metric, "table": table, "protocol": protocol, "scope": scope})).collect::<Vec<_>>();
+        let json = routes
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "dst": entry.destination,
+                    "gateway": entry.gateway,
+                    "dev": entry.device,
+                    "protocol": entry.protocol,
+                    "prefsrc": entry.source,
+                    "metric": entry.metric.filter(|metric| *metric != 0),
+                })
+            })
+            .collect::<Vec<_>>();
         println!(
             "{}",
             serde_json::to_string(&json).map_err(|error| error.to_string())?
         );
     } else {
-        for (destination, gateway, device, source, metric, table, protocol, scope) in routes {
-            print!("{destination}");
-            if let Some(gateway) = gateway {
-                print!(" via {gateway}");
-            }
-            if let Some(device) = device {
-                print!(" dev {device}");
-            }
-            print!(" proto {protocol}");
-            if scope != "global" && scope != "universe" {
-                print!(" scope {scope}");
-            }
-            if let Some(source) = source {
-                print!(" src {source}");
-            }
-            if let Some(metric) = metric {
-                print!(" metric {metric}");
-            }
-            if table != 254 {
-                print!(" table {table}");
-            }
+        for entry in routes {
+            print!("{entry} ");
             println!();
         }
     }
     Ok(())
 }
 
-struct BestRoute {
-    rank: (u8, std::cmp::Reverse<u32>),
+/// One rendered routing-table entry with iproute2's field order.
+struct RouteEntry {
+    destination: String,
     gateway: Option<IpAddr>,
-    interface: Option<u32>,
-    preferred_source: Option<IpAddr>,
+    device: Option<String>,
+    source: Option<IpAddr>,
+    metric: Option<u32>,
+    mtu: Option<u32>,
     protocol: String,
+    multipath: Vec<String>,
+    scope: Option<String>,
 }
 
-fn show_route_get(
+impl std::fmt::Display for RouteEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.destination)?;
+        if let Some(gateway) = self.gateway {
+            write!(f, " via {gateway}")?;
+        }
+        if let Some(device) = &self.device {
+            write!(f, " dev {device}")?;
+        }
+        if self.protocol != "boot" {
+            write!(f, " proto {}", self.protocol)?;
+        }
+        if let Some(scope) = &self.scope {
+            write!(f, " scope {scope}")?;
+        }
+        if let Some(source) = self.source {
+            write!(f, " src {source}")?;
+        }
+        if let Some(mtu) = self.mtu {
+            write!(f, " mtu {mtu}")?;
+        }
+        if let Some(metric) = self.metric.filter(|metric| *metric != 0) {
+            write!(f, " metric {metric}")?;
+        }
+        for nexthop in &self.multipath {
+            write!(f, "\n{nexthop}")?;
+        }
+        Ok(())
+    }
+}
+
+fn route_text(
+    snapshot: &Snapshot,
+    route: &RouteMessage,
+    options: &IpOptions,
+) -> Option<RouteEntry> {
+    let mut destination = None;
+    let mut gateway = None;
+    let mut source = None;
+    let mut device = None;
+    let mut metric = None;
+    let mut mtu = None;
+    let mut table = u32::from(route.header.table);
+    let mut multipath = Vec::new();
+    for attribute in &route.attributes {
+        match attribute {
+            RouteAttribute::Destination(value) => destination = route_ip(value),
+            RouteAttribute::Gateway(value) => gateway = route_ip(value),
+            RouteAttribute::PrefSource(value) => source = route_ip(value),
+            RouteAttribute::Oif(index) => device = snapshot.names.get(index).cloned(),
+            RouteAttribute::Priority(value) => metric = Some(*value),
+            RouteAttribute::Metrics(metrics) => {
+                for metric in metrics {
+                    if let RouteMetric::Mtu(value) = metric {
+                        mtu = Some(*value);
+                    }
+                }
+            }
+            RouteAttribute::Table(value) => table = *value,
+            RouteAttribute::MultiPath(next_hops) => {
+                for nexthop in next_hops {
+                    let mut text = String::from("nexthop");
+                    if let Some(via) =
+                        nexthop
+                            .attributes
+                            .iter()
+                            .find_map(|attribute| match attribute {
+                                RouteAttribute::Gateway(value) => route_ip(value),
+                                _ => None,
+                            })
+                    {
+                        text.push_str(&format!(" via {via}"));
+                    }
+                    if let Some(name) = snapshot.names.get(&nexthop.interface_index) {
+                        text.push_str(&format!(" dev {name}"));
+                    }
+                    text.push_str(&format!(" weight {}", u32::from(nexthop.hops) + 1));
+                    multipath.push(text);
+                }
+            }
+            _ => {}
+        }
+    }
+    if !route_table_selected(options, table) {
+        return None;
+    }
+    if options
+        .device
+        .as_deref()
+        .is_some_and(|expected| device.as_deref() != Some(expected))
+    {
+        return None;
+    }
+    if options.route_default_only && destination.is_some() {
+        return None;
+    }
+    if let Some(protocol) = options.route_protocol.as_deref()
+        && route.header.protocol.to_string().to_ascii_lowercase() != protocol
+    {
+        return None;
+    }
+    if let Some(selector) = options.route_prefix.as_deref() {
+        let selector = selector.parse::<IpNet>().ok()?;
+        let address = destination?;
+        if !prefix_within(selector, address, route.header.destination_prefix_length) {
+            return None;
+        }
+    }
+
+    let prefix = route.header.destination_prefix_length;
+    let host_route = destination.is_some_and(|address| {
+        (address.is_ipv4() && prefix == 32) || (address.is_ipv6() && prefix == 128)
+    });
+    let destination = destination
+        .map(|address| {
+            if host_route {
+                address.to_string()
+            } else {
+                format!("{address}/{prefix}")
+            }
+        })
+        .unwrap_or_else(|| "default".into());
+    let kind = route.header.kind;
+    let destination = match kind {
+        RouteType::BlackHole => format!("blackhole {destination}"),
+        RouteType::Unreachable => format!("unreachable {destination}"),
+        RouteType::Prohibit => format!("prohibit {destination}"),
+        RouteType::Local if table == 255 => format!("local {destination}"),
+        RouteType::Broadcast if table == 255 => format!("broadcast {destination}"),
+        RouteType::Multicast if table == 255 => format!("multicast {destination}"),
+        _ => destination,
+    };
+    let scope = match route.header.scope.to_string() {
+        scope if scope == "universe" => None,
+        scope => Some(scope),
+    };
+    Some(RouteEntry {
+        destination,
+        gateway,
+        device,
+        source,
+        metric,
+        mtu,
+        protocol: route.header.protocol.to_string().to_ascii_lowercase(),
+        multipath,
+        scope,
+    })
+}
+
+async fn route_get_netlink(
+    handle: &rtnetlink::Handle,
     snapshot: &Snapshot,
     options: &IpOptions,
     query: &RouteGet,
@@ -665,93 +1170,66 @@ fn show_route_get(
         return Err("address family does not match destination".into());
     }
 
-    let mut best: Option<BestRoute> = None;
-    for route in snapshot
-        .routes
-        .iter()
-        .filter(|route| route.header.address_family == family)
-    {
-        let mut destination = None;
-        let mut gateway = None;
-        let mut preferred_source = None;
-        let mut interface = None;
-        let mut metric = 0;
-        for attribute in &route.attributes {
-            match attribute {
-                RouteAttribute::Destination(value) => destination = route_ip(value),
-                RouteAttribute::Gateway(value) => gateway = route_ip(value),
-                RouteAttribute::PrefSource(value) => preferred_source = route_ip(value),
-                RouteAttribute::Oif(index) => interface = Some(*index),
-                RouteAttribute::Priority(value) => metric = *value,
-                _ => {}
-            }
-        }
-        let network = destination.unwrap_or(if query.destination.is_ipv4() {
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
-        } else {
-            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
-        });
-        let prefix = route.header.destination_prefix_length;
-        if !prefix_matches(query.destination, network, prefix) {
-            continue;
-        }
-        let device = interface.and_then(|index| snapshot.names.get(&index));
-        if options
-            .device
-            .as_deref()
-            .is_some_and(|expected| device.map(String::as_str) != Some(expected))
-        {
-            continue;
-        }
-        let rank = (prefix, std::cmp::Reverse(metric));
-        if best.as_ref().is_none_or(|best| rank > best.rank) {
-            best = Some(BestRoute {
-                rank,
-                gateway,
-                interface,
-                preferred_source,
-                protocol: route.header.protocol.to_string(),
-            });
-        }
+    let mut message = RouteMessage::default();
+    message.header.address_family = family;
+    message
+        .attributes
+        .push(RouteAttribute::Destination(match query.destination {
+            IpAddr::V4(address) => RouteAddress::Inet(address),
+            IpAddr::V6(address) => RouteAddress::Inet6(address),
+        }));
+    if let Some(source) = query.source {
+        message
+            .attributes
+            .push(RouteAttribute::Source(match source {
+                IpAddr::V4(address) => RouteAddress::Inet(address),
+                IpAddr::V6(address) => RouteAddress::Inet6(address),
+            }));
+    }
+    if let Some(mark) = query.mark {
+        message.attributes.push(RouteAttribute::Mark(mark));
     }
 
-    let Some(BestRoute {
-        gateway,
-        interface,
-        preferred_source,
-        protocol,
-        ..
-    }) = best
-    else {
-        return Err(format!("no route to {}", query.destination));
+    let mut stream = handle.route().get(message).execute();
+    let route = match stream.try_next().await {
+        Ok(Some(route)) => route,
+        Ok(None) => return Err(format!("no route to {}", query.destination)),
+        Err(error) => return Err(format!("RTNETLINK answers: {error}")),
     };
-    let device = interface.and_then(|index| snapshot.names.get(&index).cloned());
-    let source = query.source.or(preferred_source).or_else(|| {
-        let index = interface?;
-        snapshot
-            .addresses
-            .iter()
-            .filter(|address| address.header.index == index)
-            .filter_map(address_value)
-            .map(|(address, _, _)| address)
-            .find(|address| address.is_ipv4() == query.destination.is_ipv4())
-    });
 
+    let mut destination = query.destination.to_string();
+    let mut gateway = None;
+    let mut device = None;
+    let mut source = None;
+    for attribute in &route.attributes {
+        match attribute {
+            RouteAttribute::Destination(value) => {
+                if let Some(address) = route_ip(value) {
+                    destination = address.to_string();
+                }
+            }
+            RouteAttribute::Gateway(value) => gateway = route_ip(value),
+            RouteAttribute::PrefSource(value) => source = route_ip(value),
+            RouteAttribute::Oif(index) => {
+                device = snapshot.names.get(index).cloned();
+            }
+            _ => {}
+        }
+    }
     if options.json {
         println!(
             "{}",
             serde_json::json!([{
-                "dst": query.destination,
+                "dst": destination,
                 "gateway": gateway,
                 "dev": device,
                 "prefsrc": source,
-                "protocol": protocol,
             }])
         );
         return Ok(());
     }
 
-    print!("{}", query.destination);
+    print!("{destination}");
     if let Some(source) = query.source {
         print!(" from {source}");
     }
@@ -761,7 +1239,6 @@ fn show_route_get(
     if let Some(device) = device {
         print!(" dev {device}");
     }
-    print!(" proto {protocol}");
     if let Some(source) = source {
         print!(" src {source}");
     }
@@ -791,11 +1268,18 @@ fn prefix_matches(address: IpAddr, network: IpAddr, prefix: u8) -> bool {
     }
 }
 
+/// Reports whether `network/prefix` falls inside the `selector` prefix.
+fn prefix_within(selector: IpNet, network: IpAddr, prefix: u8) -> bool {
+    prefix_matches(network, selector.0, selector.1) && prefix >= selector.1
+}
+
 fn show_rules(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
+    // iproute2 lists IPv4 rules unless `-6` narrows the family.
+    let family = options.family.or(Some(AddressFamily::Inet));
     let rules = snapshot
         .rules
         .iter()
-        .filter(|rule| family_matches(rule.header.family, options.family))
+        .filter(|rule| family_matches(rule.header.family, family))
         .map(|rule| {
             let mut priority = 0;
             let mut source = "all".to_string();
@@ -825,7 +1309,7 @@ fn show_rules(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
         .collect::<Vec<_>>();
 
     if options.json {
-        let json = rules.iter().map(|(priority, source, destination, table, iif, oif, fwmark)| serde_json::json!({"priority": priority, "src": source, "dst": destination, "table": table, "iif": iif, "oif": oif, "fwmark": fwmark})).collect::<Vec<_>>();
+        let json = rules.iter().map(|(priority, source, destination, table, iif, oif, fwmark)| serde_json::json!({"priority": priority, "src": source, "dst": destination, "table": table_name(*table), "iif": iif, "oif": oif, "fwmark": fwmark})).collect::<Vec<_>>();
         println!(
             "{}",
             serde_json::to_string(&json).map_err(|error| error.to_string())?
@@ -889,7 +1373,7 @@ fn run_arp(args: Vec<OsString>) -> Result<(), String> {
         .build()
         .map_err(|error| error.to_string())?;
     runtime.block_on(async move {
-        let snapshot = Snapshot::load().await?;
+        let (snapshot, _handle) = Snapshot::load().await?;
         let entries = snapshot.neighbours.iter().filter_map(|message| {
             if message.header.family != AddressFamily::Inet { return None; }
             let ip = message.attributes.iter().find_map(|attribute| match attribute { NeighbourAttribute::Destination(address) => neighbour_ip(address), _ => None })?;
@@ -951,7 +1435,7 @@ fn run_ifconfig(args: Vec<OsString>) -> Result<(), String> {
         .build()
         .map_err(|error| error.to_string())?;
     runtime.block_on(async move {
-        let snapshot = Snapshot::load().await?;
+        let (snapshot, _handle) = Snapshot::load().await?;
         let options = IpOptions {
             device,
             ..IpOptions::default()
@@ -1245,10 +1729,22 @@ fn link_matches(link: &LinkMessage, options: &IpOptions) -> bool {
             LinkAttribute::IfName(name) => Some(name.as_str()),
             _ => None,
         });
-    options
+    if options
         .device
         .as_deref()
-        .is_none_or(|expected| name == Some(expected))
+        .is_some_and(|expected| name != Some(expected))
+    {
+        return false;
+    }
+    if options.up_only && !link.header.flags.contains(LinkFlags::Up) {
+        return false;
+    }
+    if let Some(expected) = options.link_type.as_deref()
+        && link_info(link).kind.as_deref() != Some(expected)
+    {
+        return false;
+    }
+    true
 }
 
 #[derive(Default)]
@@ -1517,8 +2013,78 @@ fn address_value(message: &AddressMessage) -> Option<(IpAddr, u8, String)> {
     Some((
         address,
         message.header.prefix_len,
-        message.header.scope.to_string(),
+        scope_name(message.header.scope.to_string()),
     ))
+}
+
+/// iproute2 scope names: the kernel's `universe` prints as `global`.
+fn scope_name(scope: String) -> String {
+    if scope == "universe" {
+        "global".into()
+    } else {
+        scope
+    }
+}
+
+/// Everything the iproute2 `ip addr` text output needs for one address.
+struct AddressText {
+    address: IpAddr,
+    prefix: u8,
+    scope: String,
+    broadcast: Option<String>,
+    secondary: bool,
+    deprecated: bool,
+    dynamic: bool,
+    managed_temporary: bool,
+    noprefixroute: bool,
+    label: Option<String>,
+    valid_lft: Option<u32>,
+    preferred_lft: Option<u32>,
+}
+
+fn address_text(message: &AddressMessage) -> Option<AddressText> {
+    let address = message
+        .attributes
+        .iter()
+        .find_map(|attribute| match attribute {
+            AddressAttribute::Local(value) | AddressAttribute::Address(value) => Some(*value),
+            _ => None,
+        })?;
+    let mut text = AddressText {
+        address,
+        prefix: message.header.prefix_len,
+        scope: scope_name(message.header.scope.to_string()),
+        broadcast: None,
+        secondary: false,
+        deprecated: false,
+        dynamic: false,
+        managed_temporary: false,
+        noprefixroute: false,
+        label: None,
+        valid_lft: None,
+        preferred_lft: None,
+    };
+    let mut flags = AddressFlags::from_bits_retain(u32::from(message.header.flags.bits()));
+    for attribute in &message.attributes {
+        match attribute {
+            AddressAttribute::Broadcast(value) => {
+                text.broadcast = Some(value.to_string());
+            }
+            AddressAttribute::Label(label) => text.label = Some(label.clone()),
+            AddressAttribute::Flags(value) => flags = *value,
+            AddressAttribute::CacheInfo(cache) => {
+                text.valid_lft = Some(cache.ifa_valid);
+                text.preferred_lft = Some(cache.ifa_preferred);
+            }
+            _ => {}
+        }
+    }
+    text.secondary = flags.contains(AddressFlags::Secondary);
+    text.deprecated = flags.contains(AddressFlags::Deprecated);
+    text.dynamic = text.valid_lft.is_some_and(|lifetime| lifetime != u32::MAX);
+    text.managed_temporary = flags.contains(AddressFlags::Managetempaddr);
+    text.noprefixroute = flags.contains(AddressFlags::Noprefixroute);
+    Some(text)
 }
 
 fn neighbour_ip(address: &NeighbourAddress) -> Option<IpAddr> {
