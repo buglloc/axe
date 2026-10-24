@@ -1,6 +1,8 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::ffi::OsString;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::ffi::{CStr, OsString};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 
 use futures_util::TryStreamExt;
 use netlink_packet_route::AddressFamily;
@@ -12,7 +14,8 @@ use netlink_packet_route::neighbour::{
     NeighbourAddress, NeighbourAttribute, NeighbourFlags, NeighbourMessage,
 };
 use netlink_packet_route::route::{
-    RouteAddress, RouteAttribute, RouteFlags, RouteMessage, RouteMetric, RouteType,
+    RouteAddress, RouteAttribute, RouteCacheInfo, RouteFlags, RouteMessage, RouteMetric, RouteRealm,
+    RouteVia,
 };
 use netlink_packet_route::rule::{RuleAttribute, RuleMessage};
 use rtnetlink::IpVersion;
@@ -34,35 +37,35 @@ pub fn commands() -> HashMap<String, AppletFn> {
 }
 
 pub fn arp(args: Vec<OsString>) -> i32 {
-    run("arp", || run_arp(args))
+    run_output("arp", |out| run_arp(args, out))
 }
 
 pub fn ifconfig(args: Vec<OsString>) -> i32 {
-    run("ifconfig", || run_ifconfig(args))
+    run_output("ifconfig", |out| run_ifconfig(args, out))
 }
 
 pub fn ip(args: Vec<OsString>) -> i32 {
-    run("ip", || run_ip(args, None))
+    run_output("ip", |out| run_ip(args, None, out))
 }
 
 pub fn ipaddr(args: Vec<OsString>) -> i32 {
-    run("ipaddr", || run_ip(args, Some(Object::Address)))
+    run_output("ipaddr", |out| run_ip(args, Some(Object::Address), out))
 }
 
 pub fn iplink(args: Vec<OsString>) -> i32 {
-    run("iplink", || run_ip(args, Some(Object::Link)))
+    run_output("iplink", |out| run_ip(args, Some(Object::Link), out))
 }
 
 pub fn ipneigh(args: Vec<OsString>) -> i32 {
-    run("ipneigh", || run_ip(args, Some(Object::Neighbour)))
+    run_output("ipneigh", |out| run_ip(args, Some(Object::Neighbour), out))
 }
 
 pub fn iproute(args: Vec<OsString>) -> i32 {
-    run("iproute", || run_ip(args, Some(Object::Route)))
+    run_output("iproute", |out| run_ip(args, Some(Object::Route), out))
 }
 
 pub fn iprule(args: Vec<OsString>) -> i32 {
-    run("iprule", || run_ip(args, Some(Object::Rule)))
+    run_output("iprule", |out| run_ip(args, Some(Object::Rule), out))
 }
 
 fn run(name: &str, operation: impl FnOnce() -> Result<(), String>) -> i32 {
@@ -71,6 +74,83 @@ fn run(name: &str, operation: impl FnOnce() -> Result<(), String>) -> i32 {
         Err(error) => {
             eprintln!("{name}: {error}");
             1
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CommandError {
+    message: String,
+    code: i32,
+    io_kind: Option<io::ErrorKind>,
+}
+
+impl CommandError {
+    fn new(code: i32, message: impl Into<String>) -> Self {
+        Self { message: message.into(), code, io_kind: None }
+    }
+}
+
+impl From<String> for CommandError {
+    fn from(message: String) -> Self {
+        Self::new(1, message)
+    }
+}
+
+impl From<&str> for CommandError {
+    fn from(message: &str) -> Self {
+        Self::new(1, message)
+    }
+}
+
+impl From<io::Error> for CommandError {
+    fn from(error: io::Error) -> Self {
+        Self { message: os_error(&error), code: 1, io_kind: Some(error.kind()) }
+    }
+}
+
+impl From<rtnetlink::Error> for CommandError {
+    fn from(error: rtnetlink::Error) -> Self {
+        match error {
+            rtnetlink::Error::NetlinkError(message) => {
+                let code = message.code.map_or(libc::EIO, |code| code.get().unsigned_abs() as i32);
+                Self::new(2, format!("RTNETLINK answers: {}", os_error(&io::Error::from_raw_os_error(code))))
+            }
+            error => Self::new(2, error.to_string()),
+        }
+    }
+}
+
+fn os_error(error: &io::Error) -> String {
+    error.raw_os_error().map_or_else(
+        || error.to_string(),
+        |code| {
+            // SAFETY: strerror returns a process-owned NUL-terminated string for every errno.
+            unsafe { CStr::from_ptr(libc::strerror(code)) }.to_string_lossy().into_owned()
+        },
+    )
+}
+
+fn run_output(
+    name: &str,
+    operation: impl FnOnce(&mut dyn Write) -> Result<(), CommandError>,
+) -> i32 {
+    let stdout = io::stdout();
+    let mut out = BufWriter::new(stdout.lock());
+    let result = operation(&mut out);
+    // Flush already produced records even when a later input/device lookup fails.
+    let flushed = out.flush().map_err(CommandError::from);
+    match result.and(flushed) {
+        Ok(()) => 0,
+        Err(error) if error.io_kind == Some(io::ErrorKind::BrokenPipe) => 0,
+        Err(error) => {
+            let mut stderr = io::stderr().lock();
+            if error.io_kind.is_some() {
+                let _ = writeln!(stderr, "{name}: {}", error.message);
+            } else {
+                let _ = writeln!(stderr, "{}", error.message);
+            }
+            error.code
         }
     }
 }
@@ -91,1159 +171,996 @@ struct IpOptions {
     brief: bool,
     stats: bool,
     json: bool,
+    pretty: bool,
+    numeric: bool,
     device: Option<String>,
-    /// `up` selector for `ip link/addr show`.
+    device_index: Option<u32>,
     up_only: bool,
-    /// `type KIND` selector for `ip link show`.
     link_type: Option<String>,
-    /// `master DEVICE` selector for `ip link show`.
     master: Option<String>,
-    /// `scope NAME` selector for `ip addr show`.
-    scope: Option<String>,
-    /// Route table selector: `None` means the iproute2 default (main),
-    /// `Some("all")` means every table.
-    route_table: Option<String>,
-    route_default_only: bool,
-    route_protocol: Option<String>,
-    route_prefix: Option<String>,
-    neigh_state: Option<String>,
-    neigh_address: Option<String>,
+    master_index: Option<u32>,
+    vrf: bool,
+    no_master: bool,
+    group: Option<u32>,
+    scope: Option<u8>,
+    address_prefix: Option<IpNet>,
+    address_protocol: Option<u8>,
+    address_flags: Vec<(AddressFlags, bool)>,
+    label: Option<std::ffi::CString>,
+    /// None selects main; zero selects all tables and both IP families.
+    route_table: Option<u32>,
+    route_protocol: Option<u8>,
+    route_prefix: RoutePrefixes,
+    route_kind: Option<u8>,
+    neighbour_states: Option<u16>,
+    neighbour_prefix: Option<IpNet>,
 }
 
+#[derive(Debug)]
 struct RouteGet {
     destination: IpAddr,
     source: Option<IpAddr>,
     mark: Option<u32>,
 }
 
-fn run_ip(args: Vec<OsString>, forced: Option<Object>) -> Result<(), String> {
-    uucore::panic::mute_sigpipe_panic();
-    let mut values = utf8_args(args)?;
-    let program = values.first().cloned().unwrap_or_else(|| "ip".into());
-    values.remove(0);
+struct IpRequest {
+    object: Object,
+    options: IpOptions,
+    query: Option<RouteGet>,
+    output: Option<IpOutput>,
+}
 
-    if values
-        .iter()
-        .any(|arg| arg == "-h" || arg == "--help" || arg == "help")
-    {
-        println!(
-            "Usage: {program} [ OPTIONS ] OBJECT {{ show | list }}\n       \
-             {program} route get ADDRESS [from ADDRESS] [mark MARK] [dev IFACE]\n       \
-             {program} {{ address | link | neighbour | route | rule }} show\n\
-             Options: -4 -6 -o -br -s -j -d"
-        );
-        return Ok(());
+#[derive(Clone, Copy)]
+enum IpOutput { Help, Version }
+
+impl IpRequest {
+    fn display(output: IpOutput) -> Self {
+        Self { object: Object::Address, options: IpOptions::default(), query: None, output: Some(output) }
     }
+}
 
-    let mut options = IpOptions::default();
-    let mut positional = Vec::new();
-    let mut values = values.into_iter().peekable();
-    while let Some(value) = values.next() {
-        match value.as_str() {
-            "-4" => options.family = Some(AddressFamily::Inet),
-            "-6" => options.family = Some(AddressFamily::Inet6),
-            "-o" | "--oneline" => options.oneline = true,
-            "-br" | "--brief" => options.brief = true,
-            "-s" | "-stats" | "--stats" | "--statistics" => options.stats = true,
-            "-j" | "--json" => options.json = true,
-            "-d" | "--details" => {}
-            "-p" | "--pretty" => {}
-            "-c" | "-color" | "--color" => {}
-            "-N" | "--netnsid" => {}
-            "-0" | "-r" | "--resolve" => {}
-            "-V" | "-Version" | "--version" => {
-                println!("ip (axe) {}", env!("CARGO_PKG_VERSION"));
-                return Ok(());
-            }
-            "-f" | "-family" | "--family" => match values.next().as_deref() {
-                Some("inet") | Some("ipv4") => options.family = Some(AddressFamily::Inet),
-                Some("inet6") | Some("ipv6") => options.family = Some(AddressFamily::Inet6),
-                Some("link") | Some("bridge") | Some("mpls") => {}
-                Some(other) => {
-                    return Err(format!("argument of \"{other}\" is not a valid family"));
-                }
-                None => return Err("option requires an argument -- 'f'".into()),
-            },
-            value if value.starts_with("-f") && matches!(&value[1..], "inet" | "inet6") => {
-                options.family = Some(if &value[1..] == "inet" {
-                    AddressFamily::Inet
-                } else {
-                    AddressFamily::Inet6
-                });
-            }
-            value if value.starts_with('-') => return Err(format!("unknown option '{value}'")),
-            _ => positional.push(value),
+fn run_ip(
+    args: Vec<OsString>,
+    forced: Option<Object>,
+    out: &mut dyn Write,
+) -> Result<(), CommandError> {
+    let args = utf8_args(args)?;
+    let request = parse_ip(&args[1..], forced)?;
+    match request.output {
+        Some(IpOutput::Help) => {
+            writeln!(out, "Usage: ip [ OPTIONS ] OBJECT {{ show | list }}\n       \
+                ip route get ADDRESS [from ADDRESS] [mark MARK] [dev IFACE]\n       \
+                OBJECT := {{ address | link | neighbour | route | rule }}\n       \
+                OPTIONS := {{ -4 | -6 | -f {{ inet | inet6 | link }} | -o | -br | -s | -j | -p | -N }}")?;
+            return Ok(());
         }
+        Some(IpOutput::Version) => {
+            writeln!(out, "ip (axe) {}", env!("CARGO_PKG_VERSION"))?;
+            return Ok(());
+        }
+        None => {}
     }
-
-    let object = if let Some(object) = forced {
-        object
-    } else if positional
-        .first()
-        .is_none_or(|value| value == "show" || value == "list")
-    {
-        Object::Address
-    } else {
-        let value = positional.remove(0);
-        parse_object(&value)?
-    };
-
-    let route_get = if object == Object::Route
-        && positional
-            .first()
-            .is_some_and(|value| "get".starts_with(value))
-    {
-        positional.remove(0);
-        if positional.first().is_some_and(|value| value == "to") {
-            positional.remove(0);
-        }
-        let destination = parse_shorthand_address(
-            positional
-                .first()
-                .ok_or("route get requires a destination")?,
-        )?;
-        positional.remove(0);
-        let mut source = None;
-        let mut mark = None;
-        while !positional.is_empty() {
-            let keyword = positional.remove(0);
-            let value = positional
-                .first()
-                .ok_or_else(|| format!("'{keyword}' requires an argument"))?
-                .clone();
-            positional.remove(0);
-            match keyword.as_str() {
-                "from" => {
-                    source = Some(parse_shorthand_address(&value)?);
-                }
-                "mark" => {
-                    mark = Some(
-                        value
-                            .parse()
-                            .map_err(|_| format!("invalid mark value '{value}'"))?,
-                    );
-                }
-                "dev" | "oif" => options.device = Some(value),
-                keyword => return Err(format!("unsupported route get selector '{keyword}'")),
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    runtime.block_on(async {
+        let (connection, handle, _) = rtnetlink::new_connection()?;
+        let connection = tokio::spawn(connection);
+        let result = async {
+            let mut request = request;
+            let mut snapshot = Snapshot::load_links(&handle).await?;
+            resolve_selectors(&snapshot, &mut request.options, request.object)?;
+            if let Some(query) = request.query {
+                let message = route_get_request(&request.options, &query);
+                let mut routes = handle.route().get(message).execute();
+                let route = routes.try_next().await?.ok_or_else(|| {
+                    CommandError::new(2, "RTNETLINK answers: Network is unreachable")
+                })?;
+                let route = RouteView::new(route);
+                return render_routes(&snapshot, std::iter::once(&route), &request.options, Some(&query), out);
             }
-        }
-        Some(RouteGet {
-            destination,
-            source,
-            mark,
-        })
-    } else {
-        if positional
-            .first()
-            .is_some_and(|value| "show".starts_with(value) || "list".starts_with(value))
-        {
-            positional.remove(0);
-        }
-        parse_show_selectors(object, &mut positional, &mut options)?;
-        None
-    };
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| error.to_string())?;
-    runtime.block_on(async move {
-        let (snapshot, handle) = Snapshot::load().await?;
-        if matches!(object, Object::Address | Object::Link)
-            && let Some(name) = options.device.as_deref()
-            && !snapshot
-                .links
-                .iter()
-                .any(|link| link_matches(link, &options))
-        {
-            return Err(format!("Device \"{name}\" does not exist."));
-        }
-        match object {
-            Object::Address => show_addresses(&snapshot, &options),
-            Object::Link => show_links(&snapshot, &options),
-            Object::Neighbour => show_neighbours(&snapshot, &options),
-            Object::Route => {
-                if let Some(query) = route_get {
-                    route_get_netlink(&handle, &snapshot, &options, &query).await
-                } else {
-                    show_routes(&snapshot, &options)
-                }
-            }
-            Object::Rule => show_rules(&snapshot, &options),
-        }
+            snapshot.load_object(&handle, request.object, &request.options).await?;
+            render_ip(&snapshot, request.object, &request.options, out)
+        }.await;
+        connection.abort();
+        result
     })
 }
 
-/// Parses the selectors iproute2 accepts after `show`/`list`.
-fn parse_show_selectors(
-    object: Object,
-    positional: &mut Vec<String>,
-    options: &mut IpOptions,
-) -> Result<(), String> {
-    if positional.first().is_some_and(|value| value == "dev") {
-        positional.remove(0);
-        options.device = positional.first().cloned();
-        if options.device.is_none() {
-            return Err("'dev' requires an interface name".into());
+fn parse_ip(args: &[String], forced: Option<Object>) -> Result<IpRequest, CommandError> {
+    let mut options = IpOptions::default();
+    let mut values = args.iter().map(String::as_str);
+    let mut first = None;
+    while let Some(value) = values.next() {
+        match value {
+            "-4" => options.family = Some(AddressFamily::Inet),
+            "-6" => options.family = Some(AddressFamily::Inet6),
+            "-0" => options.family = Some(AddressFamily::Packet),
+            "-o" | "-oneline" | "--oneline" => options.oneline = true,
+            "-br" | "-brief" | "--brief" => options.brief = true,
+            "-s" | "-st" | "-stats" | "-statistics" | "--stats" | "--statistics" => options.stats = true,
+            "-j" | "-json" | "--json" => options.json = true,
+            "-p" | "-pretty" | "--pretty" => options.pretty = true,
+            "-N" | "-Numeric" | "--Numeric" => options.numeric = true,
+            "-h" | "-help" | "--help" => return Ok(IpRequest::display(IpOutput::Help)),
+            "-V" | "-Version" | "--version" => return Ok(IpRequest::display(IpOutput::Version)),
+            "-f" | "-family" | "--family" => {
+                let family = argument(&mut values, value)?;
+                options.family = Some(match family {
+                    "inet" | "ipv4" => AddressFamily::Inet,
+                    "inet6" | "ipv6" => AddressFamily::Inet6,
+                    "link" => AddressFamily::Packet,
+                    _ => return Err(CommandError::new(255, format!("Error: argument \"{family}\" is wrong: invalid protocol family"))),
+                });
+            }
+            value if value.starts_with('-') => {
+                return Err(CommandError::new(255, format!("Option \"{value}\" is unknown or unsupported, try \"ip -help\".")));
+            }
+            value => {
+                first = Some(value);
+                break;
+            }
         }
-        positional.remove(0);
     }
-    let mut index = 0;
-    while index < positional.len() {
-        let value = positional[index].clone();
-        let take_argument = |index: &mut usize| -> Option<String> {
-            let argument = positional.get(*index + 1).cloned();
-            if argument.is_some() {
-                *index += 1;
+    if first == Some("help") {
+        return Ok(IpRequest::display(IpOutput::Help));
+    }
+    let object = if let Some(object) = forced {
+        object
+    } else if let Some(value) = first.take() {
+        parse_object(value)?
+    } else {
+        Object::Address
+    };
+    if !matches!(object, Object::Link | Object::Address)
+        && options.family == Some(AddressFamily::Packet)
+    {
+        return Err(CommandError::new(255, "Error: link family is only supported for link/address display"));
+    }
+    if options.brief && !matches!(object, Object::Link | Object::Address) {
+        return Err(CommandError::new(255, "Error: brief output is only supported for link/address display"));
+    }
+    let mut positional = first.into_iter().chain(values);
+    let verb = positional.next();
+    let operation = verb.and_then(|verb| verb_name(object, verb));
+    if operation == Some("help") {
+        return Ok(IpRequest::display(IpOutput::Help));
+    }
+    if operation.is_some_and(|verb| !matches!(verb, "show" | "list" | "lst" | "get")) {
+        return Err(CommandError::new(1, "only show/list operations and route get are supported (read-only)"));
+    }
+    let mut selectors = verb.filter(|_| operation.is_none()).into_iter().chain(positional);
+    let query = if operation == Some("get") {
+        if object != Object::Route {
+            return Err(CommandError::new(1, "only show/list operations and route get are supported (read-only)"));
+        }
+        let destination = argument(&mut selectors, "route get")?;
+        let destination = if destination == "to" { argument(&mut selectors, "to")? } else { destination };
+        let destination = parse_shorthand_address(destination)?;
+        check_family(destination, options.family)?;
+        let mut query = RouteGet { destination, source: None, mark: None };
+        while let Some(selector) = selectors.next() {
+            let value = argument(&mut selectors, selector)?;
+            match selector {
+                "from" => {
+                    let source = parse_shorthand_address(value)?;
+                    check_family(source, Some(ip_family(destination)))?;
+                    query.source = Some(source);
+                }
+                "mark" => query.mark = Some(parse_number(value).ok_or_else(|| invalid("mark", value))?),
+                "dev" | "oif" => options.device = Some(value.into()),
+                _ => return Err(invalid("route get selector", selector)),
             }
-            argument
-        };
-        match (object, value.as_str()) {
+        }
+        Some(query)
+    } else {
+        parse_show_selectors(object, &mut selectors, &mut options)?;
+        None
+    };
+    Ok(IpRequest { object, options, query, output: None })
+}
+
+fn verb_name(object: Object, value: &str) -> Option<&'static str> {
+    let names: &[&str] = match object {
+        Object::Link => &["add", "set", "change", "replace", "delete", "show", "list", "xstats", "afstats", "help"],
+        Object::Address => &["add", "change", "replace", "delete", "show", "list", "flush", "save", "restore", "help"],
+        Object::Neighbour => &["add", "change", "replace", "delete", "show", "list", "flush", "get", "help"],
+        Object::Route => &["add", "change", "chg", "replace", "prepend", "append", "test", "delete", "list", "show", "lst", "get", "flush", "save", "restore", "showdump", "help"],
+        Object::Rule => &["add", "delete", "list", "show", "flush", "save", "restore", "help"],
+    };
+    names.iter().copied().find(|name| !value.is_empty() && name.starts_with(value))
+}
+
+fn argument<'a>(
+    values: &mut impl Iterator<Item = &'a str>,
+    keyword: &str,
+) -> Result<&'a str, CommandError> {
+    values.next().ok_or_else(|| CommandError::new(255, format!("Command line is not complete. Try option \"{keyword} help\"")))
+}
+
+fn invalid(kind: &str, value: &str) -> CommandError {
+    CommandError::new(255, format!("Error: argument \"{value}\" is wrong: invalid {kind}"))
+}
+
+fn parse_show_selectors<'a>(
+    object: Object,
+    values: &mut impl Iterator<Item = &'a str>,
+    options: &mut IpOptions,
+) -> Result<(), CommandError> {
+    while let Some(selector) = values.next() {
+        if selector.is_empty() { return Err(invalid("selector", selector)); }
+        if selector.starts_with('-') {
+            if object == Object::Address
+                && let Some(flag) = selector.strip_prefix('-').and_then(address_flag)
+            {
+                options.address_flags.push((flag, matches!(selector, "-dynamic" | "-primary")));
+                continue;
+            }
+            return Err(invalid("selector", selector));
+        }
+        match (object, selector) {
+            (Object::Link | Object::Address | Object::Route | Object::Neighbour, "dev") => {
+                options.device = Some(argument(values, selector)?.into());
+            }
             (Object::Link | Object::Address, "up") => options.up_only = true,
-            (Object::Link, "type") => {
-                if let Some(kind) = take_argument(&mut index) {
-                    options.link_type = Some(kind);
-                }
+            (Object::Link | Object::Address, "type") => options.link_type = Some(argument(values, selector)?.into()),
+            (Object::Link | Object::Address | Object::Neighbour, "master" | "vrf") => {
+                options.master = Some(argument(values, selector)?.into());
+                options.vrf = selector == "vrf";
             }
-            (Object::Link, "master") => {
-                if let Some(master) = take_argument(&mut index) {
-                    options.master = Some(master);
-                }
+            (Object::Link | Object::Address, "nomaster") => options.no_master = true,
+            (Object::Link | Object::Address, "group") => {
+                let value = argument(values, selector)?;
+                options.group = Some(if value == "default" { 0 } else { parse_number(value).ok_or_else(|| invalid("group", value))? });
             }
-            (Object::Address, "scope") => {
-                if let Some(scope) = take_argument(&mut index) {
-                    options.scope = Some(scope);
-                }
+            (Object::Address | Object::Route, "scope") => {
+                let value = argument(values, selector)?;
+                options.scope = if value == "all" { None } else { Some(parse_name(value, SCOPES).and_then(|value| u8::try_from(value).ok()).ok_or_else(|| invalid("scope", value))?) };
             }
-            (Object::Route, "default") => options.route_default_only = true,
+            (Object::Address, "to") => options.address_prefix = Some(parse_prefix(argument(values, selector)?, options.family)?),
+            (Object::Address, "label") => {
+                let value = argument(values, selector)?;
+                options.label = Some(std::ffi::CString::new(value).map_err(|_| invalid("label", value))?);
+            }
+            (Object::Address, "proto") => {
+                let value = argument(values, selector)?;
+                options.address_protocol = Some(parse_name(value, ADDRESS_PROTOCOLS).and_then(|value| u8::try_from(value).ok()).ok_or_else(|| invalid("address protocol", value))?);
+            }
+            (Object::Address, "dynamic") => options.address_flags.push((AddressFlags::Permanent, false)),
+            (Object::Address, "permanent") => options.address_flags.push((AddressFlags::Permanent, true)),
+            (Object::Address, "primary") => options.address_flags.push((AddressFlags::Secondary, false)),
+            (Object::Address, name) if address_flag(name).is_some() => {
+                options.address_flags.push((address_flag(name).expect("matched address flag"), true));
+            }
             (Object::Route, "table") => {
-                let table = positional
-                    .get(index + 1)
-                    .cloned()
-                    .ok_or("'table' requires an argument")?;
-                index += 1;
-                options.route_table = Some(table);
+                let value = argument(values, selector)?;
+                options.route_table = Some(if value == "all" { 0 } else {
+                    parse_name(value, TABLES).ok_or_else(|| invalid("table id", value))?
+                });
             }
-            (Object::Route, "proto") => {
-                if let Some(protocol) = take_argument(&mut index) {
-                    options.route_protocol = Some(protocol);
+            (Object::Route, "proto" | "protocol") => {
+                let value = argument(values, selector)?;
+                options.route_protocol = Some(parse_name(value, ROUTE_PROTOCOLS).and_then(|value| u8::try_from(value).ok()).ok_or_else(|| invalid("protocol", value))?);
+            }
+            (Object::Route, "type") => {
+                let value = argument(values, selector)?;
+                options.route_kind = Some(parse_name(value, ROUTE_TYPES).and_then(|value| u8::try_from(value).ok()).ok_or_else(|| invalid("route type", value))?);
+            }
+            (Object::Route, "root" | "match" | "exact" | "to") => {
+                let mut mode = match selector {
+                    "root" => PrefixMode::Root,
+                    "match" => PrefixMode::Match,
+                    _ => PrefixMode::Exact,
+                };
+                let mut value = argument(values, selector)?;
+                if matches!(value, "root" | "match" | "exact") {
+                    mode = match value { "root" => PrefixMode::Root, "match" => PrefixMode::Match, _ => PrefixMode::Exact };
+                    value = argument(values, value)?;
                 }
+                options.route_prefix.set(parse_prefix(value, options.family)?, mode);
             }
-            (Object::Route, "match") => {
-                if let Some(prefix) = take_argument(&mut index) {
-                    options.route_prefix = Some(prefix);
-                }
-            }
-            (Object::Route, value) if value.parse::<IpNet>().is_ok() => {
-                options.route_prefix = Some(value.to_string());
+            (Object::Route, value) => {
+                options.route_prefix.set(parse_prefix(value, options.family)?, PrefixMode::Exact);
             }
             (Object::Neighbour, "nud") => {
-                if let Some(state) = take_argument(&mut index) {
-                    options.neigh_state = Some(state);
-                }
+                let value = argument(values, selector)?;
+                let mask = if value == "all" { 0x1ff } else {
+                    let state = parse_name(&value.to_ascii_lowercase(), NEIGHBOUR_STATES).filter(|state| *state <= 255).ok_or_else(|| invalid("NUD state", value))?;
+                    if state == 0 { 0x100 } else { state as u16 }
+                };
+                *options.neighbour_states.get_or_insert(0) |= mask;
             }
-            (Object::Neighbour, "to" | "dev" | "vrf") => {
-                take_argument(&mut index);
-            }
-            (Object::Neighbour, value) if value.contains(':') => {
-                options.neigh_address = Some(value.to_string());
-            }
-            (Object::Address | Object::Link, value)
-                if options.device.is_none() && !value.starts_with('-') =>
-            {
-                options.device = Some(value.to_string());
-            }
-            (_, value) => {
-                return Err(format!(
-                    "unsupported selector '{value}' (only show/list operations are supported)"
-                ));
-            }
+            (Object::Neighbour, "to") => options.neighbour_prefix = Some(parse_prefix(argument(values, selector)?, options.family)?),
+            (Object::Neighbour, value) => options.neighbour_prefix = Some(parse_prefix(value, options.family)?),
+            (Object::Link | Object::Address, value) if options.device.is_none() => options.device = Some(value.into()),
+            _ => return Err(invalid("selector", selector)),
         }
-        index += 1;
     }
     Ok(())
 }
 
-/// Parses an address the way `getaddr` does for route lookups, accepting the
-/// numeric shorthand forms `10.1` and `10` for IPv4.
-fn parse_shorthand_address(value: &str) -> Result<IpAddr, String> {
-    if let Ok(address) = value.parse::<IpAddr>() {
-        return Ok(address);
-    }
-    if !value.is_empty()
-        && value.len() <= 15
-        && value
-            .split('.')
-            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
-    {
-        let mut parts: Vec<u8> = value
-            .split('.')
-            .map(|part| {
-                part.parse()
-                    .map_err(|_| format!("invalid destination '{value}'"))
-            })
-            .collect::<Result<_, _>>()?;
-        while parts.len() < 4 {
-            parts.insert(0, 0);
-        }
-        if parts.len() == 4 {
-            return Ok(IpAddr::V4(Ipv4Addr::new(
-                parts[0], parts[1], parts[2], parts[3],
-            )));
-        }
-    }
-    Err(format!("invalid destination '{value}'"))
+fn parse_object(value: &str) -> Result<Object, CommandError> {
+    [
+        ("address", Object::Address), ("link", Object::Link),
+        ("neighbour", Object::Neighbour), ("neighbor", Object::Neighbour),
+        ("route", Object::Route), ("rule", Object::Rule),
+    ].into_iter()
+        .find_map(|(name, object)| (!value.is_empty() && name.starts_with(value)).then_some(object))
+        .ok_or_else(|| CommandError::new(255, format!("Object \"{value}\" is unknown, try \"ip help\".")))
 }
 
-fn parse_object(value: &str) -> Result<Object, String> {
-    // iproute2 accepts any unambiguous prefix of an object name.
-    const OBJECTS: [(&str, Object); 5] = [
-        ("address", Object::Address),
-        ("link", Object::Link),
-        ("neighbour", Object::Neighbour),
-        ("route", Object::Route),
-        ("rule", Object::Rule),
-    ];
-    if value == "neighbor" {
-        return Ok(Object::Neighbour);
-    }
-    for (name, object) in OBJECTS {
-        if name.starts_with(value) {
-            return Ok(object);
-        }
-    }
-    Err(format!(
-        "Object \"{value}\" is unknown, try \"{value} help\"."
-    ))
+fn parse_number(value: &str) -> Option<u32> {
+    if value.is_empty() || value.starts_with(['-', '+']) { return None; }
+    let (digits, radix) = if let Some(value) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+        (value, 16)
+    } else if value.len() > 1 && value.starts_with('0') { (&value[1..], 8) }
+    else { (value, 10) };
+    u32::from_str_radix(digits, radix).ok()
 }
 
-/// A parsed `A.B.C.D/N` prefix used by the route `match` selector.
+fn parse_shorthand_address(value: &str) -> Result<IpAddr, CommandError> {
+    if let Ok(address) = value.parse::<Ipv6Addr>() { return Ok(address.into()); }
+    let mut octets = [0; 4];
+    for (count, part) in value.split('.').enumerate() {
+        if count == 4 { return Err(address_error("address", value, None)); }
+        octets[count] = parse_number(part).and_then(|part| u8::try_from(part).ok()).ok_or_else(|| address_error("address", value, None))?;
+    }
+    Ok(Ipv4Addr::from(octets).into())
+}
+
+fn ip_family(address: IpAddr) -> AddressFamily {
+    if address.is_ipv4() { AddressFamily::Inet } else { AddressFamily::Inet6 }
+}
+
+fn check_family(address: IpAddr, family: Option<AddressFamily>) -> Result<(), CommandError> {
+    if family.is_some_and(|family| family != ip_family(address)) {
+        Err(address_error("address", &address.to_string(), family))
+    } else { Ok(()) }
+}
+
+fn address_error(kind: &str, value: &str, family: Option<AddressFamily>) -> CommandError {
+    let family = match family { Some(AddressFamily::Inet) => "inet", Some(AddressFamily::Inet6) => "inet6", _ => "any valid" };
+    CommandError::new(1, format!("Error: {family} {kind} is expected rather than \"{value}\"."))
+}
+
+#[derive(Clone, Copy, Debug)]
 struct IpNet(IpAddr, u8);
 
-impl std::str::FromStr for IpNet {
-    type Err = ();
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let (address, prefix) = value.split_once('/').ok_or(())?;
-        let address = address.parse::<IpAddr>().map_err(|_| ())?;
-        let prefix = prefix.parse::<u8>().map_err(|_| ())?;
-        let width = if address.is_ipv4() { 32 } else { 128 };
-        if prefix > width {
-            return Err(());
+#[derive(Clone, Copy)]
+enum PrefixMode { Exact, Root, Match }
+
+#[derive(Clone, Copy, Default)]
+struct RoutePrefixes {
+    root: Option<IpNet>,
+    matched: Option<IpNet>,
+}
+
+impl RoutePrefixes {
+    fn set(&mut self, network: IpNet, mode: PrefixMode) {
+        match mode {
+            PrefixMode::Exact => { self.root = Some(network); self.matched = Some(network); }
+            PrefixMode::Root => self.root = Some(network),
+            PrefixMode::Match => self.matched = Some(network),
         }
-        Ok(IpNet(address, prefix))
+    }
+
+    fn matches(self, route: IpNet) -> bool {
+        self.root.is_none_or(|root| route.1 >= root.1 && prefix_matches(route.0, root.0, root.1))
+            && self.matched.is_none_or(|matched| route.1 <= matched.1 && prefix_matches(route.0, matched.0, route.1))
     }
 }
 
+fn parse_prefix(value: &str, family: Option<AddressFamily>) -> Result<IpNet, CommandError> {
+    if matches!(value, "default" | "all" | "any") {
+        return Ok(IpNet(if family == Some(AddressFamily::Inet6) { Ipv6Addr::UNSPECIFIED.into() } else { Ipv4Addr::UNSPECIFIED.into() }, 0));
+    }
+    let (address, length) = value.split_once('/').map_or((value, None), |(address, length)| (address, Some(length)));
+    let address = parse_shorthand_address(address).map_err(|_| address_error("prefix", value, family))?;
+    check_family(address, family).map_err(|_| address_error("prefix", value, family))?;
+    let width = if address.is_ipv4() { 32 } else { 128 };
+    let length = length.map_or(Some(width), |length| length.parse::<u8>().ok()).filter(|length| *length <= width).ok_or_else(|| address_error("prefix", value, family))?;
+    Ok(IpNet(address, length))
+}
+
+#[derive(Default)]
 struct Snapshot {
-    links: Vec<LinkMessage>,
-    addresses: Vec<AddressMessage>,
-    neighbours: Vec<NeighbourMessage>,
-    routes: Vec<RouteMessage>,
+    links: Vec<LinkView>,
+    addresses: Vec<AddressView>,
+    neighbours: Vec<NeighbourView>,
+    routes: Vec<RouteView>,
     rules: Vec<RuleMessage>,
-    names: HashMap<u32, String>,
+    indices: HashMap<u32, usize>,
 }
 
 impl Snapshot {
-    async fn load() -> Result<(Self, rtnetlink::Handle), String> {
-        let (connection, handle, _) =
-            rtnetlink::new_connection().map_err(|error| error.to_string())?;
-        tokio::spawn(connection);
-
-        let mut links = Vec::new();
-        let mut link_stream = handle.link().get().execute();
-        while let Some(link) = link_stream
-            .try_next()
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            links.push(link);
+    async fn load_links(handle: &rtnetlink::Handle) -> Result<Self, CommandError> {
+        let mut snapshot = Self::default();
+        let mut stream = handle.link().get().execute();
+        while let Some(link) = stream.try_next().await? {
+            let link = LinkView::new(link);
+            snapshot.indices.insert(link.index, snapshot.links.len());
+            snapshot.links.push(link);
         }
-
-        let names = links
-            .iter()
-            .filter_map(|link| {
-                link.attributes
-                    .iter()
-                    .find_map(|attribute| match attribute {
-                        LinkAttribute::IfName(name) => Some((link.header.index, name.clone())),
-                        _ => None,
-                    })
-            })
-            .collect();
-
-        let mut addresses = Vec::new();
-        let mut address_stream = handle.address().get().execute();
-        while let Some(address) = address_stream
-            .try_next()
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            addresses.push(address);
-        }
-
-        let mut neighbours = Vec::new();
-        let mut neighbour_stream = handle.neighbours().get().execute();
-        while let Some(neighbour) = neighbour_stream
-            .try_next()
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            neighbours.push(neighbour);
-        }
-
-        let mut routes = Vec::new();
-        for family in [AddressFamily::Inet, AddressFamily::Inet6] {
-            let mut request = RouteMessage::default();
-            request.header.address_family = family;
-            let mut route_stream = handle.route().get(request).execute();
-            while let Some(route) = route_stream
-                .try_next()
-                .await
-                .map_err(|error| error.to_string())?
-            {
-                routes.push(route);
-            }
-        }
-
-        let mut rules = Vec::new();
-        for version in [IpVersion::V4, IpVersion::V6] {
-            let mut rule_stream = handle.rule().get(version).execute();
-            while let Some(rule) = rule_stream
-                .try_next()
-                .await
-                .map_err(|error| error.to_string())?
-            {
-                rules.push(rule);
-            }
-        }
-
-        Ok((
-            Self {
-                links,
-                addresses,
-                neighbours,
-                routes,
-                rules,
-                names,
-            },
-            handle,
-        ))
-    }
-}
-
-fn master_filter(snapshot: &Snapshot, options: &IpOptions) -> Option<u32> {
-    let master = options.master.as_deref()?;
-    Some(
-        snapshot
-            .links
-            .iter()
-            .find(|link| {
-                link.attributes.iter().any(|attribute| match attribute {
-                    LinkAttribute::IfName(name) => name == master,
-                    _ => false,
-                })
-            })
-            .map(|link| link.header.index)
-            .unwrap_or(u32::MAX),
-    )
-}
-
-fn link_under_master(link: &LinkMessage, master_index: Option<u32>) -> bool {
-    master_index.is_none_or(|expected| {
-        link.attributes.iter().any(
-            |attribute| matches!(attribute, LinkAttribute::Controller(index) if *index == expected),
-        )
-    })
-}
-
-fn print_link_header(link: &LinkMessage, info: &LinkInfo) {
-    let flags = ip_flags(link, info).join(",");
-    let link_type = link.header.link_layer_type.to_string().to_ascii_lowercase();
-    // ipaddr output carries no mode field; iplink prints it.
-    let mut line = format!(
-        "{}: {}: <{}> mtu {}",
-        link.header.index,
-        info.name,
-        flags,
-        info.mtu.unwrap_or_default()
-    );
-    if let Some(qdisc) = &info.qdisc {
-        line.push_str(&format!(" qdisc {qdisc}"));
-    }
-    line.push_str(&format!(" state {}", info.state));
-    line.push_str(" group default");
-    if let Some(queue_len) = info.tx_queue_len {
-        line.push_str(&format!(" qlen {queue_len}"));
-    }
-    match &info.address {
-        Some(address) => {
-            line.push_str(&format!(
-                "\n    link/{link_type} {address} brd {}",
-                info.broadcast.clone().unwrap_or_default()
-            ));
-            if let Some(permanent) = &info.permanent_address
-                && permanent != address
-            {
-                line.push_str(&format!(" permaddr {permanent}"));
-            }
-        }
-        None if link_type == "none" => line.push_str("\n    link/none "),
-        _ => {}
-    }
-    for altname in &info.alternate_names {
-        line.push_str(&format!("\n    altname {altname}"));
-    }
-    println!("{line}");
-}
-
-fn show_links(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
-    let master_index = master_filter(snapshot, options);
-    let links = snapshot
-        .links
-        .iter()
-        .filter(|link| link_matches(link, options))
-        .filter(|link| link_under_master(link, master_index))
-        .collect::<Vec<_>>();
-    if options.json {
-        let values = links
-            .iter()
-            .map(|link| serde_json::Value::Object(link_json(link)))
-            .collect::<Vec<_>>();
-        println!(
-            "{}",
-            serde_json::to_string(&values).map_err(|error| error.to_string())?
-        );
-        return Ok(());
+        Ok(snapshot)
     }
 
-    for link in links {
-        let info = link_info(link);
-        if options.brief {
-            println!(
-                "{:<16} {:<12} {}",
-                info.name,
-                info.state,
-                info.address.unwrap_or_default()
-            );
-            continue;
-        }
-        let flags = ip_flags(link, &info).join(",");
-        let link_type = link.header.link_layer_type.to_string().to_ascii_lowercase();
-        let mode = if info.mode.eq_ignore_ascii_case("default") {
-            None
-        } else {
-            Some(info.mode.to_uppercase())
-        };
-        let mut line = format!(
-            "{}: {}: <{}> mtu {}",
-            link.header.index,
-            info.name,
-            flags,
-            info.mtu.unwrap_or_default()
-        );
-        if let Some(qdisc) = &info.qdisc {
-            line.push_str(&format!(" qdisc {qdisc}"));
-        }
-        line.push_str(&format!(" state {}", info.state));
-        line.push_str(&format!(
-            " mode {}",
-            mode.unwrap_or_else(|| "DEFAULT".into())
-        ));
-        line.push_str(" group default");
-        if let Some(queue_len) = info.tx_queue_len {
-            line.push_str(&format!(" qlen {queue_len}"));
-        }
-        match &info.address {
-            Some(address) => {
-                line.push_str(&format!(
-                    "\n    link/{link_type} {address} brd {}",
-                    info.broadcast.clone().unwrap_or_default()
-                ));
-                if let Some(permanent) = &info.permanent_address
-                    && permanent != address
-                {
-                    line.push_str(&format!(" permaddr {permanent}"));
+    async fn load_object(
+        &mut self,
+        handle: &rtnetlink::Handle,
+        object: Object,
+        options: &IpOptions,
+    ) -> Result<(), CommandError> {
+        match object {
+            Object::Link => {}
+            Object::Address if options.family == Some(AddressFamily::Packet) => {}
+            Object::Address => {
+                let mut stream = handle.address().get().execute();
+                while let Some(address) = stream.try_next().await? {
+                    if let Some(address) = AddressView::new(address) { self.addresses.push(address); }
                 }
             }
-            None if link_type == "none" => line.push_str("\n    link/none "),
-            _ => {}
+            Object::Neighbour => {
+                let mut stream = handle.neighbours().get().execute();
+                while let Some(neighbour) = stream.try_next().await? {
+                    if let Some(neighbour) = NeighbourView::new(neighbour) { self.neighbours.push(neighbour); }
+                }
+            }
+            Object::Route => {
+                for family in [AddressFamily::Inet, AddressFamily::Inet6] {
+                    if !family_matches(family, route_family(options)) { continue; }
+                    let mut message = RouteMessage::default();
+                    message.header.address_family = family;
+                    let mut stream = handle.route().get(message).execute();
+                    while let Some(route) = stream.try_next().await? { self.routes.push(RouteView::new(route)); }
+                }
+            }
+            Object::Rule => {
+                let version = if options.family == Some(AddressFamily::Inet6) { IpVersion::V6 } else { IpVersion::V4 };
+                let mut stream = handle.rule().get(version).execute();
+                while let Some(rule) = stream.try_next().await? { self.rules.push(rule); }
+            }
         }
-        for altname in &info.alternate_names {
-            line.push_str(&format!("\n    altname {altname}"));
-        }
-        if options.oneline {
-            println!("{}", line.replace('\n', "\\"));
+        Ok(())
+    }
+
+    fn link(&self, index: u32) -> Option<&LinkView> {
+        self.indices.get(&index).map(|position| &self.links[*position])
+    }
+
+    fn name(&self, index: u32) -> Cow<'_, str> {
+        self.link(index).map_or_else(|| Cow::Owned(format!("if{index}")), |link| Cow::Borrowed(link.name.as_str()))
+    }
+
+    fn require_device(&self, name: &str) -> Option<&LinkView> {
+        self.links.iter().find(|link| link.name == name || link.alternate_names.iter().any(|alternate| alternate == name))
+    }
+}
+
+fn resolve_selectors(snapshot: &Snapshot, options: &mut IpOptions, object: Object) -> Result<(), CommandError> {
+    if let Some(name) = options.device.as_deref() {
+        options.device_index = Some(snapshot.require_device(name).ok_or_else(|| {
+            CommandError::new(1, if matches!(object, Object::Link | Object::Address) { format!("Device \"{name}\" does not exist.") } else { format!("Cannot find device \"{name}\"") })
+        })?.index);
+    }
+    if let Some(name) = options.master.as_deref() {
+        let master = if options.vrf {
+            snapshot.require_device(name).filter(|link| link.kind.as_deref() == Some("vrf")).ok_or_else(|| invalid("VRF name", name))?
         } else {
-            println!("{line}");
-        }
-        if options.stats
-            && let Some(stats) = info.stats
-        {
-            println!(
-                "    RX: bytes  packets  errors  dropped\n    {:<10} {:<8} {:<7} {}",
-                stats.rx_bytes, stats.rx_packets, stats.rx_errors, stats.rx_dropped
-            );
-            println!(
-                "    TX: bytes  packets  errors  dropped\n    {:<10} {:<8} {:<7} {}",
-                stats.tx_bytes, stats.tx_packets, stats.tx_errors, stats.tx_dropped
-            );
-        }
+            snapshot.require_device(name).ok_or_else(|| CommandError::new(1, format!("Device \"{name}\" does not exist.")))?
+        };
+        options.master_index = Some(master.index);
     }
     Ok(())
 }
 
-fn show_addresses(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
-    let master_index = master_filter(snapshot, options);
-    let selected = snapshot
-        .links
-        .iter()
-        .filter(|link| link_matches(link, options))
-        .filter(|link| link_under_master(link, master_index))
-        .collect::<Vec<_>>();
-    if options.json {
-        let values = selected
-            .iter()
-            .map(|link| {
-                let addresses = snapshot
-                    .addresses
-                    .iter()
-                    .filter(|address| {
-                        address.header.index == link.header.index
-                            && family_matches(address.header.family, options.family)
-                    })
-                    .filter_map(address_json)
-                    .map(serde_json::Value::Object)
-                    .collect::<Vec<_>>();
-                let mut value = link_json(link);
-                value.insert("addr_info".into(), addresses.into());
-                serde_json::Value::Object(value)
-            })
-            .collect::<Vec<_>>();
-        println!(
-            "{}",
-            serde_json::to_string(&values).map_err(|error| error.to_string())?
-        );
-        return Ok(());
+fn render_ip(snapshot: &Snapshot, object: Object, options: &IpOptions, out: &mut dyn Write) -> Result<(), CommandError> {
+    match object {
+        Object::Link | Object::Address => render_links(snapshot, object, options, out),
+        Object::Neighbour => render_neighbours(snapshot, options, out),
+        Object::Route => render_routes(snapshot, snapshot.routes.iter().filter(|route| route.matches(options)), options, None, out),
+        Object::Rule => show_rules(snapshot, options, out),
     }
+}
 
-    for link in selected {
-        let info = link_info(link);
-        let addresses = snapshot
-            .addresses
-            .iter()
-            .filter(|address| {
-                address.header.index == link.header.index
-                    && family_matches(address.header.family, options.family)
-            })
-            .filter_map(address_text)
-            .filter(|address| {
-                options
-                    .scope
-                    .as_deref()
-                    .is_none_or(|expected| address.scope == expected)
-            })
-            .collect::<Vec<_>>();
-        if options.brief {
-            let values = addresses
-                .iter()
-                .map(|address| format!("{}/{}", address.address, address.prefix))
-                .collect::<Vec<_>>()
-                .join(" ");
-            if values.is_empty() {
-                println!("{:<16} {:<14} ", info.name, info.state);
-            } else {
-                println!("{:<16} {:<14} {} ", info.name, info.state, values);
-            }
-            continue;
-        }
-        if options.family.is_some() && addresses.is_empty() {
-            continue;
-        }
-        if !options.oneline {
-            print_link_header(link, &info);
-        }
-        for address in addresses {
-            let kind = if address.address.is_ipv4() {
-                "inet"
-            } else {
-                "inet6"
-            };
-            let mut line = if options.oneline {
-                format!(
-                    "{}: {}    {kind} {}/{}",
-                    link.header.index, info.name, address.address, address.prefix
-                )
-            } else {
-                format!("    {kind} {}/{}", address.address, address.prefix)
-            };
-            if let Some(broadcast) = &address.broadcast
-                && address.address.is_ipv4()
-            {
-                line.push_str(&format!(" brd {broadcast}"));
-            }
-            line.push_str(&format!(" scope {}", address.scope));
-            let ipv6 = address.address.is_ipv6();
-            if address.secondary {
-                line.push_str(if ipv6 { " temporary" } else { " secondary" });
-            }
-            if address.deprecated {
-                line.push_str(" deprecated");
-            }
-            if address.dynamic {
-                line.push_str(" dynamic");
-            }
-            if address.managed_temporary {
-                line.push_str(" mngtmpaddr");
-            }
-            if address.noprefixroute {
-                line.push_str(" noprefixroute");
-            }
-            match &address.label {
-                Some(label) => line.push_str(&format!(" {label}")),
-                None if !ipv6 => line.push_str(&format!(" {}", info.name)),
-                None => line.push(' '),
-            }
-            if let (Some(valid), Some(preferred)) = (address.valid_lft, address.preferred_lft) {
-                if options.oneline {
-                    println!(
-                        "{line}\\       valid_lft {} preferred_lft {}",
-                        format_lifetime(valid),
-                        format_lifetime(preferred)
-                    );
-                } else {
-                    println!("{line}");
-                    println!(
-                        "       valid_lft {} preferred_lft {}",
-                        format_lifetime(valid),
-                        format_lifetime(preferred)
-                    );
-                }
-            } else {
-                println!("{line}");
-            }
-        }
+fn write_json(out: &mut dyn Write, values: impl IntoIterator<Item = serde_json::Value>, pretty: bool) -> Result<(), CommandError> {
+    out.write_all(b"[")?;
+    let mut first = true;
+    for value in values {
+        if !first { out.write_all(b",")?; }
+        if pretty { out.write_all(b"\n")?; }
+        first = false;
+        let result = if pretty { serde_json::to_writer_pretty(&mut *out, &value) } else { serde_json::to_writer(&mut *out, &value) };
+        result.map_err(|error| CommandError { io_kind: error.io_error_kind(), message: error.to_string(), code: 1 })?;
     }
+    if pretty && !first { out.write_all(b"\n")?; }
+    out.write_all(b"]\n")?;
+    Ok(())
+}
+
+fn link_matches(link: &LinkView, options: &IpOptions) -> bool {
+    options.device_index.is_none_or(|index| index == link.index)
+        && (!options.up_only || link.flags.contains(LinkFlags::Up))
+        && options.link_type.as_deref().is_none_or(|kind| link.kind.as_deref() == Some(kind))
+        && options.master_index.is_none_or(|index| link.master == Some(index))
+        && (!options.no_master || link.master.is_none())
+        && options.group.is_none_or(|group| link.group == group)
+}
+
+fn render_links(snapshot: &Snapshot, object: Object, options: &IpOptions, out: &mut dyn Write) -> Result<(), CommandError> {
+    let address_mode = object == Object::Address && options.family != Some(AddressFamily::Packet);
+    let selected_addresses = |index| snapshot.addresses.iter().filter(move |address| address.index == index && address.matches(options));
+    let selected = snapshot.links.iter().filter(|link| {
+        if !link_matches(link, options) { return false; }
+        if !address_mode || selected_addresses(link.index).next().is_some() { return true; }
+        options.family.is_none() && options.scope.is_none()
+            && options.address_prefix.is_none() && options.address_protocol.is_none()
+            && options.address_flags.is_empty() && options.label.is_none()
+            && !snapshot.addresses.iter().any(|address| address.index == link.index)
+    });
+    if options.json {
+        return write_json(out, selected.map(|link| {
+            let mut value = link.json(snapshot, options, object);
+            if address_mode {
+                value.insert("addr_info".into(), selected_addresses(link.index).map(|address| serde_json::Value::Object(address.json(options))).collect::<Vec<_>>().into());
+            }
+            serde_json::Value::Object(value)
+        }), options.pretty);
+    }
+    for link in selected {
+        if options.brief {
+            write!(out, "{:<16} {:<14} ", link.display_name(snapshot), link.state)?;
+            if address_mode {
+                for address in selected_addresses(link.index) { address.write_brief(out)?; }
+                writeln!(out)?;
+            } else {
+                if let Some(address) = &link.address { write!(out, "{address} ")?; }
+                writeln!(out, "<{}> ", link.ip_flags(snapshot).join(","))?;
+            }
+            continue;
+        }
+        if !options.oneline || !address_mode { render_link_header(snapshot, link, object, options, out)?; }
+        if address_mode {
+            for address in selected_addresses(link.index) {
+                if options.oneline { write!(out, "{}: {}    ", link.index, link.name)?; }
+                else { out.write_all(b"    ")?; }
+                address.write_text(out, options)?;
+            }
+        }
+        if options.stats && !options.oneline { link.write_stats(out)?; }
+    }
+    Ok(())
+}
+
+fn render_link_header(snapshot: &Snapshot, link: &LinkView, object: Object, options: &IpOptions, out: &mut dyn Write) -> Result<(), CommandError> {
+    write!(out, "{}: {}: <{}> mtu {}", link.index, link.display_name(snapshot), link.ip_flags(snapshot).join(","), link.mtu.unwrap_or_default())?;
+    if let Some(qdisc) = &link.qdisc { write!(out, " qdisc {qdisc}")?; }
+    if let Some(master) = link.master { write!(out, " master {}", snapshot.name(master))?; }
+    write!(out, " state {}", link.state)?;
+    if object == Object::Link { write!(out, " mode {}", link.mode.to_ascii_uppercase())?; }
+    write!(out, " group {}", name_of(link.group, GROUPS, options.numeric))?;
+    if let Some(queue) = link.tx_queue_len { write!(out, " qlen {queue}")?; }
+    let separator = if options.oneline { "\\" } else { "\n" };
+    if options.family.is_none() || options.family == Some(AddressFamily::Packet) {
+        write!(out, "{separator}    link/{} ", link_type_name(link.link_type, options.numeric))?;
+        if let Some(address) = &link.address { write!(out, "{address}")?; }
+        if let Some(broadcast) = &link.broadcast {
+            write!(out, " {} {broadcast}", if link.flags.contains(LinkFlags::Pointopoint) { "peer" } else { "brd" })?;
+        }
+        if let Some(permanent) = &link.permanent_address
+            && link.address.as_deref() != Some(permanent)
+        { write!(out, " permaddr {permanent}")?; }
+    }
+    if let Some(netns) = link.netns {
+        if netns < 0 { out.write_all(b" link-netnsid unknown")?; }
+        else { write!(out, " link-netnsid {netns}")?; }
+    }
+    for alternate in &link.alternate_names { write!(out, "{separator}    altname {alternate}")?; }
+    writeln!(out)?;
     Ok(())
 }
 
 fn format_lifetime(seconds: u32) -> String {
-    if seconds == u32::MAX {
-        "forever".into()
-    } else {
-        format!("{seconds}sec")
+    if seconds == u32::MAX { "forever".into() } else { format!("{seconds}sec") }
+}
+
+struct NeighbourView {
+    destination: IpAddr,
+    index: u32,
+    lladdr: Option<String>,
+    state: u16,
+    flags: NeighbourFlags,
+    probes: Option<u32>,
+}
+
+impl NeighbourView {
+    fn new(message: NeighbourMessage) -> Option<Self> {
+        let mut destination = None;
+        let mut lladdr = None;
+        let mut probes = None;
+        for attribute in message.attributes {
+            match attribute {
+                NeighbourAttribute::Destination(address) => destination = neighbour_ip(&address),
+                NeighbourAttribute::LinkLayerAddress(bytes) => lladdr = Some(mac(&bytes)),
+                NeighbourAttribute::Probes(value) => probes = Some(value),
+                _ => {}
+            }
+        }
+        Some(Self { destination: destination?, index: message.header.ifindex, lladdr, state: message.header.state.into(), flags: message.header.flags, probes })
+    }
+
+    fn matches(&self, snapshot: &Snapshot, options: &IpOptions) -> bool {
+        let state_mask = if self.state == 0 { 0x100 } else { self.state };
+        family_matches(ip_family(self.destination), options.family)
+            && state_mask & options.neighbour_states.unwrap_or(0xff & !0x40) != 0
+            && options.device_index.is_none_or(|index| self.index == index)
+            && options.master_index.is_none_or(|index| snapshot.link(self.index).is_some_and(|link| link.master == Some(index)))
+            && options.neighbour_prefix.is_none_or(|prefix| prefix_matches(self.destination, prefix.0, prefix.1))
+    }
+
+    fn states(&self) -> Vec<String> {
+        NEIGHBOUR_STATES.iter().filter(|(mask, _)| *mask != 0 && self.state & *mask as u16 != 0).map(|(_, name)| name.to_ascii_uppercase()).collect()
+    }
+
+    fn json(&self, snapshot: &Snapshot, options: &IpOptions) -> serde_json::Value {
+        let mut value = serde_json::Map::new();
+        value.insert("dst".into(), self.destination.to_string().into());
+        if options.device_index.is_none() { value.insert("dev".into(), snapshot.name(self.index).as_ref().into()); }
+        insert_optional(&mut value, "lladdr", self.lladdr.as_deref());
+        if self.flags.contains(NeighbourFlags::Router) { value.insert("router".into(), true.into()); }
+        if self.flags.contains(NeighbourFlags::Proxy) { value.insert("proxy".into(), true.into()); }
+        value.insert("state".into(), self.states().into());
+        if options.stats { insert_optional(&mut value, "probes", self.probes); }
+        value.into()
     }
 }
 
-fn show_neighbours(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
-    let show_all_states = options
-        .neigh_state
-        .as_deref()
-        .is_some_and(|state| state.eq_ignore_ascii_case("all"));
-    let values = snapshot
-        .neighbours
-        .iter()
-        .filter_map(|message| {
-            let destination = message
-                .attributes
-                .iter()
-                .find_map(|attribute| match attribute {
-                    NeighbourAttribute::Destination(address) => neighbour_ip(address),
-                    _ => None,
-                })?;
-            if !family_matches(message.header.family, options.family) {
-                return None;
-            }
-            let states = neighbour_states(message);
-            // iproute2 hides NONE and NOARP entries unless requested.
-            if !show_all_states
-                && (states.contains(&"NONE".to_string()) || states.contains(&"NOARP".to_string()))
-            {
-                return None;
-            }
-            if let Some(expected) = options.neigh_state.as_deref()
-                && !expected.eq_ignore_ascii_case("all")
-                && !states
-                    .iter()
-                    .any(|state| state.eq_ignore_ascii_case(expected))
-            {
-                return None;
-            }
-            if let Some(expected) = options.neigh_address.as_deref()
-                && destination.to_string() != expected
-            {
-                return None;
-            }
-            let device = snapshot
-                .names
-                .get(&message.header.ifindex)
-                .cloned()
-                .unwrap_or_else(|| message.header.ifindex.to_string());
-            if options
-                .device
-                .as_deref()
-                .is_some_and(|expected| expected != device)
-            {
-                return None;
-            }
-            let lladdr = message
-                .attributes
-                .iter()
-                .find_map(|attribute| match attribute {
-                    NeighbourAttribute::LinkLayerAddress(bytes) => Some(mac(bytes)),
-                    _ => None,
-                });
-            let router = message.header.flags.contains(NeighbourFlags::Router);
-            Some((destination, device, lladdr, states, router))
-        })
-        .collect::<Vec<_>>();
-
-    if options.json {
-        let json = values
-            .iter()
-            .map(|(dst, dev, lladdr, states, router)| {
-                let mut states: Vec<serde_json::Value> =
-                    states.iter().map(|state| state.clone().into()).collect();
-                if *router {
-                    states.push("ROUTER".into());
-                }
-                serde_json::json!({"dst": dst, "dev": dev, "lladdr": lladdr, "state": states})
-            })
-            .collect::<Vec<_>>();
-        println!(
-            "{}",
-            serde_json::to_string(&json).map_err(|error| error.to_string())?
-        );
-    } else {
-        for (destination, device, lladdr, states, router) in values {
-            print!("{destination} dev {device}");
-            if let Some(lladdr) = lladdr {
-                print!(" lladdr {lladdr}");
-            }
-            if router {
-                print!(" router");
-            }
-            println!(" {} ", states.join(" "));
-        }
+fn render_neighbours(snapshot: &Snapshot, options: &IpOptions, out: &mut dyn Write) -> Result<(), CommandError> {
+    let selected = snapshot.neighbours.iter().filter(|neighbour| neighbour.matches(snapshot, options));
+    if options.json { return write_json(out, selected.map(|neighbour| neighbour.json(snapshot, options)), options.pretty); }
+    for neighbour in selected {
+        write!(out, "{}", neighbour.destination)?;
+        if options.device_index.is_none() { write!(out, " dev {}", snapshot.name(neighbour.index))?; }
+        if let Some(address) = &neighbour.lladdr { write!(out, " lladdr {address}")?; }
+        if neighbour.flags.contains(NeighbourFlags::Router) { out.write_all(b" router")?; }
+        if neighbour.flags.contains(NeighbourFlags::Proxy) { out.write_all(b" proxy")?; }
+        if options.stats && let Some(probes) = neighbour.probes { write!(out, " probes {probes}")?; }
+        let states = neighbour.states();
+        if !states.is_empty() { write!(out, " {}", states.join(","))?; }
+        writeln!(out, " ")?;
     }
     Ok(())
 }
 
-fn neighbour_states(message: &NeighbourMessage) -> Vec<String> {
-    message
-        .header
-        .state
-        .to_string()
-        .split('|')
-        .map(|state| state.to_uppercase())
-        .collect()
-}
-
-/// iproute2 `ip route` shows the IPv4 main table unless `-6` or a `table`
-/// selector says otherwise.
 fn route_family(options: &IpOptions) -> Option<AddressFamily> {
-    options.family.or(Some(AddressFamily::Inet))
+    options.family.or_else(|| {
+        options.route_prefix.root.or(options.route_prefix.matched).map(|network| ip_family(network.0))
+            .or(if options.route_table == Some(0) { None } else { Some(AddressFamily::Inet) })
+    })
 }
 
-fn route_table_selected(options: &IpOptions, table: u32) -> bool {
-    match options.route_table.as_deref() {
-        None => table == 254,
-        Some("all") => true,
-        Some("main") => table == 254,
-        Some("local") => table == 255,
-        Some("default") => table == 253,
-        Some(name) => name.parse().is_ok_and(|value: u32| value == table),
-    }
-}
-
-fn show_routes(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
-    let routes = snapshot
-        .routes
-        .iter()
-        .filter(|route| family_matches(route.header.address_family, route_family(options)))
-        // The kernel route cache surfaces as RTM_F_CLONED entries; iproute2
-        // only lists them for `ip route show cache`.
-        .filter(|route| !route.header.flags.contains(RouteFlags::Cloned))
-        .filter_map(|route| route_text(snapshot, route, options))
-        .collect::<Vec<_>>();
-
-    if options.json {
-        let json = routes
-            .iter()
-            .map(|entry| {
-                serde_json::json!({
-                    "dst": entry.destination,
-                    "gateway": entry.gateway,
-                    "dev": entry.device,
-                    "protocol": entry.protocol,
-                    "prefsrc": entry.source,
-                    "metric": entry.metric.filter(|metric| *metric != 0),
-                })
-            })
-            .collect::<Vec<_>>();
-        println!(
-            "{}",
-            serde_json::to_string(&json).map_err(|error| error.to_string())?
-        );
-    } else {
-        for entry in routes {
-            print!("{entry} ");
-            println!();
-        }
-    }
-    Ok(())
-}
-
-/// One rendered routing-table entry with iproute2's field order.
-struct RouteEntry {
-    destination: String,
+struct NextHopView {
     gateway: Option<IpAddr>,
-    device: Option<String>,
-    source: Option<IpAddr>,
-    metric: Option<u32>,
-    mtu: Option<u32>,
-    protocol: String,
-    multipath: Vec<String>,
-    scope: Option<String>,
+    via: Option<IpAddr>,
+    index: u32,
+    weight: u16,
+    flags: u32,
+    realm: Option<RouteRealm>,
 }
 
-impl std::fmt::Display for RouteEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.destination)?;
-        if let Some(gateway) = self.gateway {
-            write!(f, " via {gateway}")?;
+struct MetricView {
+    id: u8,
+    name: &'static str,
+    value: u32,
+    time: bool,
+}
+
+struct RouteView {
+    network: IpNet,
+    from: Option<IpNet>,
+    gateway: Option<IpAddr>,
+    via: Option<IpAddr>,
+    index: Option<u32>,
+    source: Option<IpAddr>,
+    table: u32,
+    protocol: u8,
+    scope: u8,
+    kind: u8,
+    tos: u8,
+    flags: u32,
+    metric: Option<u32>,
+    metrics: Vec<MetricView>,
+    locks: u32,
+    multipath: Vec<NextHopView>,
+    preference: Option<u8>,
+    expires: Option<i32>,
+    realm: Option<RouteRealm>,
+    nhid: Option<u32>,
+    uid: Option<u32>,
+    mark: Option<u32>,
+    cache: Option<RouteCacheInfo>,
+}
+
+impl RouteView {
+    fn new(message: RouteMessage) -> Self {
+        let address = if message.header.address_family == AddressFamily::Inet6 { Ipv6Addr::UNSPECIFIED.into() } else { Ipv4Addr::UNSPECIFIED.into() };
+        let mut route = Self {
+            network: IpNet(address, message.header.destination_prefix_length),
+            from: None, gateway: None, via: None, index: None, source: None,
+            table: u32::from(message.header.table), protocol: message.header.protocol.into(),
+            scope: message.header.scope.into(), kind: message.header.kind.into(),
+            tos: message.header.tos, flags: message.header.flags.bits(), metric: None,
+            metrics: Vec::new(), locks: 0, multipath: Vec::new(), preference: None,
+            expires: None, realm: None, nhid: None, uid: None, mark: None, cache: None,
+        };
+        for attribute in message.attributes {
+            match attribute {
+                RouteAttribute::Destination(value) => if let Some(value) = route_ip(&value) { route.network.0 = value; },
+                RouteAttribute::Source(value) => route.from = route_ip(&value).map(|value| IpNet(value, message.header.source_prefix_length)),
+                RouteAttribute::Gateway(value) => route.gateway = route_ip(&value),
+                RouteAttribute::Via(value) => route.via = via_ip(&value),
+                RouteAttribute::PrefSource(value) => route.source = route_ip(&value),
+                RouteAttribute::Oif(index) => route.index = Some(index),
+                RouteAttribute::Priority(value) => route.metric = Some(value),
+                RouteAttribute::Table(value) => route.table = value,
+                RouteAttribute::Preference(value) => route.preference = Some(value.into()),
+                RouteAttribute::Expires(value) => route.expires = Some((value / user_hz()) as i32),
+                RouteAttribute::Realm(value) => route.realm = Some(value),
+                RouteAttribute::NhId(value) => route.nhid = Some(value),
+                RouteAttribute::Uid(value) => route.uid = Some(value),
+                RouteAttribute::Mark(value) => route.mark = Some(value),
+                RouteAttribute::CacheInfo(value) => {
+                    if value.expires != 0 { route.expires = Some((value.expires as i32) / user_hz() as i32); }
+                    route.cache = Some(value);
+                }
+                RouteAttribute::Metrics(values) => {
+                    for metric in values {
+                        let (id, name, value, divisor, time) = match metric {
+                            RouteMetric::Lock(value) => { route.locks = value; continue; }
+                            RouteMetric::Mtu(value) => (2, "mtu", value, 1, false),
+                            RouteMetric::Window(value) => (3, "window", value, 1, false),
+                            RouteMetric::Rtt(value) => (4, "rtt", value, 8, true),
+                            RouteMetric::RttVar(value) => (5, "rttvar", value, 4, true),
+                            RouteMetric::SsThresh(value) => (6, "ssthresh", value, 1, false),
+                            RouteMetric::Cwnd(value) => (7, "cwnd", value, 1, false),
+                            RouteMetric::Advmss(value) => (8, "advmss", value, 1, false),
+                            RouteMetric::Reordering(value) => (9, "reordering", value, 1, false),
+                            RouteMetric::Hoplimit(u32::MAX) => continue,
+                            RouteMetric::Hoplimit(value) => (10, "hoplimit", value, 1, false),
+                            RouteMetric::InitCwnd(value) => (11, "initcwnd", value, 1, false),
+                            RouteMetric::Features(value) => (12, "features", value, 1, false),
+                            RouteMetric::RtoMin(value) => (13, "rto_min", value, 1, true),
+                            RouteMetric::InitRwnd(value) => (14, "initrwnd", value, 1, false),
+                            RouteMetric::QuickAck(value) => (15, "quickack", value, 1, false),
+                            RouteMetric::FastopenNoCookie(value) => (17, "fastopen_no_cookie", value, 1, false),
+                            _ => continue,
+                        };
+                        route.metrics.push(MetricView { id, name, value: value / divisor, time });
+                    }
+                    route.metrics.sort_unstable_by_key(|metric| metric.id);
+                }
+                RouteAttribute::MultiPath(values) => {
+                    for next in values {
+                        let mut hop = NextHopView { gateway: None, via: None, index: next.interface_index, weight: u16::from(next.hops) + 1, flags: u32::from(next.flags.bits()), realm: None };
+                        for attribute in next.attributes {
+                            match attribute {
+                                RouteAttribute::Gateway(value) => hop.gateway = route_ip(&value),
+                                RouteAttribute::Via(value) => hop.via = via_ip(&value),
+                                RouteAttribute::Realm(value) => hop.realm = Some(value),
+                                _ => {}
+                            }
+                        }
+                        route.multipath.push(hop);
+                    }
+                }
+                _ => {}
+            }
         }
-        if let Some(device) = &self.device {
-            write!(f, " dev {device}")?;
+        route
+    }
+
+    fn matches(&self, options: &IpOptions) -> bool {
+        let table = options.route_table.unwrap_or(254);
+        family_matches(ip_family(self.network.0), route_family(options))
+            && self.flags & RouteFlags::Cloned.bits() == 0
+            && (table == 0 || self.table == table)
+            && options.route_protocol.is_none_or(|protocol| self.protocol == protocol)
+            && options.route_kind.is_none_or(|kind| self.kind == kind)
+            && options.scope.is_none_or(|scope| self.scope == scope)
+            && options.device_index.is_none_or(|index| self.index == Some(index) || self.multipath.iter().any(|hop| hop.index == index))
+            && options.route_prefix.matches(self.network)
+    }
+
+    fn show_table(&self, options: &IpOptions) -> bool {
+        self.table != 0 && self.table != 254 && options.route_table.is_none_or(|table| table == 0)
+    }
+
+    fn show_protocol(&self, options: &IpOptions) -> bool {
+        self.flags & RouteFlags::Cloned.bits() == 0 && self.protocol != 3 && options.route_protocol.is_none()
+    }
+
+    fn show_scope(&self, options: &IpOptions) -> bool {
+        self.flags & RouteFlags::Cloned.bits() == 0 && self.scope != 0 && options.scope.is_none()
+    }
+
+    fn json(&self, snapshot: &Snapshot, options: &IpOptions, query: Option<&RouteGet>) -> serde_json::Value {
+        let mut value = serde_json::Map::new();
+        if self.kind != 1 { value.insert("type".into(), name_of(u32::from(self.kind), ROUTE_TYPES, false).as_ref().into()); }
+        value.insert("dst".into(), network_text(self.network).into());
+        if let Some(from) = self.from { value.insert("from".into(), network_text(from).into()); }
+        else if let Some(source) = query.and_then(|query| query.source) { value.insert("from".into(), source.to_string().into()); }
+        insert_optional(&mut value, "nhid", self.nhid);
+        if self.tos != 0 { value.insert("tos".into(), dsfield_name(self.tos, options.numeric).as_ref().into()); }
+        insert_optional(&mut value, "gateway", self.gateway.map(|address| address.to_string()));
+        if let Some(via) = self.via { value.insert("via".into(), serde_json::json!({"family": family_name(via), "host": via.to_string()})); }
+        if let Some(index) = self.index
+            && (options.device_index.is_none() || query.is_some())
+        { value.insert("dev".into(), snapshot.name(index).as_ref().into()); }
+        if self.show_table(options) { value.insert("table".into(), name_of(self.table, TABLES, options.numeric).as_ref().into()); }
+        if self.show_protocol(options) { value.insert("protocol".into(), name_of(u32::from(self.protocol), ROUTE_PROTOCOLS, options.numeric).as_ref().into()); }
+        if self.show_scope(options) { value.insert("scope".into(), name_of(u32::from(self.scope), SCOPES, options.numeric).as_ref().into()); }
+        insert_optional(&mut value, "prefsrc", self.source.map(|address| address.to_string()));
+        insert_optional(&mut value, "metric", self.metric);
+        value.insert("flags".into(), route_flags(self.flags).collect::<Vec<_>>().into());
+        insert_optional(&mut value, "mark", self.mark.filter(|mark| *mark != 0));
+        if let Some(realm) = self.realm { value.insert("flow".into(), realm_json(realm, options.numeric)); }
+        insert_optional(&mut value, "uid", self.uid);
+        if self.flags & RouteFlags::Cloned.bits() != 0 && self.network.0.is_ipv4() {
+            value.insert("cache".into(), cache_flags(self.flags).collect::<Vec<_>>().into());
         }
-        if self.protocol != "boot" {
-            write!(f, " proto {}", self.protocol)?;
+        insert_optional(&mut value, "expires", self.expires);
+        if let Some(cache) = self.cache {
+            if cache.error != 0 { value.insert("error".into(), cache.error.into()); }
+            if options.stats {
+                if cache.clntref != 0 { value.insert("users".into(), cache.clntref.into()); }
+                if cache.used != 0 { value.insert("used".into(), cache.used.into()); }
+                if cache.last_use != 0 { value.insert("age".into(), (cache.last_use / user_hz()).into()); }
+            }
         }
-        if let Some(scope) = &self.scope {
-            write!(f, " scope {scope}")?;
+        if !self.metrics.is_empty() {
+            let metrics: serde_json::Map<_, _> = self.metrics.iter().map(|metric| (metric.name.into(), metric.value.into())).collect();
+            value.insert("metrics".into(), serde_json::json!([metrics]));
         }
-        if let Some(source) = self.source {
-            write!(f, " src {source}")?;
+        if let Some(preference) = self.preference { value.insert("pref".into(), name_of(u32::from(preference), PREFERENCES, false).as_ref().into()); }
+        if !self.multipath.is_empty() {
+            value.insert("nexthops".into(), self.multipath.iter().map(|hop| {
+                let mut next = serde_json::Map::new();
+                insert_optional(&mut next, "gateway", hop.gateway.map(|address| address.to_string()));
+                if let Some(via) = hop.via { next.insert("via".into(), serde_json::json!({"family": family_name(via), "host": via.to_string()})); }
+                next.insert("dev".into(), snapshot.name(hop.index).as_ref().into());
+                next.insert("weight".into(), hop.weight.into());
+                next.insert("flags".into(), route_flags(hop.flags).collect::<Vec<_>>().into());
+                if let Some(realm) = hop.realm { next.insert("flow".into(), realm_json(realm, options.numeric)); }
+                serde_json::Value::Object(next)
+            }).collect::<Vec<_>>().into());
         }
-        if let Some(mtu) = self.mtu {
-            write!(f, " mtu {mtu}")?;
+        value.into()
+    }
+
+    fn write_text(&self, snapshot: &Snapshot, options: &IpOptions, query: Option<&RouteGet>, out: &mut dyn Write) -> Result<(), CommandError> {
+        if self.kind != 1 { write!(out, "{} ", name_of(u32::from(self.kind), ROUTE_TYPES, false))?; }
+        write!(out, "{} ", network_text(self.network))?;
+        if let Some(from) = self.from { write!(out, "from {} ", network_text(from))?; }
+        else if let Some(source) = query.and_then(|query| query.source) { write!(out, "from {source} ")?; }
+        if let Some(nhid) = self.nhid { write!(out, "nhid {nhid} ")?; }
+        if self.tos != 0 { write!(out, "tos {} ", dsfield_name(self.tos, options.numeric))?; }
+        if let Some(gateway) = self.gateway { write!(out, "via {gateway} ")?; }
+        if let Some(via) = self.via { write!(out, "via {} {via} ", family_name(via))?; }
+        if let Some(index) = self.index
+            && (options.device_index.is_none() || query.is_some())
+        { write!(out, "dev {} ", snapshot.name(index))?; }
+        if self.show_table(options) { write!(out, "table {} ", name_of(self.table, TABLES, options.numeric))?; }
+        if self.show_protocol(options) { write!(out, "proto {} ", name_of(u32::from(self.protocol), ROUTE_PROTOCOLS, options.numeric))?; }
+        if self.show_scope(options) { write!(out, "scope {} ", name_of(u32::from(self.scope), SCOPES, options.numeric))?; }
+        if let Some(source) = self.source { write!(out, "src {source} ")?; }
+        if let Some(metric) = self.metric { write!(out, "metric {metric} ")?; }
+        for flag in route_flags(self.flags) { write!(out, "{flag} ")?; }
+        if let Some(mark) = self.mark.filter(|mark| *mark != 0) {
+            if mark >= 16 { write!(out, "mark 0x{mark:x} ")?; }
+            else { write!(out, "mark {mark} ")?; }
         }
-        if let Some(metric) = self.metric.filter(|metric| *metric != 0) {
-            write!(f, " metric {metric}")?;
+        if let Some(realm) = self.realm { write_realm(out, realm, options.numeric)?; }
+        if let Some(uid) = self.uid { write!(out, "uid {uid} ")?; }
+        let separator = if options.oneline { "\\" } else { "\n" };
+        if self.flags & RouteFlags::Cloned.bits() != 0 && self.network.0.is_ipv4() {
+            write!(out, "{separator}    cache ")?;
+            let flags = cache_flags(self.flags).collect::<Vec<_>>();
+            if !flags.is_empty() { write!(out, "<{}> ", flags.join(","))?; }
         }
-        for nexthop in &self.multipath {
-            write!(f, "\n{nexthop}")?;
+        if let Some(expires) = self.expires { write!(out, "expires {expires}sec ")?; }
+        if let Some(cache) = self.cache {
+            if cache.error != 0 { write!(out, "error {} ", cache.error)?; }
+            if options.stats {
+                if cache.clntref != 0 { write!(out, "users {} ", cache.clntref)?; }
+                if cache.used != 0 { write!(out, "used {} ", cache.used)?; }
+                if cache.last_use != 0 { write!(out, "age {}sec ", cache.last_use / user_hz())?; }
+            }
         }
+        for metric in &self.metrics {
+            write!(out, "{} ", metric.name)?;
+            if self.locks & (1 << metric.id) != 0 { out.write_all(b"lock ")?; }
+            if metric.time {
+                if metric.value >= 1000 { write!(out, "{}s ", f64::from(metric.value) / 1000.0)?; }
+                else { write!(out, "{}ms ", metric.value)?; }
+            } else { write!(out, "{} ", metric.value)?; }
+        }
+        if let Some(preference) = self.preference { write!(out, "pref {}", name_of(u32::from(preference), PREFERENCES, false))?; }
+        for next in &self.multipath {
+            write!(out, "{separator}\tnexthop ")?;
+            if let Some(gateway) = next.gateway { write!(out, "via {gateway} ")?; }
+            if let Some(via) = next.via { write!(out, "via {} {via} ", family_name(via))?; }
+            if let Some(realm) = next.realm { write_realm(out, realm, options.numeric)?; }
+            write!(out, "dev {} weight {} ", snapshot.name(next.index), next.weight)?;
+            for flag in route_flags(next.flags) { write!(out, "{flag} ")?; }
+        }
+        writeln!(out)?;
         Ok(())
     }
 }
 
-fn route_text(
-    snapshot: &Snapshot,
-    route: &RouteMessage,
-    options: &IpOptions,
-) -> Option<RouteEntry> {
-    let mut destination = None;
-    let mut gateway = None;
-    let mut source = None;
-    let mut device = None;
-    let mut metric = None;
-    let mut mtu = None;
-    let mut table = u32::from(route.header.table);
-    let mut multipath = Vec::new();
-    for attribute in &route.attributes {
-        match attribute {
-            RouteAttribute::Destination(value) => destination = route_ip(value),
-            RouteAttribute::Gateway(value) => gateway = route_ip(value),
-            RouteAttribute::PrefSource(value) => source = route_ip(value),
-            RouteAttribute::Oif(index) => device = snapshot.names.get(index).cloned(),
-            RouteAttribute::Priority(value) => metric = Some(*value),
-            RouteAttribute::Metrics(metrics) => {
-                for metric in metrics {
-                    if let RouteMetric::Mtu(value) = metric {
-                        mtu = Some(*value);
-                    }
-                }
-            }
-            RouteAttribute::Table(value) => table = *value,
-            RouteAttribute::MultiPath(next_hops) => {
-                for nexthop in next_hops {
-                    let mut text = String::from("nexthop");
-                    if let Some(via) =
-                        nexthop
-                            .attributes
-                            .iter()
-                            .find_map(|attribute| match attribute {
-                                RouteAttribute::Gateway(value) => route_ip(value),
-                                _ => None,
-                            })
-                    {
-                        text.push_str(&format!(" via {via}"));
-                    }
-                    if let Some(name) = snapshot.names.get(&nexthop.interface_index) {
-                        text.push_str(&format!(" dev {name}"));
-                    }
-                    text.push_str(&format!(" weight {}", u32::from(nexthop.hops) + 1));
-                    multipath.push(text);
-                }
-            }
-            _ => {}
-        }
-    }
-    if !route_table_selected(options, table) {
-        return None;
-    }
-    if options
-        .device
-        .as_deref()
-        .is_some_and(|expected| device.as_deref() != Some(expected))
-    {
-        return None;
-    }
-    if options.route_default_only && destination.is_some() {
-        return None;
-    }
-    if let Some(protocol) = options.route_protocol.as_deref()
-        && route.header.protocol.to_string().to_ascii_lowercase() != protocol
-    {
-        return None;
-    }
-    if let Some(selector) = options.route_prefix.as_deref() {
-        let selector = selector.parse::<IpNet>().ok()?;
-        let address = destination?;
-        if !prefix_within(selector, address, route.header.destination_prefix_length) {
-            return None;
-        }
-    }
-
-    let prefix = route.header.destination_prefix_length;
-    let host_route = destination.is_some_and(|address| {
-        (address.is_ipv4() && prefix == 32) || (address.is_ipv6() && prefix == 128)
-    });
-    let destination = destination
-        .map(|address| {
-            if host_route {
-                address.to_string()
-            } else {
-                format!("{address}/{prefix}")
-            }
-        })
-        .unwrap_or_else(|| "default".into());
-    let kind = route.header.kind;
-    let destination = match kind {
-        RouteType::BlackHole => format!("blackhole {destination}"),
-        RouteType::Unreachable => format!("unreachable {destination}"),
-        RouteType::Prohibit => format!("prohibit {destination}"),
-        RouteType::Local if table == 255 => format!("local {destination}"),
-        RouteType::Broadcast if table == 255 => format!("broadcast {destination}"),
-        RouteType::Multicast if table == 255 => format!("multicast {destination}"),
-        _ => destination,
-    };
-    let scope = match route.header.scope.to_string() {
-        scope if scope == "universe" => None,
-        scope => Some(scope),
-    };
-    Some(RouteEntry {
-        destination,
-        gateway,
-        device,
-        source,
-        metric,
-        mtu,
-        protocol: route.header.protocol.to_string().to_ascii_lowercase(),
-        multipath,
-        scope,
-    })
+fn render_routes<'a>(snapshot: &Snapshot, routes: impl Iterator<Item = &'a RouteView>, options: &IpOptions, query: Option<&RouteGet>, out: &mut dyn Write) -> Result<(), CommandError> {
+    if options.json { return write_json(out, routes.map(|route| route.json(snapshot, options, query)), options.pretty); }
+    for route in routes { route.write_text(snapshot, options, query, out)?; }
+    Ok(())
 }
 
-async fn route_get_netlink(
-    handle: &rtnetlink::Handle,
-    snapshot: &Snapshot,
-    options: &IpOptions,
-    query: &RouteGet,
-) -> Result<(), String> {
-    let family = if query.destination.is_ipv4() {
-        AddressFamily::Inet
-    } else {
-        AddressFamily::Inet6
-    };
-    if options.family.is_some_and(|expected| expected != family) {
-        return Err("address family does not match destination".into());
-    }
-
+fn route_get_request(options: &IpOptions, query: &RouteGet) -> RouteMessage {
     let mut message = RouteMessage::default();
-    message.header.address_family = family;
+    message.header.address_family = ip_family(query.destination);
+    message.header.destination_prefix_length = if query.destination.is_ipv4() { 32 } else { 128 };
+    if query.destination.is_ipv4() { message.header.flags = RouteFlags::LookupTable; }
+    message.attributes.push(RouteAttribute::Destination(route_address(query.destination)));
+    if let Some(source) = query.source {
+        message.header.source_prefix_length = if source.is_ipv4() { 32 } else { 128 };
+        message.attributes.push(RouteAttribute::Source(route_address(source)));
+    }
+    if let Some(mark) = query.mark { message.attributes.push(RouteAttribute::Mark(mark)); }
+    if let Some(index) = options.device_index { message.attributes.push(RouteAttribute::Oif(index)); }
     message
-        .attributes
-        .push(RouteAttribute::Destination(match query.destination {
-            IpAddr::V4(address) => RouteAddress::Inet(address),
-            IpAddr::V6(address) => RouteAddress::Inet6(address),
-        }));
-    if let Some(source) = query.source {
-        message
-            .attributes
-            .push(RouteAttribute::Source(match source {
-                IpAddr::V4(address) => RouteAddress::Inet(address),
-                IpAddr::V6(address) => RouteAddress::Inet6(address),
-            }));
-    }
-    if let Some(mark) = query.mark {
-        message.attributes.push(RouteAttribute::Mark(mark));
-    }
+}
 
-    let mut stream = handle.route().get(message).execute();
-    let route = match stream.try_next().await {
-        Ok(Some(route)) => route,
-        Ok(None) => return Err(format!("no route to {}", query.destination)),
-        Err(error) => return Err(format!("RTNETLINK answers: {error}")),
-    };
+fn route_address(address: IpAddr) -> RouteAddress {
+    match address { IpAddr::V4(address) => RouteAddress::Inet(address), IpAddr::V6(address) => RouteAddress::Inet6(address) }
+}
 
-    let mut destination = query.destination.to_string();
-    let mut gateway = None;
-    let mut device = None;
-    let mut source = None;
-    for attribute in &route.attributes {
-        match attribute {
-            RouteAttribute::Destination(value) => {
-                if let Some(address) = route_ip(value) {
-                    destination = address.to_string();
-                }
-            }
-            RouteAttribute::Gateway(value) => gateway = route_ip(value),
-            RouteAttribute::PrefSource(value) => source = route_ip(value),
-            RouteAttribute::Oif(index) => {
-                device = snapshot.names.get(index).cloned();
-            }
-            _ => {}
-        }
-    }
-    if options.json {
-        println!(
-            "{}",
-            serde_json::json!([{
-                "dst": destination,
-                "gateway": gateway,
-                "dev": device,
-                "prefsrc": source,
-            }])
-        );
-        return Ok(());
-    }
+fn via_ip(address: &RouteVia) -> Option<IpAddr> {
+    match address { RouteVia::Inet(address) => Some((*address).into()), RouteVia::Inet6(address) => Some((*address).into()), _ => None }
+}
 
-    print!("{destination}");
-    if let Some(source) = query.source {
-        print!(" from {source}");
-    }
-    if let Some(gateway) = gateway {
-        print!(" via {gateway}");
-    }
-    if let Some(device) = device {
-        print!(" dev {device}");
-    }
-    if let Some(source) = source {
-        print!(" src {source}");
-    }
-    println!();
-    Ok(())
+fn family_name(address: IpAddr) -> &'static str {
+    if address.is_ipv4() { "inet" } else { "inet6" }
+}
+
+fn network_text(network: IpNet) -> String {
+    if network.1 == 0 && network.0.is_unspecified() { "default".into() }
+    else if network.1 == if network.0.is_ipv4() { 32 } else { 128 } { network.0.to_string() }
+    else { format!("{}/{}", network.0, network.1) }
+}
+
+fn route_flags(flags: u32) -> impl Iterator<Item = &'static str> {
+    ROUTE_FLAGS.iter().filter_map(move |(mask, name)| (flags & mask != 0).then_some(*name))
+}
+
+fn cache_flags(flags: u32) -> impl Iterator<Item = &'static str> {
+    CACHE_FLAGS.iter().filter_map(move |(mask, name)| (flags & mask != 0).then_some(*name))
+}
+
+fn realm_json(realm: RouteRealm, numeric: bool) -> serde_json::Value {
+    let mut value = serde_json::Map::new();
+    if realm.source != 0 { value.insert("from".into(), name_of(u32::from(realm.source), REALMS, numeric).as_ref().into()); }
+    value.insert("to".into(), name_of(u32::from(realm.destination), REALMS, numeric).as_ref().into());
+    value.into()
+}
+
+fn write_realm(out: &mut dyn Write, realm: RouteRealm, numeric: bool) -> io::Result<()> {
+    if realm.source == 0 { write!(out, "realm {} ", name_of(u32::from(realm.destination), REALMS, numeric)) }
+    else { write!(out, "realms {}/{} ", name_of(u32::from(realm.source), REALMS, numeric), name_of(u32::from(realm.destination), REALMS, numeric)) }
+}
+
+fn user_hz() -> u32 {
+    static HZ: std::sync::LazyLock<u32> = std::sync::LazyLock::new(|| {
+        // SAFETY: sysconf(_SC_CLK_TCK) has no pointer arguments or side effects.
+        let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        u32::try_from(hz).ok().filter(|hz| *hz != 0).unwrap_or(100)
+    });
+    *HZ
 }
 
 fn prefix_matches(address: IpAddr, network: IpAddr, prefix: u8) -> bool {
@@ -1268,325 +1185,340 @@ fn prefix_matches(address: IpAddr, network: IpAddr, prefix: u8) -> bool {
     }
 }
 
-/// Reports whether `network/prefix` falls inside the `selector` prefix.
-fn prefix_within(selector: IpNet, network: IpAddr, prefix: u8) -> bool {
-    prefix_matches(network, selector.0, selector.1) && prefix >= selector.1
-}
-
-fn show_rules(snapshot: &Snapshot, options: &IpOptions) -> Result<(), String> {
-    // iproute2 lists IPv4 rules unless `-6` narrows the family.
-    let family = options.family.or(Some(AddressFamily::Inet));
-    let rules = snapshot
-        .rules
-        .iter()
-        .filter(|rule| family_matches(rule.header.family, family))
-        .map(|rule| {
-            let mut priority = 0;
-            let mut source = "all".to_string();
-            let mut destination = None;
-            let mut table = u32::from(rule.header.table);
-            let mut iif = None;
-            let mut oif = None;
-            let mut fwmark = None;
-            for attribute in &rule.attributes {
-                match attribute {
-                    RuleAttribute::Priority(value) => priority = *value,
-                    RuleAttribute::Source(value) => {
-                        source = format!("{value}/{}", rule.header.src_len)
-                    }
-                    RuleAttribute::Destination(value) => {
-                        destination = Some(format!("{value}/{}", rule.header.dst_len))
-                    }
-                    RuleAttribute::Table(value) => table = *value,
-                    RuleAttribute::Iifname(value) => iif = Some(value.clone()),
-                    RuleAttribute::Oifname(value) => oif = Some(value.clone()),
-                    RuleAttribute::FwMark(value) => fwmark = Some(*value),
-                    _ => {}
-                }
+fn show_rules(snapshot: &Snapshot, options: &IpOptions, out: &mut dyn Write) -> Result<(), CommandError> {
+    let rules = snapshot.rules.iter().map(|rule| {
+        let mut priority = 0;
+        let mut source = "all".to_string();
+        let mut destination = None;
+        let mut table = u32::from(rule.header.table);
+        let mut iif = None;
+        let mut oif = None;
+        let mut fwmark = None;
+        for attribute in &rule.attributes {
+            match attribute {
+                RuleAttribute::Priority(value) => priority = *value,
+                RuleAttribute::Source(value) => source = network_text(IpNet(*value, rule.header.src_len)),
+                RuleAttribute::Destination(value) => destination = Some(network_text(IpNet(*value, rule.header.dst_len))),
+                RuleAttribute::Table(value) => table = *value,
+                RuleAttribute::Iifname(value) => iif = Some(value.as_str()),
+                RuleAttribute::Oifname(value) => oif = Some(value.as_str()),
+                RuleAttribute::FwMark(value) => fwmark = Some(*value),
+                _ => {}
             }
-            (priority, source, destination, table, iif, oif, fwmark)
-        })
-        .collect::<Vec<_>>();
-
+        }
+        (priority, source, destination, table, iif, oif, fwmark)
+    });
     if options.json {
-        let json = rules.iter().map(|(priority, source, destination, table, iif, oif, fwmark)| serde_json::json!({"priority": priority, "src": source, "dst": destination, "table": table_name(*table), "iif": iif, "oif": oif, "fwmark": fwmark})).collect::<Vec<_>>();
-        println!(
-            "{}",
-            serde_json::to_string(&json).map_err(|error| error.to_string())?
-        );
+        write_json(out, rules.map(|(priority, source, destination, table, iif, oif, fwmark)| {
+            let mut value = serde_json::Map::new();
+            value.insert("priority".into(), priority.into());
+            value.insert("src".into(), source.into());
+            value.insert("table".into(), name_of(table, TABLES, options.numeric).as_ref().into());
+            insert_optional(&mut value, "dst", destination);
+            insert_optional(&mut value, "iif", iif);
+            insert_optional(&mut value, "oif", oif);
+            insert_optional(&mut value, "fwmark", fwmark);
+            value.into()
+        }), options.pretty)?;
     } else {
         for (priority, source, destination, table, iif, oif, fwmark) in rules {
-            print!("{priority}:\tfrom {source}");
-            if let Some(destination) = destination {
-                print!(" to {destination}");
-            }
-            if let Some(mark) = fwmark {
-                print!(" fwmark 0x{mark:x}");
-            }
-            if let Some(iif) = iif {
-                print!(" iif {iif}");
-            }
-            if let Some(oif) = oif {
-                print!(" oif {oif}");
-            }
-            println!(" lookup {}", table_name(table));
+            write!(out, "{priority}:\tfrom {source}")?;
+            if let Some(destination) = destination { write!(out, " to {destination}")?; }
+            if let Some(mark) = fwmark { write!(out, " fwmark 0x{mark:x}")?; }
+            if let Some(iif) = iif { write!(out, " iif {iif}")?; }
+            if let Some(oif) = oif { write!(out, " oif {oif}")?; }
+            writeln!(out, " lookup {}", name_of(table, TABLES, options.numeric))?;
         }
     }
     Ok(())
 }
 
-fn run_arp(args: Vec<OsString>) -> Result<(), String> {
-    let values = utf8_args(args)?;
-    let mut numeric = false;
-    let mut bsd = false;
-    let mut device = None;
-    let mut host = None;
-    let mut iter = values.into_iter().skip(1);
-    while let Some(value) = iter.next() {
-        if value.starts_with('-')
-            && value.len() > 1
-            && !value.starts_with("--")
-            && value[1..]
-                .chars()
-                .all(|flag| matches!(flag, 'n' | 'a' | 'e' | 'v' | 'i'))
-        {
-            // net-tools accepts bundled short options such as `arp -an`.
-            for flag in value[1..].chars() {
-                match flag {
-                    'n' => numeric = true,
-                    'a' => bsd = true,
-                    'e' => bsd = false,
-                    'v' => {}
-                    'i' => device = Some(iter.next().ok_or("option requires an argument -- 'i'")?),
-                    _ => unreachable!("flag filtered above"),
+#[derive(Default)]
+struct ArpOptions {
+    numeric: bool,
+    all: bool,
+    linux: bool,
+    verbose: bool,
+    device: Option<String>,
+    host: Option<String>,
+    hardware: Option<u32>,
+    help: bool,
+}
+
+fn parse_arp(args: &[String]) -> Result<ArpOptions, CommandError> {
+    let mut options = ArpOptions::default();
+    let mut values = args.iter().map(String::as_str);
+    let mut operands = false;
+    while let Some(value) = values.next() {
+        if value == "--" && !operands { operands = true; continue; }
+        if !operands && value.starts_with("--") {
+            let (name, attached) = value.split_once('=').map_or((value, None), |(name, value)| (name, Some(value)));
+            let flag = match name {
+                "--numeric" => 'n', "--all" => 'a', "--verbose" => 'v',
+                "--device" => 'i', "--hw-type" => 'H', "--protocol" => 'A',
+                "--help" => 'h',
+                _ => return Err(CommandError::new(3, format!("arp: unrecognized or unsupported option '{name}' (display mode only)"))),
+            };
+            if matches!(flag, 'i' | 'H' | 'A') {
+                let argument = attached.or_else(|| values.next()).ok_or_else(|| CommandError::new(3, format!("arp: option '{name}' requires an argument")))?;
+                arp_option_argument(&mut options, flag, argument)?;
+            } else {
+                if attached.is_some() { return Err(CommandError::new(3, format!("arp: option '{name}' doesn't allow an argument"))); }
+                arp_option_flag(&mut options, flag)?;
+            }
+        } else if !operands && value.starts_with('-') && value != "-" {
+            for (offset, flag) in value[1..].char_indices() {
+                if matches!(flag, 'i' | 'H' | 't' | 'A' | 'p') {
+                    let attached = &value[1 + offset + flag.len_utf8()..];
+                    let argument = if attached.is_empty() { values.next().ok_or_else(|| CommandError::new(3, format!("arp: option requires an argument -- '{flag}'")))? } else { attached };
+                    arp_option_argument(&mut options, flag, argument)?;
+                    break;
                 }
+                arp_option_flag(&mut options, flag)?;
             }
-            continue;
-        }
-        match value.as_str() {
-            "-n" | "--numeric" => numeric = true,
-            "-a" | "--all" => bsd = true,
-            "-e" => bsd = false,
-            "-i" | "--device" => {
-                device = Some(iter.next().ok_or("option requires an argument -- 'i'")?)
-            }
-            "-v" | "--verbose" => {}
-            "-h" | "--help" => {
-                println!("Usage: arp [-vn] [-H type] [-i if] [-a] [hostname]");
-                return Ok(());
-            }
-            value if value.starts_with('-') => {
-                return Err(format!("unsupported option '{value}' (display mode only)"));
-            }
-            _ if host.is_none() => host = Some(value),
-            _ => return Err("too many arguments".into()),
+        } else if options.host.is_none() {
+            options.host = Some(value.into());
+        } else {
+            return Err(CommandError::new(3, "arp: too many arguments"));
         }
     }
+    Ok(options)
+}
 
-    let mut options = IpOptions {
-        family: Some(AddressFamily::Inet),
-        ..IpOptions::default()
-    };
-    options.device = device;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| error.to_string())?;
-    runtime.block_on(async move {
-        let (snapshot, _handle) = Snapshot::load().await?;
-        let entries = snapshot.neighbours.iter().filter_map(|message| {
-            if message.header.family != AddressFamily::Inet { return None; }
-            let ip = message.attributes.iter().find_map(|attribute| match attribute { NeighbourAttribute::Destination(address) => neighbour_ip(address), _ => None })?;
-            // net-tools hides multicast, broadcast and unspecified entries.
-            if ip.is_multicast() || ip == IpAddr::V4(Ipv4Addr::BROADCAST) || ip.is_unspecified() { return None; }
-            if host.as_deref().is_some_and(|expected| expected != ip.to_string()) { return None; }
-            let iface = snapshot.names.get(&message.header.ifindex).cloned().unwrap_or_else(|| message.header.ifindex.to_string());
-            if options.device.as_deref().is_some_and(|expected| expected != iface) { return None; }
-            let address = message.attributes.iter().find_map(|attribute| match attribute { NeighbourAttribute::LinkLayerAddress(bytes) => Some(mac(bytes)), _ => None }).unwrap_or_else(|| "<incomplete>".into());
-            // net-tools also hides entries whose hardware address is the
-            // broadcast or an IP-multicast MAC.
-            if address == "ff:ff:ff:ff:ff:ff" || address.starts_with("01:00:5e") { return None; }
-            Some((ip, address, iface, message.header.state.to_string()))
-        }).collect::<Vec<_>>();
-        if host.is_some() && entries.is_empty() {
-            // net-tools prints this when a hostname lookup yields no entry.
-            println!("-- no entry");
-            return Ok(());
-        }
-        if bsd {
-            for (ip, address, iface, _) in entries {
-                let name = if numeric { "?".into() } else { reverse_name(ip).unwrap_or_else(|| "?".into()) };
-                println!("{name} ({ip}) at {address} [ether] on {iface}");
-            }
+fn arp_option_flag(options: &mut ArpOptions, flag: char) -> Result<(), CommandError> {
+    match flag {
+        'n' => options.numeric = true,
+        'a' => options.all = true,
+        'e' => options.linux = true,
+        'v' => options.verbose = true,
+        'h' | '?' => options.help = true,
+        'd' | 's' | 'f' | 'D' => return Err(CommandError::new(3, "arp: configuration operations are not supported (display mode only)")),
+        _ => return Err(CommandError::new(3, format!("arp: invalid option -- '{flag}'"))),
+    }
+    Ok(())
+}
+
+fn arp_option_argument(options: &mut ArpOptions, flag: char, value: &str) -> Result<(), CommandError> {
+    match flag {
+        'i' => options.device = (!value.is_empty()).then(|| value.into()),
+        'H' | 't' => options.hardware = Some(parse_name(value, LINK_TYPES).ok_or_else(|| CommandError::new(255, format!("arp: {value}: unknown hardware type.")))?),
+        'A' | 'p' if value == "inet" => {}
+        'A' | 'p' => return Err(CommandError::new(255, format!("arp: {value}: kernel only supports 'inet'."))),
+        _ => return Err(CommandError::new(3, format!("arp: invalid option -- '{flag}'"))),
+    }
+    Ok(())
+}
+
+fn run_arp(args: Vec<OsString>, out: &mut dyn Write) -> Result<(), CommandError> {
+    let values = utf8_args(args)?;
+    let options = parse_arp(&values[1..])?;
+    if options.help {
+        writeln!(out, "Usage: arp [-vnea] [-H type] [-i interface] [hostname]\nDisplay the kernel ARP cache (read-only).")?;
+        return Ok(());
+    }
+    let host = options.host.as_deref().map(resolve_arp_host).transpose()?;
+    let file = std::fs::File::open("/proc/net/arp").map_err(|error| CommandError::new(255, format!("/proc/net/arp: {}", os_error(&error))))?;
+    render_arp(BufReader::new(file), &options, host, out)
+}
+
+fn resolve_arp_host(host: &str) -> Result<Ipv4Addr, CommandError> {
+    if let Some(address) = legacy_ipv4(host) { return Ok(address); }
+    (host, 0).to_socket_addrs().ok().and_then(|mut addresses| {
+        addresses.find_map(|address| match address.ip() { IpAddr::V4(address) => Some(address), _ => None })
+    }).ok_or_else(|| CommandError::new(255, format!("{host}: Host name lookup failure")))
+}
+
+fn legacy_ipv4(value: &str) -> Option<Ipv4Addr> {
+    let mut parts = value.split('.').peekable();
+    let mut address = 0u32;
+    let mut count = 0;
+    while let Some(part) = parts.next() {
+        let part = parse_number(part)?;
+        if count == 4 { return None; }
+        if parts.peek().is_some() {
+            if part > 255 || count == 3 { return None; }
+            address |= part << (24 - count * 8);
         } else {
-            if !entries.is_empty() { println!("Address                  HWtype  HWaddress           Flags Mask            Iface"); }
-            for (ip, address, iface, state) in entries {
-                let name = if numeric { ip.to_string() } else { reverse_name(ip).unwrap_or_else(|| ip.to_string()) };
-                let flag = if state == "incomplete" || state == "failed" { "" } else { "C" };
-                println!("{name:<24} ether   {address:<19} {flag:<5}                 {iface}");
-            }
+            let available = 32 - count * 8;
+            if available < 32 && part >= (1u32 << available) { return None; }
+            address |= part;
         }
-        Ok(())
-    })
+        count += 1;
+    }
+    (count != 0).then(|| Ipv4Addr::from(address))
 }
 
-fn reverse_name(address: IpAddr) -> Option<String> {
-    std::net::ToSocketAddrs::to_socket_addrs(&(address, 0)).ok()?;
-    None
+struct ArpRow<'a> {
+    address: Ipv4Addr,
+    hardware: u32,
+    flags: u32,
+    lladdr: &'a str,
+    mask: &'a str,
+    device: &'a str,
 }
 
-fn run_ifconfig(args: Vec<OsString>) -> Result<(), String> {
+fn arp_row(line: &str) -> Option<ArpRow<'_>> {
+    let mut fields = line.split_whitespace();
+    let address = fields.next()?.parse().ok()?;
+    let hardware = parse_number(fields.next()?)?;
+    let flags = parse_number(fields.next()?)?;
+    let first = fields.next()?;
+    let second = fields.next()?;
+    let third = fields.next();
+    let (lladdr, mask, device) = if let Some(third) = third { (first, second, third) } else { ("", first, second) };
+    Some(ArpRow { address, hardware, flags, lladdr, mask, device })
+}
+
+fn render_arp(mut input: impl BufRead, options: &ArpOptions, host: Option<Ipv4Addr>, out: &mut dyn Write) -> Result<(), CommandError> {
+    let mut line = String::new();
+    input.read_line(&mut line)?;
+    let mut entries = 0;
+    let mut shown = 0;
+    loop {
+        line.clear();
+        if input.read_line(&mut line)? == 0 { break; }
+        let row = arp_row(&line).ok_or_else(|| CommandError::new(255, "/proc/net/arp: invalid ARP record"))?;
+        entries += 1;
+        if host.is_some_and(|host| row.address != host)
+            || options.hardware.is_some_and(|hardware| row.hardware != hardware)
+            || options.device.as_deref().is_some_and(|device| row.device != device)
+        { continue; }
+        let name = if options.numeric { None } else { reverse_name(row.address) };
+        if !options.all || options.linux {
+            if shown == 0 { writeln!(out, "Address                  HWtype  HWaddress           Flags Mask            Iface")?; }
+            let name = name.unwrap_or_else(|| row.address.to_string());
+            let mut flags = String::new();
+            for (mask, flag) in [(2, 'C'), (4, 'M'), (8, 'P'), (256, 'A'), (512, '!'), (16, 'T')] {
+                if row.flags & mask != 0 { flags.push(flag); }
+            }
+            let complete = row.flags & 2 != 0;
+            let hardware = if complete { link_type_name(row.hardware as u16, false) } else if row.flags & 8 != 0 { Cow::Borrowed("*") } else { Cow::Borrowed("") };
+            let lladdr = if complete { row.lladdr } else if row.flags & 8 != 0 { "<from_interface>" } else { "(incomplete)" };
+            let mask = if row.flags & 32 != 0 { row.mask } else { "" };
+            writeln!(out, "{name:<23.23}  {hardware:<8.8}{lladdr:<20.20}{flags:<6.6}{mask:<15.15} {}", row.device)?;
+        } else {
+            write!(out, "{} ({}) at ", name.as_deref().unwrap_or("?"), row.address)?;
+            if row.flags & 2 != 0 { write!(out, "{} [{}] ", row.lladdr, link_type_name(row.hardware as u16, false))?; }
+            else if row.flags & 8 != 0 { out.write_all(b"<from_interface> ")?; }
+            else { out.write_all(b"<incomplete> ")?; }
+            if row.flags & 32 != 0 { write!(out, "netmask {} ", row.mask)?; }
+            for (mask, flag) in [(4, "PERM"), (8, "PUB"), (256, "AUTO"), (512, "DONTPUB"), (16, "TRAIL")] {
+                if row.flags & mask != 0 { write!(out, "{flag} ")?; }
+            }
+            writeln!(out, "on {}", row.device)?;
+        }
+        shown += 1;
+    }
+    if options.verbose { writeln!(out, "Entries: {entries}\tSkipped: {}\tFound: {shown}", entries - shown)?; }
+    if shown == 0 {
+        if let (Some(name), Some(host)) = (options.host.as_deref(), host)
+            && !options.all
+        { writeln!(out, "{name} ({host}) -- no entry")?; }
+        else if options.hardware.is_some() || options.host.is_some() || options.device.is_some() {
+            writeln!(out, "arp: in {entries} entries no match found.")?;
+        }
+    }
+    Ok(())
+}
+
+fn reverse_name(address: Ipv4Addr) -> Option<String> {
+    let socket = libc::sockaddr_in {
+        sin_family: libc::AF_INET as libc::sa_family_t, sin_port: 0,
+        sin_addr: libc::in_addr { s_addr: u32::from_ne_bytes(address.octets()) }, sin_zero: [0; 8],
+    };
+    let mut host = [0 as libc::c_char; libc::NI_MAXHOST as usize];
+    // SAFETY: sockaddr and output pointers have their declared sizes and remain alive for the call.
+    let status = unsafe {
+        libc::getnameinfo(
+            (&socket as *const libc::sockaddr_in).cast(), std::mem::size_of_val(&socket) as libc::socklen_t,
+            host.as_mut_ptr(), host.len() as libc::socklen_t, std::ptr::null_mut(), 0, libc::NI_NAMEREQD,
+        )
+    };
+    if status != 0 { return None; }
+    // SAFETY: successful getnameinfo writes a NUL-terminated host string.
+    Some(unsafe { CStr::from_ptr(host.as_ptr()) }.to_string_lossy().into_owned())
+}
+
+fn run_ifconfig(args: Vec<OsString>, out: &mut dyn Write) -> Result<(), CommandError> {
     let values = utf8_args(args)?;
     let mut all = false;
     let mut short = false;
     let mut device = None;
-    for value in values.into_iter().skip(1) {
+    for value in &values[1..] {
         match value.as_str() {
             "-a" | "--all" => all = true,
-            "-s" | "--short" => {
-                short = true;
-                all = true;
-            }
+            "-s" | "--short" => { short = true; all = true; }
             "-h" | "--help" => {
-                println!(
-                    "Usage: ifconfig [-a] [-s] [interface]\n\
-                     Display network interface configuration (read-only)."
-                );
+                writeln!(out, "Usage: ifconfig [-a] [-s] [interface]\nDisplay network interface configuration (read-only).")?;
                 return Ok(());
             }
-            value if value.starts_with('-') => return Err(format!("unsupported option '{value}'")),
-            _ if device.is_none() => device = Some(value),
-            _ => return Err("configuration operations are not supported".into()),
+            value if value.starts_with('-') => return Err(CommandError::new(1, format!("ifconfig: unsupported option '{value}'"))),
+            _ if device.is_none() => device = Some(value.as_str()),
+            _ => return Err(CommandError::new(1, "ifconfig: configuration operations are not supported")),
         }
     }
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| error.to_string())?;
-    runtime.block_on(async move {
-        let (snapshot, _handle) = Snapshot::load().await?;
-        let options = IpOptions {
-            device,
-            ..IpOptions::default()
-        };
-        if options.device.is_some()
-            && !snapshot
-                .links
-                .iter()
-                .any(|link| link_matches(link, &options))
-        {
-            let name = options.device.clone().unwrap_or_default();
-            return Err(format!(
-                "{name}: error fetching interface information: Device not found"
-            ));
-        }
-        if short {
-            println!(
-                "Iface             MTU    RX-OK RX-ERR RX-DRP RX-OVR    TX-OK TX-ERR TX-DRP TX-OVR Flg"
-            );
-        }
-        for link in snapshot
-            .links
-            .iter()
-            .filter(|link| link_matches(link, &options))
-        {
-            if !all
-                && options.device.is_none()
-                && link.header.flags.bits() & libc::IFF_UP as u32 == 0
-            {
-                continue;
-            }
-            let info = link_info(link);
-            let flags = link.header.flags.bits();
-            if short {
-                let stats = info.stats;
-                let compact_flags = format!(
-                    "{}{}{}",
-                    if flags & libc::IFF_UP as u32 != 0 {
-                        "U"
-                    } else {
-                        ""
-                    },
-                    if flags & libc::IFF_RUNNING as u32 != 0 {
-                        "R"
-                    } else {
-                        ""
-                    },
-                    if flags & libc::IFF_LOOPBACK as u32 != 0 {
-                        "L"
-                    } else {
-                        ""
-                    }
-                );
-                println!(
-                    "{:<16} {:>6} {:>8} {:>6} {:>6} {:>6} {:>8} {:>6} {:>6} {:>6} {}",
-                    info.name,
-                    info.mtu.unwrap_or_default(),
-                    stats.map_or(0, |stats| stats.rx_packets),
-                    stats.map_or(0, |stats| stats.rx_errors),
-                    stats.map_or(0, |stats| stats.rx_dropped),
-                    0,
-                    stats.map_or(0, |stats| stats.tx_packets),
-                    stats.map_or(0, |stats| stats.tx_errors),
-                    stats.map_or(0, |stats| stats.tx_dropped),
-                    0,
-                    compact_flags
-                );
-                continue;
-            }
-            println!(
-                "{}: flags={}<{flags_text}>  mtu {}",
-                info.name,
-                flags,
-                info.mtu.unwrap_or_default(),
-                flags_text = ifconfig_flags(flags)
-            );
-            for address in snapshot
-                .addresses
-                .iter()
-                .filter(|address| address.header.index == link.header.index)
-                .filter_map(address_value)
-            {
-                if address.0.is_ipv4() {
-                    let mask = prefix_mask_v4(address.1);
-                    println!("        inet {}  netmask {}", address.0, mask);
-                } else {
-                    println!(
-                        "        inet6 {}  prefixlen {}  scopeid {}",
-                        address.0, address.1, address.2
-                    );
-                }
-            }
-            if let Some(address) = info.address {
-                println!(
-                    "        ether {address}  txqueuelen {}  ({})",
-                    info.tx_queue_len.unwrap_or_default(),
-                    link.header.link_layer_type
-                );
-            }
-            if let Some(stats) = info.stats {
-                println!(
-                    "        RX packets {}  bytes {}",
-                    stats.rx_packets, stats.rx_bytes
-                );
-                println!(
-                    "        RX errors {}  dropped {}",
-                    stats.rx_errors, stats.rx_dropped
-                );
-                println!(
-                    "        TX packets {}  bytes {}",
-                    stats.tx_packets, stats.tx_bytes
-                );
-                println!(
-                    "        TX errors {}  dropped {}",
-                    stats.tx_errors, stats.tx_dropped
-                );
-            }
-            println!();
-        }
-        Ok(())
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    runtime.block_on(async {
+        let (connection, handle, _) = rtnetlink::new_connection()?;
+        let connection = tokio::spawn(connection);
+        let result = async {
+            let mut snapshot = Snapshot::load_links(&handle).await?;
+            let index = ifconfig_device(&snapshot, device, short, out)?;
+            if !short { snapshot.load_object(&handle, Object::Address, &IpOptions::default()).await?; }
+            render_ifconfig(&snapshot, all, short, index, out)
+        }.await;
+        connection.abort();
+        result
     })
+}
+
+fn ifconfig_device(snapshot: &Snapshot, device: Option<&str>, short: bool, out: &mut dyn Write) -> Result<Option<u32>, CommandError> {
+    if short { writeln!(out, "Iface             MTU    RX-OK RX-ERR RX-DRP RX-OVR    TX-OK TX-ERR TX-DRP TX-OVR Flg")?; }
+    device.map(|name| {
+        snapshot.require_device(name).map(|link| link.index).ok_or_else(|| CommandError::new(1, format!("{name}: error fetching interface information: Device not found")))
+    }).transpose()
+}
+
+fn render_ifconfig(snapshot: &Snapshot, all: bool, short: bool, device: Option<u32>, out: &mut dyn Write) -> Result<(), CommandError> {
+    for link in snapshot.links.iter().filter(|link| {
+        device.map_or(all || link.flags.contains(LinkFlags::Up), |index| link.index == index)
+    }) {
+        let flags = link.flags.bits();
+        if short {
+            let stats = link.stats;
+            let compact_flags = [(libc::IFF_ALLMULTI, 'A'), (libc::IFF_BROADCAST, 'B'), (libc::IFF_DEBUG, 'D'), (libc::IFF_LOOPBACK, 'L'), (libc::IFF_MULTICAST, 'M'), (libc::IFF_NOARP, 'N'), (libc::IFF_PROMISC, 'P'), (libc::IFF_RUNNING, 'R'), (libc::IFF_UP, 'U')].into_iter().filter_map(|(mask, flag)| (flags & mask as u32 != 0).then_some(flag)).collect::<String>();
+            writeln!(out, "{:<16} {:>6} {:>8} {:>6} {:>6} {:>6} {:>8} {:>6} {:>6} {:>6} {}",
+                link.name, link.mtu.unwrap_or_default(),
+                stats.map_or(0, |stats| stats.rx_packets), stats.map_or(0, |stats| stats.rx_errors),
+                stats.map_or(0, |stats| stats.rx_dropped), stats.map_or(0, |stats| stats.rx_over_errors),
+                stats.map_or(0, |stats| stats.tx_packets), stats.map_or(0, |stats| stats.tx_errors),
+                stats.map_or(0, |stats| stats.tx_dropped), stats.map_or(0, |stats| stats.tx_fifo_errors), compact_flags)?;
+            continue;
+        }
+        writeln!(out, "{}: flags={}<{}>  mtu {}", link.name, flags & 0xffff, ifconfig_flags(flags), link.mtu.unwrap_or_default())?;
+        for address in snapshot.addresses.iter().filter(|address| address.index == link.index) {
+            if address.address.is_ipv4() {
+                write!(out, "        inet {}  netmask {}", address.address, prefix_mask_v4(address.prefix))?;
+                if let Some(broadcast) = address.broadcast { write!(out, "  broadcast {broadcast}")?; }
+                if let Some(peer) = address.peer { write!(out, "  destination {peer}")?; }
+                writeln!(out)?;
+            } else {
+                let scope = match address.scope { 0 => 0, 253 => 0x20, 254 => 0x10, _ => 0x40 };
+                writeln!(out, "        inet6 {}  prefixlen {}  scopeid 0x{scope:x}<{}>", address.address, address.prefix, name_of(u32::from(address.scope), SCOPES, false))?;
+            }
+        }
+        if let Some(address) = &link.address {
+            writeln!(out, "        {} {address}  txqueuelen {}  ({})", if link.link_type == 772 { "loop" } else { "ether" }, link.tx_queue_len.unwrap_or_default(), if link.link_type == 772 { Cow::Borrowed("Local Loopback") } else { link_type_name(link.link_type, false) })?;
+        }
+        if let Some(stats) = link.stats {
+            writeln!(out, "        RX packets {}  bytes {}", stats.rx_packets, stats.rx_bytes)?;
+            writeln!(out, "        RX errors {}  dropped {}", stats.rx_errors, stats.rx_dropped)?;
+            writeln!(out, "        TX packets {}  bytes {}", stats.tx_packets, stats.tx_bytes)?;
+            writeln!(out, "        TX errors {}  dropped {}", stats.tx_errors, stats.tx_dropped)?;
+        }
+        writeln!(out)?;
+    }
+    Ok(())
 }
 
 pub fn ipcalc(args: Vec<OsString>) -> i32 {
@@ -1762,45 +1694,24 @@ fn family_matches(actual: AddressFamily, expected: Option<AddressFamily>) -> boo
     expected.is_none_or(|expected| expected == actual)
 }
 
-fn link_matches(link: &LinkMessage, options: &IpOptions) -> bool {
-    let name = link
-        .attributes
-        .iter()
-        .find_map(|attribute| match attribute {
-            LinkAttribute::IfName(name) => Some(name.as_str()),
-            _ => None,
-        });
-    if options
-        .device
-        .as_deref()
-        .is_some_and(|expected| name != Some(expected))
-    {
-        return false;
-    }
-    if options.up_only && !link.header.flags.contains(LinkFlags::Up) {
-        return false;
-    }
-    if let Some(expected) = options.link_type.as_deref()
-        && link_info(link).kind.as_deref() != Some(expected)
-    {
-        return false;
-    }
-    true
-}
-
 #[derive(Default)]
-struct LinkInfo {
+struct LinkView {
+    index: u32,
+    flags: LinkFlags,
+    link_type: u16,
     name: String,
     mtu: Option<u32>,
     qdisc: Option<String>,
     state: String,
     mode: String,
     group: u32,
+    master: Option<u32>,
+    peer: Option<u32>,
+    netns: Option<i32>,
     address: Option<String>,
     broadcast: Option<String>,
     permanent_address: Option<String>,
     alternate_names: Vec<String>,
-    carrier: Option<u8>,
     kind: Option<String>,
     tx_queue_len: Option<u32>,
     stats: Option<LinkStats>,
@@ -1816,316 +1727,373 @@ struct LinkStats {
     tx_errors: u64,
     rx_dropped: u64,
     tx_dropped: u64,
+    rx_over_errors: u64,
+    rx_missed_errors: u64,
+    multicast: u64,
+    tx_carrier_errors: u64,
+    tx_fifo_errors: u64,
+    collisions: u64,
 }
 
-fn link_info(link: &LinkMessage) -> LinkInfo {
-    let mut info = LinkInfo {
-        state: "UNKNOWN".into(),
-        mode: "DEFAULT".into(),
-        ..LinkInfo::default()
-    };
-    for attribute in &link.attributes {
-        match attribute {
-            LinkAttribute::IfName(value) => info.name.clone_from(value),
-            LinkAttribute::Mtu(value) => info.mtu = Some(*value),
-            LinkAttribute::Qdisc(value) => info.qdisc = Some(value.clone()),
-            LinkAttribute::OperState(value) => info.state = value.to_string().to_uppercase(),
-            LinkAttribute::Mode(value) => info.mode = value.to_string(),
-            LinkAttribute::Group(value) => info.group = *value,
-            LinkAttribute::Address(value) => {
-                info.address = Some(link_address(value, link.header.link_layer_type))
+impl LinkView {
+    fn new(message: LinkMessage) -> Self {
+        let mut link = Self {
+            index: message.header.index, flags: message.header.flags,
+            link_type: message.header.link_layer_type.into(),
+            state: "UNKNOWN".into(), mode: "DEFAULT".into(),
+            ..Self::default()
+        };
+        for attribute in message.attributes {
+            match attribute {
+                LinkAttribute::IfName(value) => link.name = value,
+                LinkAttribute::Mtu(value) => link.mtu = Some(value),
+                LinkAttribute::Qdisc(value) => link.qdisc = Some(value),
+                LinkAttribute::OperState(value) => link.state = name_of(u32::from(u8::from(value)), OPER_STATES, false).to_ascii_uppercase(),
+                LinkAttribute::Mode(value) => link.mode = name_of(u32::from(u8::from(value)), LINK_MODES, false).into_owned(),
+                LinkAttribute::Group(value) => link.group = value,
+                LinkAttribute::Controller(value) => link.master = Some(value),
+                LinkAttribute::Link(value) => link.peer = Some(value),
+                LinkAttribute::LinkNetNsId(value) => link.netns = Some(value),
+                LinkAttribute::Address(value) => link.address = Some(link_address(&value, message.header.link_layer_type)),
+                LinkAttribute::Broadcast(value) => link.broadcast = Some(link_address(&value, message.header.link_layer_type)),
+                LinkAttribute::PermAddress(value) => link.permanent_address = Some(link_address(&value, message.header.link_layer_type)),
+                LinkAttribute::PropList(values) => link.alternate_names.extend(values.into_iter().filter_map(|value| match value { Prop::AltIfName(name) => Some(name), _ => None })),
+                LinkAttribute::LinkInfo(values) => {
+                    link.kind = values.into_iter().find_map(|value| match value { LinkInfoAttribute::Kind(kind) => Some(kind.to_string()), _ => None });
+                }
+                LinkAttribute::TxQueueLen(value) => link.tx_queue_len = Some(value),
+                LinkAttribute::Stats(value) if link.stats.is_none() => {
+                    link.stats = Some(LinkStats {
+                        rx_packets: value.rx_packets.into(), tx_packets: value.tx_packets.into(),
+                        rx_bytes: value.rx_bytes.into(), tx_bytes: value.tx_bytes.into(),
+                        rx_errors: value.rx_errors.into(), tx_errors: value.tx_errors.into(),
+                        rx_dropped: value.rx_dropped.into(), tx_dropped: value.tx_dropped.into(),
+                        rx_over_errors: value.rx_over_errors.into(), rx_missed_errors: value.rx_missed_errors.into(),
+                        multicast: value.multicast.into(), tx_carrier_errors: value.tx_carrier_errors.into(),
+                        tx_fifo_errors: value.tx_fifo_errors.into(), collisions: value.collisions.into(),
+                    });
+                }
+                LinkAttribute::Stats64(value) => {
+                    link.stats = Some(LinkStats {
+                        rx_packets: value.rx_packets, tx_packets: value.tx_packets,
+                        rx_bytes: value.rx_bytes, tx_bytes: value.tx_bytes,
+                        rx_errors: value.rx_errors, tx_errors: value.tx_errors,
+                        rx_dropped: value.rx_dropped, tx_dropped: value.tx_dropped,
+                        rx_over_errors: value.rx_over_errors, rx_missed_errors: value.rx_missed_errors,
+                        multicast: value.multicast, tx_carrier_errors: value.tx_carrier_errors,
+                        tx_fifo_errors: value.tx_fifo_errors, collisions: value.collisions,
+                    });
+                }
+                _ => {}
             }
-            LinkAttribute::Broadcast(value) => {
-                info.broadcast = Some(link_address(value, link.header.link_layer_type))
-            }
-            LinkAttribute::PermAddress(value) => {
-                info.permanent_address = Some(link_address(value, link.header.link_layer_type))
-            }
-            LinkAttribute::PropList(values) => {
-                info.alternate_names
-                    .extend(values.iter().filter_map(|value| match value {
-                        Prop::AltIfName(name) => Some(name.clone()),
-                        _ => None,
-                    }));
-            }
-            LinkAttribute::Carrier(value) => info.carrier = Some(*value),
-            LinkAttribute::LinkInfo(values) => {
-                info.kind = values.iter().find_map(|value| match value {
-                    LinkInfoAttribute::Kind(kind) => Some(kind.to_string()),
-                    _ => None,
-                });
-            }
-            LinkAttribute::TxQueueLen(value) => info.tx_queue_len = Some(*value),
-            LinkAttribute::Stats(value) => {
-                info.stats = Some(LinkStats {
-                    rx_packets: value.rx_packets.into(),
-                    tx_packets: value.tx_packets.into(),
-                    rx_bytes: value.rx_bytes.into(),
-                    tx_bytes: value.tx_bytes.into(),
-                    rx_errors: value.rx_errors.into(),
-                    tx_errors: value.tx_errors.into(),
-                    rx_dropped: value.rx_dropped.into(),
-                    tx_dropped: value.tx_dropped.into(),
-                })
-            }
-            LinkAttribute::Stats64(value) => {
-                info.stats = Some(LinkStats {
-                    rx_packets: value.rx_packets,
-                    tx_packets: value.tx_packets,
-                    rx_bytes: value.rx_bytes,
-                    tx_bytes: value.tx_bytes,
-                    rx_errors: value.rx_errors,
-                    tx_errors: value.tx_errors,
-                    rx_dropped: value.rx_dropped,
-                    tx_dropped: value.tx_dropped,
-                })
-            }
-            _ => {}
+        }
+        link
+    }
+
+    fn display_name<'a>(&'a self, snapshot: &Snapshot) -> Cow<'a, str> {
+        match self.peer {
+            None => Cow::Borrowed(&self.name),
+            Some(0) => Cow::Owned(format!("{}@NONE", self.name)),
+            Some(index) if self.netns.is_none() && snapshot.link(index).is_some() => Cow::Owned(format!("{}@{}", self.name, snapshot.name(index))),
+            Some(index) => Cow::Owned(format!("{}@if{index}", self.name)),
         }
     }
-    info
-}
 
-fn link_json(link: &LinkMessage) -> serde_json::Map<String, serde_json::Value> {
-    let info = link_info(link);
-    let flags = ip_flags(link, &info);
-    let mut value = serde_json::Map::new();
-    value.insert("ifindex".into(), link.header.index.into());
-    value.insert("ifname".into(), info.name.into());
-    value.insert("flags".into(), flags.into());
-    insert_optional(&mut value, "mtu", info.mtu);
-    insert_optional(&mut value, "qdisc", info.qdisc);
-    value.insert("operstate".into(), info.state.into());
-    value.insert("linkmode".into(), info.mode.into());
-    value.insert(
-        "group".into(),
-        if info.group == 0 {
-            "default".into()
-        } else {
-            info.group.to_string().into()
-        },
-    );
-    insert_optional(&mut value, "txqlen", info.tx_queue_len);
-    value.insert(
-        "link_type".into(),
-        link.header
-            .link_layer_type
-            .to_string()
-            .to_ascii_lowercase()
-            .into(),
-    );
-    insert_optional(&mut value, "address", info.address);
-    insert_optional(&mut value, "broadcast", info.broadcast);
-    insert_optional(&mut value, "permaddr", info.permanent_address);
-    if !info.alternate_names.is_empty() {
-        value.insert("altnames".into(), info.alternate_names.into());
+    fn ip_flags(&self, snapshot: &Snapshot) -> Vec<&'static str> {
+        let flags = self.flags.bits();
+        let mut names = Vec::new();
+        if flags & libc::IFF_UP as u32 != 0 && flags & libc::IFF_RUNNING as u32 == 0 { names.push("NO-CARRIER"); }
+        names.extend(LINK_FLAGS.iter().filter_map(|(mask, name)| (flags & mask != 0).then_some(*name)));
+        if self.netns.is_none()
+            && self.peer.is_some_and(|index| index != 0 && snapshot.link(index).is_none_or(|peer| !peer.flags.contains(LinkFlags::Up)))
+        { names.push("M-DOWN"); }
+        names
     }
-    if let Some(kind) = info.kind {
-        value.insert(
-            "linkinfo".into(),
-            serde_json::json!({
-                "info_kind": kind,
-            }),
-        );
-    }
-    value
-}
 
-fn ip_flags(link: &LinkMessage, info: &LinkInfo) -> Vec<&'static str> {
-    let flags = link.header.flags;
-    let mut names = Vec::new();
-    if flags.contains(LinkFlags::Up) && info.carrier == Some(0) {
-        names.push("NO-CARRIER");
-    }
-    for (flag, name) in [
-        (LinkFlags::Broadcast, "BROADCAST"),
-        (LinkFlags::Loopback, "LOOPBACK"),
-        (LinkFlags::Pointopoint, "POINTOPOINT"),
-        (LinkFlags::Multicast, "MULTICAST"),
-        (LinkFlags::Noarp, "NOARP"),
-        (LinkFlags::Allmulti, "ALLMULTI"),
-        (LinkFlags::Promisc, "PROMISC"),
-        (LinkFlags::Controller, "MASTER"),
-        (LinkFlags::Port, "SLAVE"),
-        (LinkFlags::Up, "UP"),
-        (LinkFlags::LowerUp, "LOWER_UP"),
-        (LinkFlags::Dormant, "DORMANT"),
-        (LinkFlags::Echo, "ECHO"),
-    ] {
-        if flags.contains(flag) {
-            names.push(name);
+    fn json(&self, snapshot: &Snapshot, options: &IpOptions, object: Object) -> serde_json::Map<String, serde_json::Value> {
+        let mut value = serde_json::Map::new();
+        value.insert("ifname".into(), self.name.as_str().into());
+        value.insert("operstate".into(), self.state.as_str().into());
+        if let Some(peer) = self.peer {
+            if peer == 0 { value.insert("link".into(), serde_json::Value::Null); }
+            else if self.netns.is_some() { value.insert("link_index".into(), peer.into()); }
+            else { value.insert("link".into(), snapshot.name(peer).as_ref().into()); }
         }
-    }
-    names
-}
-
-fn address_json(message: &AddressMessage) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let address = message
-        .attributes
-        .iter()
-        .find_map(|attribute| match attribute {
-            AddressAttribute::Local(value) | AddressAttribute::Address(value) => Some(*value),
-            _ => None,
-        })?;
-    let mut value = serde_json::Map::new();
-    value.insert(
-        "family".into(),
-        if address.is_ipv4() { "inet" } else { "inet6" }.into(),
-    );
-    value.insert("local".into(), address.to_string().into());
-    value.insert("prefixlen".into(), message.header.prefix_len.into());
-    let scope = message.header.scope.to_string();
-    value.insert(
-        "scope".into(),
-        if scope == "universe" {
-            "global".into()
-        } else {
-            scope.into()
-        },
-    );
-
-    let mut flags = AddressFlags::from_bits_retain(u32::from(message.header.flags.bits()));
-    for attribute in &message.attributes {
-        match attribute {
-            AddressAttribute::Label(label) => {
-                value.insert("label".into(), label.clone().into());
+        if !options.brief {
+            value.insert("ifindex".into(), self.index.into());
+            insert_optional(&mut value, "link_netnsid", self.netns);
+            value.insert("flags".into(), self.ip_flags(snapshot).into());
+            insert_optional(&mut value, "mtu", self.mtu);
+            insert_optional(&mut value, "qdisc", self.qdisc.as_deref());
+            if let Some(master) = self.master { value.insert("master".into(), snapshot.name(master).as_ref().into()); }
+            if object == Object::Link { value.insert("linkmode".into(), self.mode.as_str().into()); }
+            value.insert("group".into(), name_of(self.group, GROUPS, options.numeric).as_ref().into());
+            insert_optional(&mut value, "txqlen", self.tx_queue_len);
+            if options.family.is_none() || options.family == Some(AddressFamily::Packet) {
+                value.insert("link_type".into(), link_type_name(self.link_type, options.numeric).as_ref().into());
+                insert_optional(&mut value, "address", self.address.as_deref());
+                insert_optional(&mut value, "broadcast", self.broadcast.as_deref());
+                if self.flags.contains(LinkFlags::Pointopoint) && self.broadcast.is_some() { value.insert("link_pointtopoint".into(), true.into()); }
+                if self.permanent_address != self.address { insert_optional(&mut value, "permaddr", self.permanent_address.as_deref()); }
             }
-            AddressAttribute::Broadcast(address) => {
-                value.insert("broadcast".into(), address.to_string().into());
-            }
-            AddressAttribute::Flags(value) => flags = *value,
-            AddressAttribute::CacheInfo(cache) => {
-                value.insert("valid_life_time".into(), cache.ifa_valid.into());
-                value.insert("preferred_life_time".into(), cache.ifa_preferred.into());
-            }
-            _ => {}
+            if !self.alternate_names.is_empty() { value.insert("altnames".into(), self.alternate_names.clone().into()); }
+        } else if object == Object::Link {
+            insert_optional(&mut value, "address", self.address.as_deref());
+            value.insert("flags".into(), self.ip_flags(snapshot).into());
         }
-    }
-    if flags.contains(AddressFlags::Secondary) {
-        value.insert(
-            if address.is_ipv6() {
-                "temporary"
-            } else {
-                "secondary"
-            }
-            .into(),
-            true.into(),
-        );
-    }
-    for (flag, name) in [
-        (AddressFlags::Nodad, "nodad"),
-        (AddressFlags::Optimistic, "optimistic"),
-        (AddressFlags::Dadfailed, "dadfailed"),
-        (AddressFlags::Homeaddress, "home"),
-        (AddressFlags::Deprecated, "deprecated"),
-        (AddressFlags::Tentative, "tentative"),
-        (AddressFlags::Managetempaddr, "mngtmpaddr"),
-        (AddressFlags::Noprefixroute, "noprefixroute"),
-        (AddressFlags::Mcautojoin, "autojoin"),
-        (AddressFlags::StablePrivacy, "stable-privacy"),
-    ] {
-        if !name.is_empty() && flags.contains(flag) {
-            value.insert(name.into(), true.into());
+        if options.stats && let Some(stats) = self.stats {
+            value.insert("stats64".into(), serde_json::json!({
+                "rx": { "bytes": stats.rx_bytes, "packets": stats.rx_packets, "errors": stats.rx_errors, "dropped": stats.rx_dropped, "over_errors": stats.rx_over_errors, "multicast": stats.multicast },
+                "tx": { "bytes": stats.tx_bytes, "packets": stats.tx_packets, "errors": stats.tx_errors, "dropped": stats.tx_dropped, "carrier_errors": stats.tx_carrier_errors, "collisions": stats.collisions }
+            }));
         }
+        value
     }
-    Some(value)
-}
 
-fn insert_optional<T>(
-    value: &mut serde_json::Map<String, serde_json::Value>,
-    name: &str,
-    item: Option<T>,
-) where
-    serde_json::Value: From<T>,
-{
-    if let Some(item) = item {
-        value.insert(name.into(), item.into());
+    fn write_stats(&self, out: &mut dyn Write) -> io::Result<()> {
+        if let Some(stats) = self.stats {
+            writeln!(out, "    RX: bytes  packets  errors  dropped  missed  mcast")?;
+            writeln!(out, "    {:<10} {:<8} {:<7} {:<8} {:<7} {}", stats.rx_bytes, stats.rx_packets, stats.rx_errors, stats.rx_dropped, stats.rx_missed_errors, stats.multicast)?;
+            writeln!(out, "    TX: bytes  packets  errors  dropped  carrier collsns")?;
+            writeln!(out, "    {:<10} {:<8} {:<7} {:<8} {:<7} {}", stats.tx_bytes, stats.tx_packets, stats.tx_errors, stats.tx_dropped, stats.tx_carrier_errors, stats.collisions)?;
+        }
+        Ok(())
     }
 }
 
-fn address_value(message: &AddressMessage) -> Option<(IpAddr, u8, String)> {
-    let address = message
-        .attributes
-        .iter()
-        .find_map(|attribute| match attribute {
-            AddressAttribute::Local(value) | AddressAttribute::Address(value) => Some(*value),
-            _ => None,
-        })?;
-    Some((
-        address,
-        message.header.prefix_len,
-        scope_name(message.header.scope.to_string()),
-    ))
-}
-
-/// iproute2 scope names: the kernel's `universe` prints as `global`.
-fn scope_name(scope: String) -> String {
-    if scope == "universe" {
-        "global".into()
-    } else {
-        scope
-    }
-}
-
-/// Everything the iproute2 `ip addr` text output needs for one address.
-struct AddressText {
+struct AddressView {
+    index: u32,
     address: IpAddr,
+    peer: Option<IpAddr>,
     prefix: u8,
-    scope: String,
-    broadcast: Option<String>,
-    secondary: bool,
-    deprecated: bool,
-    dynamic: bool,
-    managed_temporary: bool,
-    noprefixroute: bool,
-    label: Option<String>,
+    scope: u8,
+    flags: AddressFlags,
+    protocol: Option<u8>,
+    metric: Option<u32>,
+    broadcast: Option<Ipv4Addr>,
+    label: Option<std::ffi::CString>,
     valid_lft: Option<u32>,
     preferred_lft: Option<u32>,
 }
 
-fn address_text(message: &AddressMessage) -> Option<AddressText> {
-    let address = message
-        .attributes
-        .iter()
-        .find_map(|attribute| match attribute {
-            AddressAttribute::Local(value) | AddressAttribute::Address(value) => Some(*value),
-            _ => None,
-        })?;
-    let mut text = AddressText {
-        address,
-        prefix: message.header.prefix_len,
-        scope: scope_name(message.header.scope.to_string()),
-        broadcast: None,
-        secondary: false,
-        deprecated: false,
-        dynamic: false,
-        managed_temporary: false,
-        noprefixroute: false,
-        label: None,
-        valid_lft: None,
-        preferred_lft: None,
-    };
-    let mut flags = AddressFlags::from_bits_retain(u32::from(message.header.flags.bits()));
-    for attribute in &message.attributes {
-        match attribute {
-            AddressAttribute::Broadcast(value) => {
-                text.broadcast = Some(value.to_string());
+impl AddressView {
+    fn new(message: AddressMessage) -> Option<Self> {
+        let mut local = None;
+        let mut address = None;
+        let mut view = Self {
+            index: message.header.index, address: Ipv4Addr::UNSPECIFIED.into(), peer: None,
+            prefix: message.header.prefix_len, scope: message.header.scope.into(),
+            flags: AddressFlags::from_bits_retain(u32::from(message.header.flags.bits())),
+            protocol: None, metric: None, broadcast: None, label: None, valid_lft: None, preferred_lft: None,
+        };
+        for attribute in message.attributes {
+            match attribute {
+                AddressAttribute::Local(value) => local = Some(value),
+                AddressAttribute::Address(value) => address = Some(value),
+                AddressAttribute::Broadcast(value) => view.broadcast = Some(value),
+                AddressAttribute::Label(value) => view.label = std::ffi::CString::new(value).ok(),
+                AddressAttribute::Flags(value) => view.flags = value,
+                AddressAttribute::Protocol(value) => view.protocol = Some(value.into()),
+                AddressAttribute::RoutePriority(value) => view.metric = Some(value),
+                AddressAttribute::CacheInfo(value) => { view.valid_lft = Some(value.ifa_valid); view.preferred_lft = Some(value.ifa_preferred); }
+                _ => {}
             }
-            AddressAttribute::Label(label) => text.label = Some(label.clone()),
-            AddressAttribute::Flags(value) => flags = *value,
-            AddressAttribute::CacheInfo(cache) => {
-                text.valid_lft = Some(cache.ifa_valid);
-                text.preferred_lft = Some(cache.ifa_preferred);
-            }
-            _ => {}
         }
+        view.address = local.or(address)?;
+        view.peer = address.filter(|address| *address != view.address);
+        Some(view)
     }
-    text.secondary = flags.contains(AddressFlags::Secondary);
-    text.deprecated = flags.contains(AddressFlags::Deprecated);
-    text.dynamic = text.valid_lft.is_some_and(|lifetime| lifetime != u32::MAX);
-    text.managed_temporary = flags.contains(AddressFlags::Managetempaddr);
-    text.noprefixroute = flags.contains(AddressFlags::Noprefixroute);
-    Some(text)
+
+    fn matches(&self, options: &IpOptions) -> bool {
+        family_matches(ip_family(self.address), options.family)
+            && options.scope.is_none_or(|scope| self.scope == scope)
+            && options.address_prefix.is_none_or(|prefix| prefix_matches(self.address, prefix.0, prefix.1))
+            && options.address_protocol.is_none_or(|protocol| self.protocol.unwrap_or(0) == protocol)
+            && options.address_flags.iter().all(|(flag, set)| self.flags.contains(*flag) == *set)
+            && options.label.as_deref().is_none_or(|label| self.label.as_deref().is_some_and(|actual| glob_label(label, actual)))
+    }
+
+    fn flag_names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        ADDRESS_FLAGS.iter().filter_map(move |(flag, name)| {
+            if *flag == AddressFlags::Permanent {
+                (!self.flags.contains(*flag)).then_some("dynamic")
+            } else if self.flags.contains(*flag) {
+                Some(if *flag == AddressFlags::Secondary && self.address.is_ipv6() { "temporary" } else { *name })
+            } else { None }
+        })
+    }
+
+    fn json(&self, options: &IpOptions) -> serde_json::Map<String, serde_json::Value> {
+        let mut value = serde_json::Map::new();
+        if !options.brief { value.insert("family".into(), family_name(self.address).into()); }
+        value.insert("local".into(), self.address.to_string().into());
+        value.insert("prefixlen".into(), self.prefix.into());
+        if let Some(peer) = self.peer { value.insert("address".into(), peer.to_string().into()); }
+        insert_optional(&mut value, "metric", self.metric);
+        if options.brief { return value; }
+        value.insert("scope".into(), name_of(u32::from(self.scope), SCOPES, options.numeric).as_ref().into());
+        insert_optional(&mut value, "broadcast", self.broadcast.map(|address| address.to_string()));
+        insert_optional(&mut value, "label", self.label.as_deref().and_then(|label| label.to_str().ok()));
+        for flag in self.flag_names() { value.insert(flag.into(), true.into()); }
+        if let Some(protocol) = self.protocol { value.insert("protocol".into(), address_protocol_name(protocol, options.numeric).as_ref().into()); }
+        insert_optional(&mut value, "valid_life_time", self.valid_lft);
+        insert_optional(&mut value, "preferred_life_time", self.preferred_lft);
+        value
+    }
+
+    fn write_brief(&self, out: &mut dyn Write) -> io::Result<()> {
+        write!(out, "{}", self.address)?;
+        if let Some(peer) = self.peer { write!(out, " peer {peer}")?; }
+        write!(out, "/{} ", self.prefix)?;
+        if let Some(metric) = self.metric { write!(out, "metric {metric} ")?; }
+        Ok(())
+    }
+
+    fn write_text(&self, out: &mut dyn Write, options: &IpOptions) -> io::Result<()> {
+        write!(out, "{} {}", family_name(self.address), self.address)?;
+        if let Some(peer) = self.peer { write!(out, " peer {peer}/{}", self.prefix)?; }
+        else { write!(out, "/{}", self.prefix)?; }
+        if let Some(metric) = self.metric { write!(out, " metric {metric}")?; }
+        if let Some(broadcast) = self.broadcast { write!(out, " brd {broadcast}")?; }
+        write!(out, " scope {}", name_of(u32::from(self.scope), SCOPES, options.numeric))?;
+        for flag in self.flag_names() { write!(out, " {flag}")?; }
+        if let Some(protocol) = self.protocol.filter(|protocol| *protocol != 0) { write!(out, " proto {}", address_protocol_name(protocol, options.numeric))?; }
+        if let Some(label) = &self.label { write!(out, " {}", label.to_string_lossy())?; }
+        else { out.write_all(b" ")?; }
+        if let (Some(valid), Some(preferred)) = (self.valid_lft, self.preferred_lft) {
+            write!(out, "{}       valid_lft {} preferred_lft {}", if options.oneline { "\\" } else { "\n" }, format_lifetime(valid), format_lifetime(preferred))?;
+        }
+        writeln!(out)
+    }
+}
+
+fn glob_label(pattern: &CStr, value: &CStr) -> bool {
+    // SAFETY: both C strings remain alive and fnmatch only reads them.
+    unsafe { libc::fnmatch(pattern.as_ptr(), value.as_ptr(), 0) == 0 }
+}
+
+fn insert_optional<T>(value: &mut serde_json::Map<String, serde_json::Value>, name: &str, item: Option<T>)
+where serde_json::Value: From<T> {
+    if let Some(item) = item { value.insert(name.into(), item.into()); }
+}
+
+const TABLES: &[(u32, &str)] = &[(0, "unspec"), (253, "default"), (254, "main"), (255, "local")];
+const GROUPS: &[(u32, &str)] = &[(0, "default")];
+const SCOPES: &[(u32, &str)] = &[(0, "global"), (200, "site"), (253, "link"), (254, "host"), (255, "nowhere")];
+const ADDRESS_PROTOCOLS: &[(u32, &str)] = &[(0, "unspec"), (1, "kernel_lo"), (2, "kernel_ra"), (3, "kernel_ll")];
+const ROUTE_PROTOCOLS: &[(u32, &str)] = &[
+    (0, "unspec"), (1, "redirect"), (2, "kernel"), (3, "boot"), (4, "static"),
+    (8, "gated"), (9, "ra"), (10, "mrt"), (11, "zebra"), (12, "bird"),
+    (13, "dnrouted"), (14, "xorp"), (15, "ntk"), (16, "dhcp"), (18, "keepalived"),
+    (42, "babel"), (84, "ovn"), (99, "openr"), (186, "bgp"), (187, "isis"),
+    (188, "ospf"), (189, "rip"), (192, "eigrp"),
+];
+const ROUTE_TYPES: &[(u32, &str)] = &[
+    (0, "none"), (1, "unicast"), (2, "local"), (3, "broadcast"), (4, "anycast"),
+    (5, "multicast"), (6, "blackhole"), (7, "unreachable"), (8, "prohibit"),
+    (9, "throw"), (10, "nat"), (11, "xresolve"),
+];
+const NEIGHBOUR_STATES: &[(u32, &str)] = &[
+    (0, "none"), (1, "incomplete"), (2, "reachable"), (4, "stale"), (8, "delay"),
+    (16, "probe"), (32, "failed"), (64, "noarp"), (128, "permanent"),
+];
+const PREFERENCES: &[(u32, &str)] = &[(0, "medium"), (1, "high"), (3, "low")];
+const OPER_STATES: &[(u32, &str)] = &[(0, "UNKNOWN"), (1, "NOTPRESENT"), (2, "DOWN"), (3, "LOWERLAYERDOWN"), (4, "TESTING"), (5, "DORMANT"), (6, "UP")];
+const LINK_MODES: &[(u32, &str)] = &[(0, "DEFAULT"), (1, "DORMANT")];
+const LINK_TYPES: &[(u32, &str)] = &[
+    (0, "netrom"), (1, "ether"), (2, "eether"), (3, "ax25"), (4, "pronet"),
+    (5, "chaos"), (6, "ieee802"), (7, "arcnet"), (8, "atalk"), (15, "dlci"),
+    (19, "atm"), (23, "metricom"), (24, "ieee1394"), (32, "infiniband"),
+    (256, "slip"), (257, "cslip"), (258, "slip6"), (259, "cslip6"), (260, "rsrvd"), (264, "adapt"),
+    (270, "rose"), (271, "x25"), (272, "hwx25"), (280, "can"), (512, "ppp"),
+    (513, "hdlc"), (516, "lapb"), (517, "ddcmp"), (518, "rawhdlc"),
+    (768, "ipip"), (769, "tunnel6"), (770, "frad"), (771, "skip"), (772, "loopback"),
+    (773, "ltalk"), (774, "fddi"), (775, "bif"), (776, "sit"), (777, "ip/ddp"),
+    (778, "gre"), (779, "pimreg"), (780, "hippi"), (781, "ash"), (782, "econet"),
+    (783, "irda"), (784, "fcpp"), (785, "fcal"), (786, "fcpl"), (787, "fcfb0"),
+    (788, "fcfb1"), (789, "fcfb2"), (790, "fcfb3"), (791, "fcfb4"),
+    (792, "fcfb5"), (793, "fcfb6"), (794, "fcfb7"), (795, "fcfb8"),
+    (796, "fcfb9"), (797, "fcfb10"), (798, "fcfb11"), (799, "fcfb12"),
+    (800, "tr"), (801, "ieee802.11"), (802, "ieee802.11/prism"), (803, "ieee802.11/radiotap"),
+    (804, "ieee802.15.4"), (805, "ieee802.15.4/monitor"), (820, "phonet"), (821, "phonet_pipe"),
+    (822, "caif"), (823, "gre6"), (824, "netlink"), (825, "6lowpan"),
+    (65534, "none"), (65535, "void"),
+];
+const LINK_FLAGS: &[(u32, &str)] = &[
+    (0x8, "LOOPBACK"), (0x2, "BROADCAST"), (0x10, "POINTOPOINT"),
+    (0x1000, "MULTICAST"), (0x80, "NOARP"), (0x200, "ALLMULTI"), (0x100, "PROMISC"),
+    (0x400, "MASTER"), (0x800, "SLAVE"), (0x4, "DEBUG"), (0x8000, "DYNAMIC"),
+    (0x4000, "AUTOMEDIA"), (0x2000, "PORTSEL"), (0x20, "NOTRAILERS"), (0x1, "UP"),
+    (0x10000, "LOWER_UP"), (0x20000, "DORMANT"), (0x40000, "ECHO"),
+];
+const ROUTE_FLAGS: &[(u32, &str)] = &[
+    (1, "dead"), (4, "onlink"), (2, "pervasive"), (8, "offload"), (64, "trap"),
+    (0x100, "notify"), (16, "linkdown"), (32, "unresolved"),
+    (0x4000, "rt_offload"), (0x8000, "rt_trap"), (0x20000000, "rt_offload_failed"),
+];
+const CACHE_FLAGS: &[(u32, &str)] = &[
+    (0x80000000, "local"), (0x40000000, "reject"), (0x20000000, "mc"),
+    (0x10000000, "brd"), (0x08000000, "dst-nat"), (0x00800000, "src-nat"),
+    (0x00400000, "masq"), (0x00020000, "dst-direct"), (0x04000000, "src-direct"),
+    (0x00040000, "redirected"), (0x01000000, "redirect"), (0x00200000, "fastroute"),
+    (0x00010000, "notify"), (0x00080000, "proxy"),
+];
+const ADDRESS_FLAGS: &[(AddressFlags, &str)] = &[
+    (AddressFlags::Secondary, "secondary"), (AddressFlags::Nodad, "nodad"),
+    (AddressFlags::Optimistic, "optimistic"), (AddressFlags::Dadfailed, "dadfailed"),
+    (AddressFlags::Homeaddress, "home"), (AddressFlags::Deprecated, "deprecated"),
+    (AddressFlags::Tentative, "tentative"), (AddressFlags::Permanent, "dynamic"),
+    (AddressFlags::Managetempaddr, "mngtmpaddr"),
+    (AddressFlags::Noprefixroute, "noprefixroute"), (AddressFlags::Mcautojoin, "autojoin"),
+    (AddressFlags::StablePrivacy, "stable-privacy"),
+];
+
+fn address_flag(name: &str) -> Option<AddressFlags> {
+    if matches!(name, "temporary" | "primary") { return Some(AddressFlags::Secondary); }
+    if name == "permanent" { return Some(AddressFlags::Permanent); }
+    ADDRESS_FLAGS.iter().find_map(|(flag, candidate)| (*candidate == name).then_some(*flag))
+}
+
+fn parse_name(value: &str, names: &[(u32, &str)]) -> Option<u32> {
+    names.iter().find_map(|(number, name)| (*name == value).then_some(*number)).or_else(|| parse_number(value))
+}
+
+fn name_of<'a>(number: u32, names: &'a [(u32, &str)], numeric: bool) -> Cow<'a, str> {
+    if !numeric && let Some((_, name)) = names.iter().find(|(value, _)| *value == number) {
+        return Cow::Borrowed(name);
+    }
+    Cow::Owned(number.to_string())
+}
+
+fn address_protocol_name(protocol: u8, numeric: bool) -> Cow<'static, str> {
+    if !numeric && let Some((_, name)) = ADDRESS_PROTOCOLS.iter().find(|(value, _)| *value == u32::from(protocol)) {
+        return Cow::Borrowed(name);
+    }
+    Cow::Owned(format!("{protocol:#x}"))
+}
+
+const REALMS: &[(u32, &str)] = &[(0, "unknown")];
+const DS_FIELDS: &[(u32, &str)] = &[
+    (0, "default"), (0x28, "AF11"), (0x30, "AF12"), (0x38, "AF13"),
+    (0x48, "AF21"), (0x50, "AF22"), (0x58, "AF23"),
+    (0x68, "AF31"), (0x70, "AF32"), (0x78, "AF33"),
+    (0x88, "AF41"), (0x90, "AF42"), (0x98, "AF43"),
+    (0x20, "CS1"), (0x40, "CS2"), (0x60, "CS3"), (0x80, "CS4"),
+    (0xa0, "CS5"), (0xc0, "CS6"), (0xe0, "CS7"), (0xb8, "EF"),
+];
+
+fn dsfield_name(tos: u8, numeric: bool) -> Cow<'static, str> {
+    if !numeric && let Some((_, name)) = DS_FIELDS.iter().find(|(value, _)| *value == u32::from(tos)) {
+        return Cow::Borrowed(name);
+    }
+    Cow::Owned(format!("0x{tos:02x}"))
+}
+
+fn link_type_name(number: u16, numeric: bool) -> Cow<'static, str> {
+    if !numeric && let Some((_, name)) = LINK_TYPES.iter().find(|(value, _)| *value == u32::from(number)) {
+        return Cow::Borrowed(name);
+    }
+    Cow::Owned(format!("[{number}]"))
 }
 
 fn neighbour_ip(address: &NeighbourAddress) -> Option<IpAddr> {
@@ -2161,20 +2129,14 @@ fn link_address(bytes: &[u8], link_type: LinkLayerType) -> String {
 }
 
 fn mac(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<Vec<_>>()
-        .join(":")
-}
-
-fn table_name(table: u32) -> String {
-    match table {
-        253 => "default".into(),
-        254 => "main".into(),
-        255 => "local".into(),
-        _ => table.to_string(),
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut value = String::with_capacity(bytes.len().saturating_mul(3).saturating_sub(1));
+    for (index, byte) in bytes.iter().enumerate() {
+        if index != 0 { value.push(':'); }
+        value.push(HEX[usize::from(byte >> 4)] as char);
+        value.push(HEX[usize::from(byte & 0xf)] as char);
     }
+    value
 }
 
 fn ifconfig_flags(flags: u32) -> String {
@@ -2238,8 +2200,8 @@ mod tests {
                 LinkAttribute::Broadcast(bytes.clone()),
                 LinkAttribute::PermAddress(bytes),
             ];
-            let json = link_json(&link);
-            for field in ["address", "broadcast", "permaddr"] {
+            let json = LinkView::new(link).json(&Snapshot::default(), &IpOptions::default(), Object::Link);
+            for field in ["address", "broadcast"] {
                 assert_eq!(json[field], expected, "{link_type:?} {field}");
             }
         }
@@ -2255,5 +2217,400 @@ mod tests {
         assert_eq!(parse_netmask("24", false).unwrap(), 24);
         assert_eq!(parse_netmask("255.255.255.0", false).unwrap(), 24);
         assert_eq!(parse_netmask("ffff:ffff:ffff:ffff::", true).unwrap(), 64);
+    }
+
+    fn request(args: &[&str]) -> Result<IpRequest, CommandError> {
+        let values = args.iter().map(|arg| (*arg).to_string()).collect::<Vec<_>>();
+        let request = parse_ip(&values, None)?;
+        assert!(request.output.is_none(), "expected query for {args:?}");
+        Ok(request)
+    }
+
+    fn link(index: u32, name: &str, flags: u32, attributes: Vec<LinkAttribute>) -> LinkMessage {
+        let mut message = LinkMessage::default();
+        message.header.index = index;
+        message.header.flags = LinkFlags::from_bits_retain(flags);
+        message.header.link_layer_type = LinkLayerType::Ether;
+        message.attributes = vec![
+            LinkAttribute::IfName(name.into()), LinkAttribute::Mtu(1500),
+            LinkAttribute::Address(vec![2, 0, 0, 0, 0, index as u8]),
+            LinkAttribute::Broadcast(vec![255; 6]), LinkAttribute::Group(0),
+        ];
+        message.attributes.extend(attributes);
+        message
+    }
+
+    fn snapshot(links: Vec<LinkMessage>) -> Snapshot {
+        let links = links.into_iter().map(LinkView::new).collect::<Vec<_>>();
+        let indices = links.iter().enumerate().map(|(position, link)| (link.index, position)).collect();
+        Snapshot { links, indices, ..Snapshot::default() }
+    }
+
+    fn route(prefix: &str, table: u32, protocol: u8, kind: u8, attributes: Vec<RouteAttribute>) -> RouteView {
+        let prefix = parse_prefix(prefix, None).unwrap();
+        let mut message = RouteMessage::default();
+        message.header.address_family = ip_family(prefix.0);
+        message.header.destination_prefix_length = prefix.1;
+        message.header.table = u8::try_from(table).unwrap_or(0);
+        message.header.protocol = protocol.into();
+        message.header.kind = kind.into();
+        message.attributes = vec![RouteAttribute::Destination(route_address(prefix.0)), RouteAttribute::Table(table)];
+        message.attributes.extend(attributes);
+        RouteView::new(message)
+    }
+
+    fn render(snapshot: &Snapshot, args: &[&str]) -> Result<String, CommandError> {
+        let mut request = request(args)?;
+        resolve_selectors(snapshot, &mut request.options, request.object)?;
+        assert!(request.query.is_none());
+        let mut output = Vec::new();
+        render_ip(snapshot, request.object, &request.options, &mut output)?;
+        Ok(String::from_utf8(output).unwrap())
+    }
+
+    fn render_json(snapshot: &Snapshot, args: &[&str]) -> serde_json::Value {
+        let mut args = args.to_vec();
+        args.insert(0, "-j");
+        serde_json::from_str(&render(snapshot, &args).unwrap()).unwrap()
+    }
+
+    fn error(args: &[&str]) -> CommandError {
+        match request(args) { Err(error) => error, Ok(_) => panic!("accepted {args:?}") }
+    }
+
+    #[test]
+    fn verbs_and_unsupported_options_do_not_disguise_writes_as_reads() {
+        for args in [
+            vec!["l", "s", "dev", "d0", "up"], vec!["l", "set"], vec!["a", "add"],
+            vec!["n", "flush"], vec!["r", "replace"], vec!["rule", "delete"],
+        ] {
+            assert_eq!(error(&args).code, 1, "{args:?}");
+        }
+        for args in [
+            vec!["-d", "l"], vec!["-r", "a"], vec!["--netnsid", "a"],
+            vec!["-f", "mpls", "r"], vec!["l", ""],
+            vec!["r", "table", "foo"], vec!["r", "table"], vec!["a", "scope"],
+            vec!["l", "type"], vec!["n", "nud"], vec!["n", "to"],
+        ] {
+            assert_eq!(error(&args).code, 255, "{args:?}");
+        }
+        assert_eq!(error(&["r", "match", "bad"]).code, 1);
+        assert_eq!(error(&["foo"]).message, "Object \"foo\" is unknown, try \"ip help\".");
+        for option in ["-json", "-brief", "-oneline", "-st", "-statistics"] {
+            assert!(request(&[option, "a", "show"]).is_ok(), "{option}");
+        }
+        assert_eq!(request(&["a", "s"]).unwrap().object, Object::Address);
+        assert_eq!(request(&["r", "s"]).unwrap().object, Object::Route);
+    }
+
+    #[test]
+    fn lookup_validates_family_and_builds_an_oif_host_request() {
+        let snapshot = snapshot(vec![link(4, "d0", 0, vec![])]);
+        let mut request = request(&["r", "get", "0x0a.1", "mark", "0x6", "dev", "d0"]).unwrap();
+        resolve_selectors(&snapshot, &mut request.options, request.object).unwrap();
+        let query = request.query.unwrap();
+        assert_eq!(query.destination.to_string(), "10.1.0.0");
+        let message = route_get_request(&request.options, &query);
+        assert_eq!(message.header.destination_prefix_length, 32);
+        assert!(message.header.flags.contains(RouteFlags::LookupTable));
+        assert_eq!(message.attributes, vec![
+            RouteAttribute::Destination(RouteAddress::Inet(Ipv4Addr::new(10, 1, 0, 0))),
+            RouteAttribute::Mark(6), RouteAttribute::Oif(4),
+        ]);
+        for args in [
+            vec!["r", "get", "192.0.2.1", "from", "::1"],
+            vec!["-6", "r", "get", "192.0.2.1"],
+        ] {
+            assert_eq!(error(&args).code, 1);
+        }
+        assert_eq!(error(&["r", "get", "192.0.2.1", "mark", "not-a-number"]).code, 255);
+        let missing = render(&snapshot, &["r", "show", "dev", "nosuch"]).unwrap_err();
+        assert_eq!(missing.code, 1);
+        assert_eq!(missing.message, "Cannot find device \"nosuch\"");
+    }
+
+    #[test]
+    fn existing_down_device_is_an_empty_filter_not_a_missing_device() {
+        let snapshot = snapshot(vec![link(4, "d0", 0, vec![])]);
+        assert_eq!(render(&snapshot, &["l", "show", "dev", "d0", "up"]).unwrap(), "");
+        assert_eq!(render_json(&snapshot, &["l", "show", "up", "dev", "d0"]), serde_json::json!([]));
+        let missing = render(&snapshot, &["l", "show", "dev", "nosuch"]).unwrap_err();
+        assert_eq!(missing.message, "Device \"nosuch\" does not exist.");
+    }
+
+    #[test]
+    fn route_prefix_modes_are_exact_covering_and_nested() {
+        let mut snapshot = Snapshot::default();
+        for prefix in ["default", "10.0.0.0/8", "10.1.0.0/16", "10.1.2.0/24", "10.1.2.3", "10.2.0.0/16"] {
+            snapshot.routes.push(route(prefix, 254, 3, 1, vec![]));
+        }
+        for (selector, expected) in [
+            (vec!["10.1.0.0/16"], vec!["10.1.0.0/16"]),
+            (vec!["match", "10.1.2.3"], vec!["default", "10.0.0.0/8", "10.1.0.0/16", "10.1.2.0/24", "10.1.2.3"]),
+            (vec!["root", "10.1.0.0/16"], vec!["10.1.0.0/16", "10.1.2.0/24", "10.1.2.3"]),
+            (vec!["root", "10.1.0.0/16", "match", "10.1.2.3"], vec!["10.1.0.0/16", "10.1.2.0/24", "10.1.2.3"]),
+            (vec!["10.1.2.3"], vec!["10.1.2.3"]),
+            (vec!["default"], vec!["default"]),
+        ] {
+            let mut args = vec!["r", "show"];
+            args.extend(selector);
+            let json = render_json(&snapshot, &args);
+            let destinations = json.as_array().unwrap().iter().map(|route| route["dst"].as_str().unwrap()).collect::<Vec<_>>();
+            assert_eq!(destinations, expected, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn route_tables_numeric_protocols_and_types_share_text_and_json_selection() {
+        let mut snapshot = Snapshot::default();
+        snapshot.routes = vec![
+            route("10.0.0.0/8", 100, 99, 6, vec![]),
+            route("2001:db8::/32", 100, 80, 9, vec![RouteAttribute::Priority(0)]),
+            route("192.0.2.0/24", 254, 18, 1, vec![]),
+            route("198.51.100.0/24", 254, 1, 1, vec![]),
+        ];
+        let all = render(&snapshot, &["r", "show", "table", "all"]).unwrap();
+        assert!(all.contains("blackhole 10.0.0.0/8 table 100 proto openr"));
+        assert!(all.contains("throw 2001:db8::/32 table 100 proto 80 metric 0"));
+        assert_eq!(render_json(&snapshot, &["r", "show", "table", "0"]).as_array().unwrap().len(), 4);
+        for protocol in ["18", "80", "1"] {
+            let args = ["r", "show", "table", "all", "proto", protocol];
+            let json = render_json(&snapshot, &args);
+            assert_eq!(json.as_array().unwrap().len(), 1, "{protocol}");
+            assert!(json[0].get("protocol").is_none());
+            assert!(!render(&snapshot, &args).unwrap().contains(" proto "));
+        }
+        let blackhole = render_json(&snapshot, &["r", "show", "table", "100", "proto", "99"]);
+        assert_eq!(blackhole[0], serde_json::json!({"type":"blackhole","dst":"10.0.0.0/8","flags":[]}));
+        assert!(render(&snapshot, &["-N", "r", "show", "table", "all"]).unwrap().contains("proto 99"));
+    }
+
+    #[test]
+    fn multipath_metrics_and_route_attributes_are_not_lost_or_reordered() {
+        use netlink_packet_route::route::{RouteNextHop, RouteNextHopFlags};
+        let mut snapshot = snapshot(vec![link(4, "d0", 0, vec![]), link(5, "d1", 0, vec![])]);
+        let mut first = RouteNextHop::default();
+        first.interface_index = 4;
+        first.attributes = vec![RouteAttribute::Gateway(RouteAddress::Inet(Ipv4Addr::new(10, 0, 0, 1)))];
+        let mut second = RouteNextHop::default();
+        second.interface_index = 5;
+        second.hops = 2;
+        second.flags = RouteNextHopFlags::Linkdown;
+        snapshot.routes.push(route("10.5.0.0/16", 254, 4, 1, vec![
+            RouteAttribute::Priority(100),
+            RouteAttribute::Metrics(vec![RouteMetric::Advmss(1360), RouteMetric::Rtt(80), RouteMetric::Mtu(1400), RouteMetric::Window(2000)]),
+            RouteAttribute::MultiPath(vec![first, second]),
+        ]));
+        assert_eq!(render(&snapshot, &["r", "show", "dev", "d0"]).unwrap(),
+            "10.5.0.0/16 proto static metric 100 mtu 1400 window 2000 rtt 10ms advmss 1360 \n\tnexthop via 10.0.0.1 dev d0 weight 1 \n\tnexthop dev d1 weight 3 linkdown \n");
+        let oneline = render(&snapshot, &["-o", "r", "show"]).unwrap();
+        assert_eq!(oneline.lines().count(), 1);
+        assert!(oneline.contains("\\\tnexthop"));
+        let json = render_json(&snapshot, &["r", "show", "dev", "d0"]);
+        assert_eq!(json[0]["nexthops"][0], serde_json::json!({"gateway":"10.0.0.1","dev":"d0","weight":1,"flags":[]}));
+        assert_eq!(json[0]["nexthops"][1]["flags"], serde_json::json!(["linkdown"]));
+        assert_eq!(json[0]["metrics"], serde_json::json!([{"mtu":1400,"window":2000,"rtt":10,"advmss":1360}]));
+        assert!(json[0].get("gateway").is_none());
+    }
+
+    #[test]
+    fn ipv6_preference_expiry_and_lookup_metadata_use_the_shared_route_view() {
+        let mut snapshot = snapshot(vec![link(4, "d0", 0, vec![])]);
+        let mut cache = RouteCacheInfo::parse(&[0; 32]).unwrap();
+        cache.expires = user_hz() * 30;
+        let mut entry = route("2001:db8::/32", 100, 9, 2, vec![
+            RouteAttribute::Oif(4), RouteAttribute::Priority(0),
+            RouteAttribute::Preference(1.into()), RouteAttribute::CacheInfo(cache),
+            RouteAttribute::NhId(7), RouteAttribute::Uid(1000),
+        ]);
+        entry.tos = 16;
+        entry.flags = RouteFlags::Linkdown.bits();
+        snapshot.routes.push(entry);
+        let text = render(&snapshot, &["-6", "r", "show", "table", "all"]).unwrap();
+        assert_eq!(text, "local 2001:db8::/32 nhid 7 tos 0x10 dev d0 table 100 proto ra metric 0 linkdown uid 1000 expires 30sec pref high\n");
+        let json = render_json(&snapshot, &["-6", "r", "show", "table", "all"]);
+        assert_eq!(json[0]["pref"], "high");
+        assert_eq!(json[0]["metric"], 0);
+        assert_eq!(json[0]["expires"], 30);
+        let mut cached = route("127.0.0.1", 255, 2, 2, vec![RouteAttribute::Uid(1000), RouteAttribute::Oif(4)]);
+        cached.flags = RouteFlags::Cloned.bits() | 0x80000000;
+        let query = RouteGet { destination: "127.0.0.1".parse().unwrap(), source: None, mark: None };
+        let mut output = Vec::new();
+        render_routes(&snapshot, std::iter::once(&cached), &IpOptions::default(), Some(&query), &mut output).unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "local 127.0.0.1 dev d0 table local uid 1000 \n    cache <local> \n");
+    }
+
+    #[test]
+    fn neighbours_apply_every_selector_and_keep_router_outside_state() {
+        let mut snapshot = snapshot(vec![
+            link(4, "d0", 0, vec![LinkAttribute::Controller(8)]),
+            link(5, "d1", 0, vec![]),
+            link(8, "blue", 0, vec![]),
+        ]);
+        snapshot.links[2].kind = Some("vrf".into());
+        for (address, index, state, flags) in [
+            ("192.0.2.1", 4, 2, NeighbourFlags::Router),
+            ("192.0.2.2", 4, 0, NeighbourFlags::empty()),
+            ("192.0.2.3", 4, 64, NeighbourFlags::empty()),
+            ("192.0.2.4", 5, 2, NeighbourFlags::empty()),
+            ("2001:db8::1", 4, 4, NeighbourFlags::empty()),
+        ] {
+            snapshot.neighbours.push(NeighbourView { destination: address.parse().unwrap(), index, lladdr: None, state, flags, probes: None });
+        }
+        let args = ["n", "show", "to", "192.0.2.0/24", "vrf", "blue", "dev", "d0"];
+        assert_eq!(render(&snapshot, &args).unwrap(), "192.0.2.1 router REACHABLE \n");
+        assert_eq!(render_json(&snapshot, &args), serde_json::json!([{"dst":"192.0.2.1","router":true,"state":["REACHABLE"]}]));
+        let all = render(&snapshot, &["n", "show", "dev", "d0", "nud", "all"]).unwrap();
+        assert!(all.contains("192.0.2.2 \n"));
+        assert!(!all.contains("NONE"));
+        assert!(all.contains("NOARP"));
+        let states = render_json(&snapshot, &["n", "show", "nud", "reachable", "nud", "stale"]);
+        assert_eq!(states.as_array().unwrap().len(), 3);
+    }
+
+    fn address(index: u32, local: &str, scope: u8, flags: AddressFlags, attributes: Vec<AddressAttribute>) -> AddressView {
+        let mut message = AddressMessage::default();
+        message.header.index = index;
+        message.header.family = ip_family(local.parse().unwrap());
+        message.header.prefix_len = if message.header.family == AddressFamily::Inet { 24 } else { 64 };
+        message.header.scope = scope.into();
+        message.attributes = vec![AddressAttribute::Flags(flags), AddressAttribute::Local(local.parse().unwrap())];
+        message.attributes.extend(attributes);
+        AddressView::new(message).unwrap()
+    }
+
+    #[test]
+    fn address_filters_and_flags_are_identical_in_text_brief_and_json() {
+        use netlink_packet_route::address::CacheInfo;
+        let mut snapshot = snapshot(vec![link(4, "d0", 1, vec![]), link(5, "empty", 1, vec![]), link(1, "lo", 1, vec![])]);
+        let mut lifetime = CacheInfo::default();
+        lifetime.ifa_valid = u32::MAX;
+        lifetime.ifa_preferred = u32::MAX;
+        snapshot.addresses = vec![
+            address(4, "192.0.2.1", 0, AddressFlags::Nodad | AddressFlags::Noprefixroute, vec![
+                AddressAttribute::Label("d0".into()), AddressAttribute::CacheInfo(lifetime),
+            ]),
+            address(1, "127.0.0.1", 254, AddressFlags::Permanent, vec![]),
+            address(4, "2001:db8::1", 0, AddressFlags::Permanent | AddressFlags::Nodad, vec![AddressAttribute::Protocol(3.into())]),
+        ];
+        let text = render(&snapshot, &["-4", "a", "show", "scope", "0", "up", "dev", "d0"]).unwrap();
+        assert!(text.contains("scope global nodad dynamic noprefixroute d0"));
+        assert!(!text.contains("link/"));
+        assert!(!text.contains("127.0.0.1"));
+        let json = render_json(&snapshot, &["a", "show", "scope", "global"]);
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        assert_eq!(json[0]["addr_info"][0]["dynamic"], true);
+        assert_eq!(json[0]["addr_info"][1]["protocol"], "kernel_ll");
+        assert_eq!(render_json(&snapshot, &["a", "show", "proto", "kernel_ll"])[0]["addr_info"].as_array().unwrap().len(), 1);
+        let brief = render(&snapshot, &["-br", "-4", "a"]).unwrap();
+        assert_eq!(brief.lines().count(), 2);
+        assert!(!brief.contains("empty"));
+        assert!(render_json(&snapshot, &["a", "show", "label", "d[0-9]"])[0]["addr_info"][0]["nodad"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn link_views_preserve_master_peer_group_and_point_to_point_addresses() {
+        let mut tunnel = link(4, "tun0", libc::IFF_UP as u32 | libc::IFF_POINTOPOINT as u32, vec![
+            LinkAttribute::Link(5), LinkAttribute::Group(5), LinkAttribute::Controller(8),
+        ]);
+        tunnel.header.link_layer_type = LinkLayerType::Tunnel;
+        tunnel.attributes.push(LinkAttribute::Address(vec![192, 0, 2, 1]));
+        tunnel.attributes.push(LinkAttribute::Broadcast(vec![192, 0, 2, 2]));
+        let mut snapshot = snapshot(vec![tunnel, link(5, "d0", 0, vec![]), link(8, "br0", 0, vec![])]);
+        let text = render(&snapshot, &["l", "show", "dev", "tun0"]).unwrap();
+        assert!(text.contains("tun0@d0: <NO-CARRIER,POINTOPOINT,UP,M-DOWN>"));
+        assert!(text.contains("master br0"));
+        assert!(text.contains("group 5"));
+        assert!(text.contains("link/ipip 192.0.2.1 peer 192.0.2.2"));
+        snapshot.addresses.push(address(4, "192.0.2.1", 0, AddressFlags::Permanent, vec![AddressAttribute::Address("192.0.2.2".parse().unwrap())]));
+        assert!(render(&snapshot, &["a", "show", "master", "br0"]).unwrap().contains("inet 192.0.2.1 peer 192.0.2.2/24"));
+        let json = render_json(&snapshot, &["a", "show", "dev", "tun0"]);
+        assert_eq!(json[0]["addr_info"][0]["local"], "192.0.2.1");
+        assert_eq!(json[0]["addr_info"][0]["address"], "192.0.2.2");
+        assert!(render(&snapshot, &["-br", "l", "show"]).unwrap().contains("<NO-CARRIER,POINTOPOINT,UP,M-DOWN>"));
+    }
+
+    fn arp_output(args: &[&str], input: &str) -> String {
+        let options = parse_arp(&args.iter().map(|arg| (*arg).to_string()).collect::<Vec<_>>()).unwrap();
+        let host = options.host.as_deref().map(resolve_arp_host).transpose().unwrap();
+        let mut output = Vec::new();
+        render_arp(io::Cursor::new(input), &options, host, &mut output).unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    #[test]
+    fn arp_uses_proc_atf_flags_without_ip_or_mac_heuristics() {
+        let input = "IP address HW type Flags HW address Mask Device\n\
+            10.0.0.5 0x1 0x6 ff:ff:ff:ff:ff:ff * d0\n\
+            10.0.0.6 0x1 0x0 00:00:00:00:00:00 * d0\n";
+        assert_eq!(arp_output(&["-an"], input),
+            "? (10.0.0.5) at ff:ff:ff:ff:ff:ff [ether] PERM on d0\n? (10.0.0.6) at <incomplete> on d0\n");
+        let table = arp_output(&["-ne"], input);
+        assert!(table.contains("ff:ff:ff:ff:ff:ff   CM"));
+        assert!(table.contains("(incomplete)"));
+        assert!(!table.contains("ether   (incomplete)"));
+        assert_eq!(arp_output(&["-nea"], input), arp_output(&["-nae"], input));
+        assert_eq!(arp_output(&["-ni", "d0"], input), arp_output(&["-nid0"], input));
+        assert_eq!(arp_output(&["-n", "--device=d0"], input), arp_output(&["-nid0"], input));
+    }
+
+    #[test]
+    fn arp_host_resolution_and_no_match_modes_have_net_tools_semantics() {
+        let input = "IP address HW type Flags HW address Mask Device\n10.0.0.2 0x1 0x2 02:00:00:00:00:02 * d0\n";
+        assert!(arp_output(&["-n", "10.2"], input).contains("10.0.0.2"));
+        assert_eq!(arp_output(&["-n", "10.3"], input), "10.3 (10.0.0.3) -- no entry\n");
+        assert_eq!(arp_output(&["-an", "10.3"], input), "arp: in 1 entries no match found.\n");
+        assert_eq!(arp_output(&["-ni", "nosuch"], input), "arp: in 1 entries no match found.\n");
+        assert_eq!(arp_output(&["-n", "--device="], input), arp_output(&["-n"], input));
+        let missing = resolve_arp_host("bad\0host").unwrap_err();
+        assert_eq!(missing.code, 255);
+        assert!(missing.message.ends_with(": Host name lookup failure"));
+        let invalid = match parse_arp(&["-nx".into()]) { Err(error) => error, Ok(_) => panic!("accepted invalid ARP option") };
+        assert_eq!(invalid.code, 3);
+        assert_eq!(invalid.message, "arp: invalid option -- 'x'");
+    }
+
+    #[test]
+    fn ifconfig_missing_device_keeps_short_header_and_unprefixed_error() {
+        let snapshot = snapshot(vec![link(4, "d0", 0, vec![])]);
+        let mut output = Vec::new();
+        let error = ifconfig_device(&snapshot, Some("nosuch"), true, &mut output).unwrap_err();
+        assert_eq!(error.message, "nosuch: error fetching interface information: Device not found");
+        assert!(String::from_utf8(output).unwrap().starts_with("Iface "));
+        let mut output = Vec::new();
+        let index = ifconfig_device(&snapshot, Some("d0"), false, &mut output).unwrap();
+        render_ifconfig(&snapshot, false, false, index, &mut output).unwrap();
+        assert!(String::from_utf8(output).unwrap().starts_with("d0: flags=0<>"));
+    }
+
+    #[test]
+    fn renderer_preserves_output_errors_in_text_and_json() {
+        struct FailedOutput(io::ErrorKind);
+        impl Write for FailedOutput {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> { Err(io::Error::from(self.0)) }
+            fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        }
+        let mut snapshot = Snapshot::default();
+        snapshot.routes.push(route("default", 254, 3, 1, vec![]));
+        for json in [false, true] {
+            let options = IpOptions { json, ..IpOptions::default() };
+            for kind in [io::ErrorKind::BrokenPipe, io::ErrorKind::StorageFull] {
+                let error = render_ip(&snapshot, Object::Route, &options, &mut FailedOutput(kind)).unwrap_err();
+                assert_eq!(error.io_kind, Some(kind));
+            }
+        }
+    }
+
+    #[test]
+    fn route_realms_and_dsfields_use_static_names_and_numeric_output() {
+        let mut snapshot = Snapshot::default();
+        let mut entry = route("192.0.2.0/24", 254, 3, 1, vec![
+            RouteAttribute::Realm(RouteRealm { source: 7, destination: 0 }),
+        ]);
+        entry.tos = 0x28;
+        snapshot.routes.push(entry);
+        assert_eq!(render(&snapshot, &["r", "show"]).unwrap(), "192.0.2.0/24 tos AF11 realms 7/unknown \n");
+        assert_eq!(render(&snapshot, &["-N", "r", "show"]).unwrap(), "192.0.2.0/24 tos 0x28 realms 7/0 \n");
+        assert_eq!(render_json(&snapshot, &["r", "show"])[0]["flow"], serde_json::json!({"from":"7","to":"unknown"}));
     }
 }
