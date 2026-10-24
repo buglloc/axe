@@ -54,6 +54,8 @@ struct Options {
     preserve_mtime: bool,
     overwrite: bool,
     ignore_zeros: bool,
+    strip_components: usize,
+    to_stdout: bool,
 }
 
 impl Options {
@@ -70,14 +72,32 @@ impl Options {
         let mut preserve_mtime = true;
         let mut overwrite = true;
         let mut ignore_zeros = false;
+        let mut strip_components = 0usize;
+        let mut to_stdout = false;
         let mut iter = args.into_iter();
         let _name = iter.next();
+        let mut old_style_allowed = true;
 
         while let Some(arg) = iter.next() {
-            let Some(text) = arg.to_str() else {
+            let Some(argument) = arg.to_str() else {
+                old_style_allowed = false;
                 operands.push(arg);
                 continue;
             };
+            // GNU and busybox tar accept a dashless leading argument such as
+            // `tar czf archive.tar.gz` as a flag cluster.
+            let converted;
+            let text: &str = if old_style_allowed
+                && !argument.starts_with('-')
+                && is_old_style_cluster(argument)
+            {
+                converted = format!("-{argument}");
+                &converted
+            } else {
+                argument
+            };
+            old_style_allowed = false;
+            let arg = OsString::from(text);
 
             if text == "--" {
                 operands.extend(iter);
@@ -86,7 +106,7 @@ impl Options {
             if text == "--help" {
                 println!(
                     "Usage: tar (-c|--create)|(-x|--extract)|(-t|--list) \
-                     [-z|-j|-J] [-v] [-f ARCHIVE] [-C DIR] [FILE...]"
+                     [-z|-j|-J] [-v] [-O] [--strip-components N] [-f ARCHIVE] [-C DIR] [FILE...]"
                 );
                 return Err(done());
             }
@@ -103,6 +123,7 @@ impl Options {
                 "--bzip2" => compression = Some(Compression::Bzip2),
                 "--xz" => compression = Some(Compression::Xz),
                 "--verbose" => verbose = true,
+                "--to-stdout" => to_stdout = true,
                 "--same-permissions" | "--preserve-permissions" => {
                     preserve_permissions = Some(true);
                 }
@@ -119,11 +140,18 @@ impl Options {
                             .ok_or_else(|| invalid("-f requires an archive"))?,
                     );
                 }
+                "-O" => to_stdout = true,
                 "-C" | "--directory" => {
                     directory = Some(PathBuf::from(
                         iter.next()
                             .ok_or_else(|| invalid("-C requires a directory"))?,
                     ));
+                }
+                "--strip-components" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| invalid("--strip-components requires a count"))?;
+                    strip_components = parse_strip_components(&value)?;
                 }
                 "--exclude" => {
                     excludes.push(
@@ -137,8 +165,15 @@ impl Options {
                 _ if text.starts_with("--directory=") => {
                     directory = Some(text["--directory=".len()..].into());
                 }
+                _ if text.starts_with("--strip-components=") => {
+                    strip_components =
+                        parse_strip_components(OsStr::new(&text["--strip-components=".len()..]))?;
+                }
                 _ if text.starts_with("--exclude=") => {
                     excludes.push(text["--exclude=".len()..].into());
+                }
+                _ if text.starts_with("--") => {
+                    return Err(invalid(format!("unsupported option '{text}'")));
                 }
                 _ if text.starts_with('-') && text != "-" => {
                     let mut chars = text[1..].chars().peekable();
@@ -152,6 +187,7 @@ impl Options {
                             'J' => compression = Some(Compression::Xz),
                             'v' => verbose = true,
                             'p' => preserve_permissions = Some(true),
+                            'O' => to_stdout = true,
                             'f' => {
                                 let rest: String = chars.collect();
                                 archive = Some(if rest.is_empty() {
@@ -166,6 +202,7 @@ impl Options {
                         }
                     }
                 }
+
                 _ => operands.push(arg),
             }
         }
@@ -184,6 +221,8 @@ impl Options {
             preserve_mtime,
             overwrite,
             ignore_zeros,
+            strip_components,
+            to_stdout,
         })
     }
 
@@ -271,37 +310,77 @@ impl Options {
         archive.set_overwrite(self.overwrite);
         archive.set_ignore_zeros(self.ignore_zeros);
 
+        if list {
+            // GNU tar sizes the size column to the largest entry, with a
+            // fixed minimum; the width needs all entries up front.
+            let mut listed: Vec<(tar::Entry<'_, Box<dyn Read>>, PathBuf)> = Vec::new();
+            for entry in archive.entries()? {
+                let entry = entry?;
+                let path = entry.path()?.into_owned();
+                if is_excluded(&path, &self.excludes) || !member_selected(&path, &self.operands) {
+                    continue;
+                }
+                if let Some(path) = strip_components(&path, self.strip_components) {
+                    listed.push((entry, path));
+                }
+            }
+            let stdout = io::stdout();
+            let mut stdout = stdout.lock();
+            let size_width = listed
+                .iter()
+                .map(|(entry, _)| entry.header().size().map(|size| size.to_string().len()))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .max()
+                .unwrap_or(1)
+                .max(15);
+            for (entry, path) in listed {
+                if self.verbose {
+                    write_verbose_entry(&mut stdout, &entry, &path, size_width)?;
+                } else {
+                    writeln!(stdout, "{}", path.display())?;
+                }
+            }
+            return Ok(());
+        }
+
         let stdout = io::stdout();
         let mut stdout = stdout.lock();
-        let mut directories = Vec::new();
+        let mut directories: Vec<(tar::Entry<'_, Box<dyn Read>>, PathBuf)> = Vec::new();
         for entry in archive.entries()? {
             let mut entry = entry?;
             let path = entry.path()?.into_owned();
-            if is_excluded(&path, &self.excludes) {
+            if is_excluded(&path, &self.excludes) || !member_selected(&path, &self.operands) {
                 continue;
             }
-            if list {
-                if self.verbose {
-                    write_verbose_entry(&mut stdout, &entry, &path)?;
-                } else {
-                    writeln!(stdout, "{}", path.display())?;
+            let Some(path) = strip_components(&path, self.strip_components) else {
+                continue;
+            };
+            if self.to_stdout {
+                if !entry.header().entry_type().is_dir() {
+                    io::copy(&mut entry, &mut stdout)?;
                 }
             } else {
                 if self.verbose {
                     writeln!(stdout, "{}", path.display())?;
                 }
                 if entry.header().entry_type().is_dir() {
-                    directories.push(entry);
-                } else {
-                    entry.unpack_in(".")?;
+                    directories.push((entry, path));
+                } else if !path.as_os_str().is_empty() {
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    entry.unpack(&path)?;
                 }
             }
         }
 
         // Apply restrictive directory modes only after their contents exist.
-        directories.sort_by(|left, right| right.path_bytes().cmp(&left.path_bytes()));
-        for mut directory in directories {
-            directory.unpack_in(".")?;
+        directories.sort_by(|left, right| right.1.cmp(&left.1));
+        for (mut directory, path) in directories {
+            if !path.as_os_str().is_empty() {
+                directory.unpack(&path)?;
+            }
         }
 
         Ok(())
@@ -410,18 +489,137 @@ fn write_verbose_entry<W: Write, R: Read>(
     output: &mut W,
     entry: &tar::Entry<'_, R>,
     path: &Path,
+    size_width: usize,
 ) -> io::Result<()> {
     let header = entry.header();
+    let mut name = path.display().to_string();
+    if header.entry_type().is_symlink()
+        && let Ok(Some(target)) = entry.link_name()
+    {
+        name.push_str(" -> ");
+        name.push_str(&target.display().to_string());
+    }
     writeln!(
         output,
-        "{:06o} {}/{} {:>10} {:>10} {}",
-        header.mode()?,
-        header.uid()?,
-        header.gid()?,
+        "{} {}/{} {:>width$} {} {}",
+        mode_string(header)?,
+        stored_name(header.username_bytes().unwrap_or_default(), header.uid()?),
+        stored_name(header.groupname_bytes().unwrap_or_default(), header.gid()?),
         header.size()?,
-        header.mtime()?,
-        path.display()
+        local_datetime(header.mtime()?),
+        name,
+        width = size_width
     )
+}
+
+/// GNU tar lists the owner name stored in the archive, falling back to the
+/// numeric id when the header carries none.
+fn stored_name(stored: &[u8], id: u64) -> String {
+    let stored = String::from_utf8_lossy(stored);
+    if stored.is_empty() {
+        id.to_string()
+    } else {
+        stored.into_owned()
+    }
+}
+
+/// GNU-style permission string with the entry-type character, for example
+/// `drwxr-xr-x` or `-rw-r--r--`.
+fn mode_string(header: &tar::Header) -> io::Result<String> {
+    // GNU tar stores the file type bits in the mode field and lists only the
+    // permission bits.
+    let mode = header.mode()? & 0o7777;
+    let type_char = match header.entry_type() {
+        tar::EntryType::Directory => 'd',
+        tar::EntryType::Symlink => 'l',
+        tar::EntryType::Char => 'c',
+        tar::EntryType::Block => 'b',
+        tar::EntryType::Fifo => 'p',
+        _ => '-',
+    };
+    let mut text = String::with_capacity(10);
+    text.push(type_char);
+    for shift in [6, 3, 0] {
+        let bits = (mode >> shift) & 0o7;
+        let special = (mode >> (shift + 9)) & 1 == 1;
+        let (read, write) = (bits & 4 != 0, bits & 2 != 0);
+        let execute = bits & 1 != 0;
+        text.push(if read { 'r' } else { '-' });
+        text.push(if write { 'w' } else { '-' });
+        match (shift, special, execute) {
+            (0, true, true) => text.push('t'),
+            (0, true, false) => text.push('T'),
+            (3 | 6, true, true) => text.push('s'),
+            (3 | 6, true, false) => text.push('S'),
+            (_, _, execute) => text.push(if execute { 'x' } else { '-' }),
+        }
+    }
+    Ok(text)
+}
+
+/// Reports whether an archive member is selected by the name operands, using
+/// GNU tar's rule: an exact match or a matching parent directory.
+fn member_selected(path: &Path, operands: &[OsString]) -> bool {
+    operands.is_empty()
+        || operands
+            .iter()
+            .any(|operand| path == Path::new(operand) || path.strip_prefix(operand).is_ok())
+}
+
+/// Local-time `YYYY-MM-DD HH:MM` for the archive timestamp.
+fn local_datetime(seconds: u64) -> String {
+    let time = seconds as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: `tm` is a valid out-pointer for localtime_r.
+    if unsafe { libc::localtime_r(&time, &mut tm) }.is_null() {
+        return seconds.to_string();
+    }
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min
+    )
+}
+
+/// Reports whether a dashless argument looks like an old-style flag cluster
+/// such as `czf` in `tar czf archive.tar.gz`.
+fn is_old_style_cluster(text: &str) -> bool {
+    !text.is_empty()
+        && text.chars().all(|flag| {
+            matches!(
+                flag,
+                'c' | 'x' | 't' | 'z' | 'j' | 'J' | 'v' | 'p' | 'O' | 'f'
+            )
+        })
+}
+
+fn parse_strip_components(value: &OsStr) -> io::Result<usize> {
+    let value = value
+        .to_str()
+        .ok_or_else(|| invalid("strip-components count must be valid UTF-8"))?;
+    value
+        .parse()
+        .map_err(|_| invalid(format!("invalid strip-components count '{value}'")))
+}
+
+/// Drops the leading `count` path components; returns `None` when nothing
+/// would remain, matching GNU tar's `--strip-components` behaviour.
+fn strip_components(path: &Path, count: usize) -> Option<PathBuf> {
+    if count == 0 {
+        return Some(path.to_path_buf());
+    }
+    let mut components = path.components().peekable();
+    for _ in 0..count {
+        components.next()?;
+    }
+    let mut stripped = PathBuf::new();
+    for component in components {
+        stripped.push(component);
+    }
+    (stripped.as_os_str() != ".").then_some(stripped)
 }
 
 fn set_action(slot: &mut Option<Action>, action: Action) -> io::Result<()> {

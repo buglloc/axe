@@ -625,6 +625,76 @@ fn tar_lists_and_extracts_gnu_archives() {
     assert_eq!(snapshot(&from_axe_root.join("fixture")), snapshot(&fixture));
 }
 
+#[test]
+fn tar_accepts_old_style_clusters_strip_and_member_selection() {
+    let scratch = Scratch::new("tar-old-style");
+    let fixture = scratch.path().join("fixture");
+    fs::create_dir_all(fixture.join("nested")).expect("create tar fixture tree");
+    fs::write(fixture.join("top.txt"), b"top\n").expect("write top fixture");
+    fs::write(fixture.join("nested/leaf.txt"), b"leaf\n").expect("write leaf fixture");
+
+    let archive = run_applet(
+        "tar",
+        &["czf", "bundle.tgz", "fixture"],
+        b"",
+        scratch.path(),
+    );
+    assert_success("axe tar old-style creation", &archive);
+    let reference = run_reference("tar", &["-tzf", "bundle.tgz"], b"", scratch.path());
+    assert_success("reference reads axe old-style archive", &reference);
+    assert!(!reference.stdout.is_empty(), "archive should list members");
+
+    let listing = run_applet("tar", &["tzf", "bundle.tgz"], b"", scratch.path());
+    assert_success("axe tar old-style listing", &listing);
+    assert_eq!(
+        listing.stdout, reference.stdout,
+        "old-style listing differs"
+    );
+
+    let verbose = run_applet("tar", &["-tzvf", "bundle.tgz"], b"", scratch.path());
+    assert_success("axe tar verbose listing", &verbose);
+    let reference_verbose = run_reference("tar", &["-tzvf", "bundle.tgz"], b"", scratch.path());
+    assert_success("reference verbose listing", &reference_verbose);
+    assert_eq!(
+        verbose.stdout, reference_verbose.stdout,
+        "verbose listing differs from GNU tar"
+    );
+
+    let stripped_root = scratch.path().join("stripped");
+    fs::create_dir(&stripped_root).expect("create strip directory");
+    let stripped = run_applet(
+        "tar",
+        &[
+            "-xzf",
+            "bundle.tgz",
+            "--strip-components",
+            "1",
+            "-C",
+            "stripped",
+        ],
+        b"",
+        scratch.path(),
+    );
+    assert_success("axe tar strip extraction", &stripped);
+    assert!(stripped_root.join("top.txt").is_file(), "stripped top.txt");
+    assert!(
+        stripped_root.join("nested/leaf.txt").is_file(),
+        "stripped leaf"
+    );
+
+    let selected = run_applet(
+        "tar",
+        &["-xOzf", "bundle.tgz", "fixture/nested/leaf.txt"],
+        b"",
+        scratch.path(),
+    );
+    assert_success("axe tar member selection", &selected);
+    assert_eq!(
+        selected.stdout, b"leaf\n",
+        "only the selected member is printed"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn ip_link_and_address_json_match_iproute2_schema() {
