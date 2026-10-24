@@ -1,0 +1,32 @@
+# Vendored from uu_df 0.12.0; see .cargo_vcs_info.json for upstream provenance.
+# AXE changes are documented in PATCHES.md.
+[package]
+name = "uu_df"
+version = "0.12.0"
+edition = "2024"
+rust-version = "1.88.0"
+description = "df ~ (uutils) display file system information"
+homepage = "https://github.com/uutils/coreutils"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/df"
+license = "MIT"
+
+[features]
+diagnostics = ["uucore/diagnostics"]
+
+[lib]
+path = "src/df.rs"
+doctest = false
+
+[[bin]]
+name = "df"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["wrap_help", "cargo", "color"] }
+fluent = "0.17.0"
+thiserror = "2.0.3"
+unicode-width = "0.2.0"
+uucore = { version = "0.12.0", features = ["libc", "fsext", "parser-size", "fs"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", default-features = false, features = ["fs"] }

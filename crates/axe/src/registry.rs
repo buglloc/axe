@@ -565,8 +565,6 @@ pub fn build(
     );
     commands.extend_bundled(brush_coreutils_builtins::bundled_commands());
     commands.extend_bundled(crate::applets::admin_coreutils::commands());
-    #[cfg(target_os = "linux")]
-    commands.insert_bundled("df", None, crate::applets::df::df as BundledFn);
     commands.insert_bundled("awk", None, crate::applets::awk as BundledFn);
     commands.insert_bundled("grep", None, crate::applets::grep as BundledFn);
     commands.insert_bundled("sed", None, crate::applets::sed as BundledFn);

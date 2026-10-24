@@ -21,6 +21,7 @@ bytes.workspace = true
 brush-shell = { version = "=0.4.0", default-features = false, features = ["minimal", "reedline"] }
 brush-coreutils-builtins = { version = "=0.1.0", features = ["coreutils.all"] }
 bzip2.workspace = true
+chrono.workspace = true
 clap.workspace = true
 diffutils = { version = "0.5.0" }
 findutils = { version = "0.10.0" }
@@ -84,7 +85,6 @@ uu_users = { version = "=0.12.0" }
 uu_who = { version = "=0.12.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-chrono.workspace = true
 futures-util.workspace = true
 inotify.workspace = true
 linux-raw-sys.workspace = true

@@ -2,16 +2,16 @@ pub(crate) mod admin_coreutils;
 mod awk;
 mod commands;
 mod compression;
-#[cfg(target_os = "linux")]
-pub(crate) mod df;
 mod diffutils;
 #[cfg(target_os = "linux")]
 mod dns;
 mod doctor;
+pub(crate) mod errno;
 mod file;
 mod findutils;
 mod goblin;
 mod http;
+#[cfg(target_os = "linux")]
 mod inotify_tools;
 mod jq;
 #[cfg(target_os = "linux")]
