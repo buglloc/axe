@@ -96,6 +96,260 @@ pub fn mount(args: Vec<OsString>) -> i32 {
     }
 }
 
+const UMOUNT_USAGE: &str = "\
+Usage: umount [-hV]
+       umount -a [-d] [-f] [-l] [-n] [-r] [-v] [-t <fstype>]
+       umount [--source] <source> | [--target] <directory>
+       umount <directory> | <source> [-d] [-f] [-l] [-n] [-R] [-r] [-v]
+
+Unmount filesystems.
+
+Options:
+ -a, --all           unmount all filesystems (except proc, sysfs, devtmpfs, devpts)
+ -A, --all-targets   unmount all mountpoints below the given target
+ -d, --detach-loop   accepted for compatibility (loop devices detach automatically)
+ -f, --force         force unmount (MNT_FORCE)
+ -l, --lazy          detach now, clean up references later (MNT_DETACH)
+ -R, --recursive     unmount the target and all mountpoints below it
+ -r, --read-only     in case unmounting fails, try to remount read-only
+ -t, --types <list>  limit the set of filesystem types
+ -n, --no-mtab       accepted for compatibility (no mtab is written)
+ -v, --verbose       say what is being done";
+
+/// Filesystems `umount -a` leaves alone, as util-linux does.
+const UMOUNT_SKIP_TYPES: [&str; 5] = ["proc", "sysfs", "devtmpfs", "devpts", "mqueue"];
+
+pub fn umount(args: Vec<OsString>) -> i32 {
+    match run_umount(args) {
+        Ok(()) => 0,
+        Err(failure) => {
+            if !failure.message.is_empty() {
+                eprintln!("umount: {}", failure.message);
+            }
+            failure.code
+        }
+    }
+}
+
+#[derive(Default)]
+struct UmountArgs {
+    all: bool,
+    all_targets: bool,
+    recursive: bool,
+    lazy: bool,
+    force: bool,
+    read_only: bool,
+    verbose: bool,
+    types: Option<String>,
+    targets: Vec<OsString>,
+}
+
+fn run_umount(args: Vec<OsString>) -> Result<(), Failure> {
+    let mut parsed = UmountArgs::default();
+    let mut iter = args.into_iter().skip(1).peekable();
+    while let Some(arg) = iter.next() {
+        let Some(text) = arg.to_str() else {
+            parsed.targets.push(arg);
+            continue;
+        };
+        match text {
+            "-h" | "--help" => {
+                println!("{UMOUNT_USAGE}");
+                return Err(Failure {
+                    code: 0,
+                    message: String::new(),
+                    missing_source: false,
+                });
+            }
+            "-V" | "--version" => {
+                println!("umount from axe {}", env!("CARGO_PKG_VERSION"));
+                return Err(Failure {
+                    code: 0,
+                    message: String::new(),
+                    missing_source: false,
+                });
+            }
+            "-t" | "--types" => {
+                parsed.types = Some(
+                    iter.next()
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .ok_or_else(|| usage("option requires an argument -- 't'"))?,
+                );
+            }
+            "--source" | "--target" | "-d" | "--detach-loop" | "-n" | "--no-mtab" | "--fake" => {}
+            "--all" => parsed.all = true,
+            "--all-targets" => parsed.all_targets = true,
+            "--recursive" => parsed.recursive = true,
+            "--lazy" => parsed.lazy = true,
+            "--force" => parsed.force = true,
+            "--read-only" => parsed.read_only = true,
+            "--verbose" => parsed.verbose = true,
+            value if value.starts_with('-') && value.len() > 1 && !value.starts_with("--") => {
+                for flag in value[1..].chars() {
+                    match flag {
+                        'a' => parsed.all = true,
+                        'A' => parsed.all_targets = true,
+                        'R' => parsed.recursive = true,
+                        'f' => parsed.force = true,
+                        'l' => parsed.lazy = true,
+                        'r' => parsed.read_only = true,
+                        'v' => parsed.verbose = true,
+                        'd' | 'n' | 'q' => {}
+                        other => return Err(bad_usage(format!("invalid option -- '{other}'"))),
+                    }
+                }
+            }
+            _ => parsed.targets.push(arg),
+        }
+    }
+
+    let mut table = mount_table()?;
+    if let Some(types) = &parsed.types
+        && !types.is_empty()
+    {
+        table.retain(|entry| matches_types(types, &entry.fs_type));
+    }
+
+    let mut plans: Vec<Vec<PathBuf>> = Vec::new();
+    if parsed.all || parsed.all_targets {
+        let selected: Vec<PathBuf> = if parsed.all_targets {
+            table
+                .iter()
+                .filter(|entry| {
+                    parsed.targets.is_empty()
+                        || parsed
+                            .targets
+                            .iter()
+                            .any(|target| under_target(&entry.target, Path::new(target)))
+                })
+                .map(|entry| entry.target.clone())
+                .collect()
+        } else {
+            table
+                .iter()
+                .filter(|entry| !UMOUNT_SKIP_TYPES.contains(&entry.fs_type.as_str()))
+                .map(|entry| entry.target.clone())
+                .collect()
+        };
+        // Deepest paths first so submounts detach before their parents.
+        plans.push(sort_deepest_first(selected));
+    } else {
+        if parsed.targets.is_empty() {
+            return Err(usage("one of <directory> or <source> is required"));
+        }
+        for target in &parsed.targets {
+            let entry = resolve_umount_target(&table, target).ok_or_else(|| Failure {
+                code: EXIT_USAGE,
+                message: format!("{}: not mounted.", target.to_string_lossy()),
+                missing_source: false,
+            })?;
+            if parsed.recursive {
+                let nested: Vec<PathBuf> = table
+                    .iter()
+                    .filter(|candidate| under_target(&candidate.target, &entry.target))
+                    .map(|candidate| candidate.target.clone())
+                    .chain(std::iter::once(entry.target.clone()))
+                    .collect();
+                plans.push(sort_deepest_first(nested));
+            } else {
+                plans.push(vec![entry.target.clone()]);
+            }
+        }
+    }
+
+    let mut failed_any = false;
+    for plan in plans {
+        for target in plan {
+            match umount_one(&target, &parsed) {
+                Ok(()) => {
+                    if parsed.verbose {
+                        println!("{} unmounted", target.display());
+                    }
+                }
+                Err(error) => {
+                    eprintln!("umount: {}: {}", target.display(), error);
+                    failed_any = true;
+                }
+            }
+        }
+    }
+    if failed_any {
+        Err(Failure {
+            code: EXIT_USAGE,
+            message: String::new(),
+            missing_source: false,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn resolve_umount_target<'a>(table: &'a [MountEntry], spec: &OsStr) -> Option<&'a MountEntry> {
+    let path = Path::new(spec);
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    table
+        .iter()
+        .find(|entry| same_path(&entry.target, path))
+        .or_else(|| {
+            table
+                .iter()
+                .find(|entry| same_path(&entry.target, &canonical))
+        })
+        .or_else(|| {
+            // By source: util-linux unmounts the most recently mounted match.
+            table.iter().rev().find(|entry| entry.source == spec)
+        })
+}
+
+fn under_target(path: &Path, target: &Path) -> bool {
+    path.starts_with(target)
+}
+
+fn sort_deepest_first(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    paths.dedup();
+    paths
+}
+
+fn umount_one(target: &Path, args: &UmountArgs) -> Result<(), String> {
+    let mut flags = 0;
+    if args.lazy {
+        flags |= libc::MNT_DETACH;
+    }
+    if args.force {
+        flags |= libc::MNT_FORCE;
+    }
+    let path = CString::new(target.as_os_str().as_bytes()).map_err(|error| error.to_string())?;
+    // SAFETY: `path` is a valid NUL-terminated path for the duration of the call.
+    let result = unsafe { libc::umount2(path.as_ptr(), flags) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EBUSY) && args.read_only {
+        // SAFETY: remounting the same path read-only is a valid mount(2) use.
+        let remount = libc::MS_REMOUNT | libc::MS_RDONLY;
+        let result = unsafe {
+            libc::mount(
+                std::ptr::null(),
+                path.as_ptr(),
+                std::ptr::null(),
+                remount,
+                std::ptr::null(),
+            )
+        };
+        if result == 0 {
+            return Ok(());
+        }
+    }
+    Err(match error.raw_os_error() {
+        Some(libc::EINVAL) => "not mounted.".to_string(),
+        Some(libc::EBUSY) => "target is busy.".to_string(),
+        Some(code) => format!("{} ({code})", error),
+        None => error.to_string(),
+    })
+}
+
 #[derive(Debug)]
 struct Failure {
     code: i32,

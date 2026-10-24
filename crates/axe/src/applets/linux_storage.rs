@@ -15,6 +15,7 @@ pub fn commands() -> HashMap<String, AppletFn> {
     commands.insert("blkid".into(), blkid as AppletFn);
     commands.insert("blockdev".into(), blockdev as AppletFn);
     commands.insert("mount".into(), super::mount::mount as AppletFn);
+    commands.insert("umount".into(), super::mount::umount as AppletFn);
     commands
 }
 

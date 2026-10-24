@@ -329,9 +329,8 @@ fn bundled_category(name: &str) -> &'static str {
         "bunzip2" | "bzcat" | "bzip2" | "gzip" | "tar" | "unxz" | "xz" | "xzcat" | "zstd" => {
             "archives"
         }
-        "blkid" | "blockdev" | "dd" | "df" | "du" | "iostat" | "mount" | "mountpoint" | "sync" => {
-            "storage"
-        }
+        "blkid" | "blockdev" | "dd" | "df" | "du" | "iostat" | "mount" | "mountpoint" | "sync"
+        | "umount" => "storage",
         "hugetop" | "kill" | "killall" | "lsof" | "nice" | "nohup" | "pgrep" | "pidof"
         | "pidwait" | "pkill" | "pmap" | "ps" | "pwdx" | "skill" | "snice" | "timeout" | "top"
         | "watch" | "xargs" => "process",
@@ -444,6 +443,7 @@ fn bundled_synopsis(name: &str) -> &'static str {
         "modinfo" => "Display Linux kernel module information",
         "more" => "Page through text one screen at a time",
         "mount" => "List, mount, remount, bind, and move filesystems",
+        "umount" => "Unmount filesystems",
         "mountpoint" => "Check whether a path is a mount point",
         "mv" => "Move or rename files and directories",
         "nice" => "Run a command with adjusted scheduling priority",
