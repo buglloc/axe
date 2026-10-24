@@ -100,6 +100,9 @@ The bundled `zstd` uses the linked Zstandard codec and keeps input files by defa
 `diff -u` and `diff -c` combine nearby changes into one hunk when their context
 overlaps. Context output marks each line of a replacement block with `!`.
 
+`jq` provides `input_filename` for the current input file, `<stdin>` for standard
+input, and `null` before input is consumed in null-input mode.
+
 ## Storage reports
 
 `df` supports `-m`, `--output`, and `--type=TYPE`. Without `-a`, it selects one representative mount for each device, including bind aliases. Block-size options follow command-line order.

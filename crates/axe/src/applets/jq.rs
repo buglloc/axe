@@ -201,9 +201,20 @@ fn next_utf8(args: &mut impl Iterator<Item = OsString>, option: &str) -> Result<
 }
 
 fn run(options: Options) -> Result<i32, RunError> {
+    let input_filename = |path: Option<&PathBuf>| {
+        if options.null_input {
+            Val::Null
+        } else {
+            path.filter(|path| path.as_os_str() != "-").map_or_else(
+                || Val::utf8_str("<stdin>"),
+                |path| Val::utf8_str(path.as_os_str().as_encoded_bytes().to_vec()),
+            )
+        }
+    };
     let output_options = OutputOptions {
         raw_output: options.raw_output,
         join_output: options.join_output,
+        input_filename: input_filename(options.files.last()),
     };
     let filter_source = options.filter.as_deref().expect("filter checked by parser");
     let variable_names = options
@@ -334,6 +345,11 @@ fn run(options: Options) -> Result<i32, RunError> {
         }
     } else {
         for path in options.files {
+            let output_options = OutputOptions {
+                raw_output: options.raw_output,
+                join_output: options.join_output,
+                input_filename: input_filename(Some(&path)),
+            };
             let run_file = |reader, vars, output: &mut dyn Write| {
                 if options.raw_input {
                     execute(
@@ -407,6 +423,7 @@ fn raw_lines(reader: impl BufRead) -> impl Iterator<Item = Result<Val, io::Error
 struct OutputOptions {
     raw_output: bool,
     join_output: bool,
+    input_filename: Val,
 }
 
 fn execute<E: ToString>(
@@ -419,24 +436,31 @@ fn execute<E: ToString>(
     output_options: &OutputOptions,
 ) -> Result<Option<bool>, RunError> {
     let mut last = None;
-    data::run(runner, filter, vars, inputs, RunError::Input, |value| {
-        let value = value.map_err(map_exception)?;
-        last = Some(value.as_bool());
-        if output_options.raw_output {
-            if let Val::TStr(text) = &value {
-                output.write_all(text).map_err(RunError::Io)?;
+    data::run(
+        runner,
+        filter,
+        vars,
+        (&output_options.input_filename, inputs),
+        RunError::Input,
+        |value| {
+            let value = value.map_err(map_exception)?;
+            last = Some(value.as_bool());
+            if output_options.raw_output {
+                if let Val::TStr(text) = &value {
+                    output.write_all(text).map_err(RunError::Io)?;
+                } else {
+                    json::write::write(output, pp, 0, &value).map_err(RunError::Io)?;
+                }
             } else {
                 json::write::write(output, pp, 0, &value).map_err(RunError::Io)?;
             }
-        } else {
-            json::write::write(output, pp, 0, &value).map_err(RunError::Io)?;
-        }
-        if output_options.join_output {
-            Ok(())
-        } else {
-            output.write_all(b"\n").map_err(RunError::Io)
-        }
-    })?;
+            if output_options.join_output {
+                Ok(())
+            } else {
+                output.write_all(b"\n").map_err(RunError::Io)
+            }
+        },
+    )?;
     Ok(last)
 }
 
