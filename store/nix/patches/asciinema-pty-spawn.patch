@@ -1,0 +1,114 @@
+Prepare argv and environment with Command before forking; keep the PTY child
+callback free of allocation and environment locks. Close PTY descriptors on exec.
+Use the selected shell directly, without requiring a separate /bin/sh.
+
+--- a/src/pty.rs
++++ b/src/pty.rs
+@@ -1,12 +1,13 @@
+ use std::collections::HashMap;
+-use std::env;
+-use std::ffi::{CString, NulError};
+ use std::os::fd::OwnedFd;
+ use std::os::unix::io::AsRawFd;
++use std::os::unix::process::CommandExt;
++use std::process::Command;
+ 
+ use nix::errno::Errno;
+-use nix::pty::{ForkptyResult, Winsize};
+-use nix::sys::signal::{self, SigHandler, Signal};
++use nix::fcntl::{fcntl, FcntlArg, FdFlag};
++use nix::pty::Winsize;
++use nix::sys::signal::{self, Signal};
+ use nix::sys::wait::{self, WaitPidFlag, WaitStatus};
+ use nix::unistd::{self, Pid};
+ use nix::{libc, pty};
+@@ -69,39 +70,40 @@
+     winsize: Winsize,
+     extra_env: &HashMap<String, String>,
+ ) -> anyhow::Result<Pty> {
+-    let result = unsafe { pty::forkpty(Some(&winsize), None) }?;
++    let pair = pty::openpty(Some(&winsize), None)?;
++    fcntl(&pair.master, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
++    fcntl(&pair.slave, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
++    pair.master.set_nonblocking()?;
++    let master = AsyncFd::new(pair.master)?;
+ 
+-    match result {
+-        ForkptyResult::Parent { child, master } => {
+-            master.set_nonblocking()?;
+-            let master = AsyncFd::new(master)?;
++    let mut process = Command::new(command[0].as_ref());
++    process
++        .args(command.iter().skip(1).map(|arg| arg.as_ref()))
++        .envs(extra_env)
++        .stdin(pair.slave.try_clone()?)
++        .stdout(pair.slave.try_clone()?)
++        .stderr(pair.slave);
+ 
+-            Ok(Pty { child, master })
+-        }
+-
+-        ForkptyResult::Child => {
+-            handle_child(command, extra_env)?;
+-            unreachable!();
+-        }
+-    }
+-}
+-
+-fn handle_child<S: AsRef<str>>(
+-    command: &[S],
+-    extra_env: &HashMap<String, String>,
+-) -> anyhow::Result<()> {
+-    let command = command
+-        .iter()
+-        .map(|s| CString::new(s.as_ref()))
+-        .collect::<Result<Vec<CString>, NulError>>()?;
+-
+-    for (k, v) in extra_env {
+-        env::set_var(k, v);
++    // SAFETY: Command prepares argv and env before forking. The child callback
++    // only creates a session and assigns its controlling terminal via syscalls;
++    // OS error construction does not allocate or acquire locks.
++    unsafe {
++        process.pre_exec(|| {
++            if libc::setsid() == -1 {
++                return Err(io::Error::last_os_error());
++            }
++            if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) == -1 {
++                return Err(io::Error::last_os_error());
++            }
++            Ok(())
++        });
+     }
+ 
+-    unsafe { signal::signal(Signal::SIGPIPE, SigHandler::SigDfl) }?;
+-    unistd::execvp(&command[0], &command)?;
+-    unsafe { libc::_exit(1) }
++    let child = process.spawn()?;
++    Ok(Pty {
++        child: Pid::from_raw(child.id() as libc::pid_t),
++        master,
++    })
+ }
+ 
+ #[cfg(test)]
+--- a/src/cmd/session.rs
++++ b/src/cmd/session.rs
+@@ -555,11 +555,12 @@
+ }
+ 
+ fn build_exec_command(command: Option<String>) -> Vec<String> {
+-    let command = command
+-        .or(env::var("SHELL").ok())
+-        .unwrap_or("/bin/sh".to_owned());
+-
+-    vec!["/bin/sh".to_owned(), "-c".to_owned(), command]
++    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned());
++
++    match command {
++        Some(command) => vec![shell, "-c".to_owned(), command],
++        None => vec![shell],
++    }
+ }
+ 
+ fn build_exec_extra_env(vars: &[String], relay_id: Option<&String>) -> HashMap<String, String> {

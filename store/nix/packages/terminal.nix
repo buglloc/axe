@@ -5,6 +5,7 @@
   linuxSystems,
   portableSystems,
   staticSetFor,
+  packageSetFor,
   ...
 }: let
   tmuxTerminals = [
@@ -254,6 +255,35 @@
     meta.mainProgram = "zellij";
   };
 in {
+  asciinema = mkNixpkgsBinary {
+    name = "asciinema";
+    synopsis = "Record, replay, and stream terminal sessions";
+    systems = portableSystems;
+    darwinSystemLibraries = ["libiconv.2.dylib"];
+    packageFor = system: pkgs:
+      if system == "aarch64-darwin"
+      then pkgs.asciinema
+      else
+        (packageSetFor system pkgs).asciinema.overrideAttrs (old: {
+          patches = (old.patches or []) ++ [../patches/asciinema-pty-spawn.patch];
+          postInstall = "";
+          doInstallCheck = system == "x86_64-linux";
+          postInstallCheck = ''
+            recording="$(mktemp -d)"
+            status=0
+            ASCIINEMA_CONFIG_HOME="$recording/config" \
+              ASCIINEMA_STATE_HOME="$recording/state" \
+              timeout 15 "$out/bin/asciinema" rec --headless --return --quiet \
+                --command 'printf "session:%s\n" "$ASCIINEMA_SESSION"; exit 7' \
+                "$recording/session.cast" || status=$?
+            test "$status" -eq 7
+            "$out/bin/asciinema" convert "$recording/session.cast" "$recording/session.txt"
+            grep -Eq '^session:[0-9a-f]+' "$recording/session.txt"
+            rm -rf "$recording"
+          '';
+        });
+  };
+
   tmux = mkNixpkgsBinary {
     name = "tmux";
     synopsis = "Multiplex terminal sessions and windows";

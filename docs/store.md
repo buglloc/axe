@@ -22,6 +22,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | --- | --- | --- | --- |
 | `7zz` | `archives/7zz` | Create and extract archives with 7-Zip | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `age` | `security/age` | Encrypt and decrypt files with keys or passphrases | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `asciinema` | `terminal/asciinema` | Record, replay, and stream terminal sessions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `betterleaks` | `security/betterleaks` | Scan files, stdin, and Git history for secrets with optional validation | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `binwalk` | `debugging/binwalk` | Analyze firmware images and embedded files | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `bpftool` | `debugging/bpftool` | Inspect and manage Linux eBPF objects | `aarch64-linux`, `x86_64-linux` |
@@ -127,6 +128,10 @@ The `interactsh-client` package removes automatic version checks and their machi
 The `gori` package disables startup update checks by default. Set `update.check_enabled` to `true` in its settings file to enable them.
 
 The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinned upstream universal binary; its archive version and SHA-256 must be updated together and match the Linux version.
+
+`asciinema rec --return session.cast` records a new `$SHELL` session; exiting ends the recording, and `--return` preserves the session's exit status. `asciinema play session.cast` replays it locally. On Linux, `-c COMMAND` uses `$SHELL -c`, falling back to `/bin/sh` when `SHELL` is unset. Local recording and playback need no writable home directory; the recording's destination must be writable.
+
+Uploads and remote streams are explicit network operations and use host TLS trust. `ASCIINEMA_CONFIG_HOME` and `ASCIINEMA_STATE_HOME` select configuration and writable publishing state directories. Keyboard input capture is disabled by default; `--capture-input` also records sensitive input such as passwords. Terminal output can expose secrets even with input capture disabled.
 
 `tmux` embeds ncurses fallback records for modern terminals, including Ghostty, Kitty, Foot, Alacritty, and WezTerm. Ghostty and Kitty records come from their upstream sources pinned by `flake.lock`; updating the nixpkgs input refreshes them at build time. Host terminfo remains available for custom definitions, but no terminfo tree is shipped. AXE shell and SSH sessions preserve the client's `TERM`; panes default to `tmux-256color`.
 
