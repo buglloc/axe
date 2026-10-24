@@ -23,7 +23,7 @@ brush-coreutils-builtins = { version = "=0.1.0", features = ["coreutils.all"] }
 bzip2.workspace = true
 chrono.workspace = true
 clap.workspace = true
-diffutils = { version = "0.5.0" }
+diffutils = { version = "0.6.0" }
 findutils = { version = "0.10.0" }
 flate2.workspace = true
 file-format = { version = "0.29.0", features = ["reader"] }

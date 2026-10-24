@@ -97,6 +97,9 @@ The bundled `zstd` uses the linked Zstandard codec and keeps input files by defa
 
 `tree -h` prints compact human-readable sizes before names, for example `[4.9K]  big`. It accepts clustered and repeated flags; `--help` prints help. `file` supports `-E` for failing status on inspection errors, `-N` to disable name padding, `--mime-encoding`, and `-h`/`--no-dereference`. Empty regular files use `inode/x-empty`; empty stdin uses `application/x-empty`.
 
+`diff -u` and `diff -c` combine nearby changes into one hunk when their context
+overlaps. Context output marks each line of a replacement block with `!`.
+
 ## Storage reports
 
 `df` supports `-m`, `--output`, and `--type=TYPE`. Without `-a`, it selects one representative mount for each device, including bind aliases. Block-size options follow command-line order.
