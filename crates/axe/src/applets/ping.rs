@@ -145,6 +145,7 @@ async fn ping_async(options: PingOptions) -> Result<bool, String> {
     let mut transmitted = 0u16;
     let mut received = 0u16;
     let mut total_rtt = Duration::ZERO;
+    let mut total_rtt_squared = 0f64;
     let mut minimum = None::<Duration>;
     let mut maximum = Duration::ZERO;
     loop {
@@ -156,7 +157,9 @@ async fn ping_async(options: PingOptions) -> Result<bool, String> {
         match pinger.ping(PingSequence(sequence), &payload).await {
             Ok((_packet, rtt)) => {
                 received = received.saturating_add(1);
+                let milliseconds = rtt.as_secs_f64() * 1000.0;
                 total_rtt += rtt;
+                total_rtt_squared += milliseconds * milliseconds;
                 minimum = Some(minimum.map_or(rtt, |value| value.min(rtt)));
                 maximum = maximum.max(rtt);
                 if !options.quiet {
@@ -208,11 +211,15 @@ async fn ping_async(options: PingOptions) -> Result<bool, String> {
         started.elapsed().as_secs_f64() * 1000.0
     );
     if received > 0 {
-        let average = total_rtt.as_secs_f64() * 1000.0 / f64::from(received);
+        let count = f64::from(received);
+        let minimum_ms = minimum.unwrap_or_default().as_secs_f64() * 1000.0;
+        let maximum_ms = maximum.as_secs_f64() * 1000.0;
+        let average_ms = total_rtt.as_secs_f64() * 1000.0 / count;
+        let mean_deviation = (total_rtt_squared / count - average_ms * average_ms)
+            .abs()
+            .sqrt();
         println!(
-            "rtt min/avg/max = {:.3}/{average:.3}/{:.3} ms",
-            minimum.unwrap_or_default().as_secs_f64() * 1000.0,
-            maximum.as_secs_f64() * 1000.0
+            "rtt min/avg/max/mdev = {minimum_ms:.3}/{average_ms:.3}/{maximum_ms:.3}/{mean_deviation:.3} ms",
         );
     }
     Ok(received > 0)
