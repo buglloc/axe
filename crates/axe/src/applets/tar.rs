@@ -1,11 +1,13 @@
+use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use bzip2::Compression as Bzip2Compression;
 use bzip2::read::MultiBzDecoder;
 use bzip2::write::BzEncoder;
+use chrono::{Local, TimeZone};
 use flate2::Compression as GzipCompression;
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
@@ -27,7 +29,7 @@ pub fn tar(args: Vec<OsString>) -> i32 {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum Action {
     Create,
     Extract,
@@ -76,134 +78,118 @@ impl Options {
         let mut to_stdout = false;
         let mut iter = args.into_iter();
         let _name = iter.next();
-        let mut old_style_allowed = true;
+        let mut first = true;
 
         while let Some(arg) = iter.next() {
-            let Some(argument) = arg.to_str() else {
-                old_style_allowed = false;
+            let Some(text) = arg.to_str() else {
+                first = false;
                 operands.push(arg);
                 continue;
             };
-            // GNU and busybox tar accept a dashless leading argument such as
-            // `tar czf archive.tar.gz` as a flag cluster.
-            let converted;
-            let text: &str = if old_style_allowed
-                && !argument.starts_with('-')
-                && is_old_style_cluster(argument)
-            {
-                converted = format!("-{argument}");
-                &converted
-            } else {
-                argument
-            };
-            old_style_allowed = false;
-            let arg = OsString::from(text);
+            let old_style = first && !text.starts_with('-');
+            first = false;
 
             if text == "--" {
                 operands.extend(iter);
                 break;
             }
-            if text == "--help" {
-                println!(
-                    "Usage: tar (-c|--create)|(-x|--extract)|(-t|--list) \
-                     [-z|-j|-J] [-v] [-O] [--strip-components N] [-f ARCHIVE] [-C DIR] [FILE...]"
-                );
-                return Err(done());
-            }
-            if text == "--version" {
-                println!("tar (axe) {}", env!("CARGO_PKG_VERSION"));
-                return Err(done());
-            }
-
-            match text {
-                "--create" => set_action(&mut action, Action::Create)?,
-                "--extract" | "--get" => set_action(&mut action, Action::Extract)?,
-                "--list" => set_action(&mut action, Action::List)?,
-                "--gzip" | "--gunzip" | "--ungzip" => compression = Some(Compression::Gzip),
-                "--bzip2" => compression = Some(Compression::Bzip2),
-                "--xz" => compression = Some(Compression::Xz),
-                "--verbose" => verbose = true,
-                "--to-stdout" => to_stdout = true,
-                "--same-permissions" | "--preserve-permissions" => {
-                    preserve_permissions = Some(true);
+            if text.starts_with("--") {
+                let (option, value) = text
+                    .split_once('=')
+                    .map_or((text, None), |(option, value)| (option, Some(value)));
+                match option {
+                    "--file" => {
+                        archive = Some(long_argument(option, value, &mut iter)?);
+                        continue;
+                    }
+                    "--directory" => {
+                        directory = Some(PathBuf::from(long_argument(option, value, &mut iter)?));
+                        continue;
+                    }
+                    "--strip-components" => {
+                        strip_components =
+                            parse_strip_components(&long_argument(option, value, &mut iter)?)?;
+                        continue;
+                    }
+                    "--exclude" => {
+                        excludes.push(long_argument(option, value, &mut iter)?);
+                        continue;
+                    }
+                    "--create" => set_action(&mut action, Action::Create)?,
+                    "--extract" | "--get" => set_action(&mut action, Action::Extract)?,
+                    "--list" => set_action(&mut action, Action::List)?,
+                    "--gzip" | "--gunzip" | "--ungzip" => compression = Some(Compression::Gzip),
+                    "--bzip2" => compression = Some(Compression::Bzip2),
+                    "--xz" => compression = Some(Compression::Xz),
+                    "--verbose" => verbose = true,
+                    "--to-stdout" => to_stdout = true,
+                    "--same-permissions" | "--preserve-permissions" => {
+                        preserve_permissions = Some(true);
+                    }
+                    "--no-same-permissions" => preserve_permissions = Some(false),
+                    "--same-owner" => preserve_ownerships = Some(true),
+                    "--no-same-owner" => preserve_ownerships = Some(false),
+                    "--no-mtime" => preserve_mtime = false,
+                    "--keep-old-files" => overwrite = false,
+                    "--overwrite" => overwrite = true,
+                    "--ignore-zeros" => ignore_zeros = true,
+                    "--help" | "--version" => {
+                        reject_option_value(option, value)?;
+                        if option == "--help" {
+                            println!(
+                                "Usage: tar (-c|--create)|(-x|--extract)|(-t|--list) \
+                                 [-z|-j|-J] [-v] [-O] [--strip-components N] \
+                                 [-f ARCHIVE] [-C DIR] [FILE...]"
+                            );
+                        } else {
+                            println!("tar (axe) {}", env!("CARGO_PKG_VERSION"));
+                        }
+                        return Err(done());
+                    }
+                    _ => return Err(invalid(format!("unrecognized option '{text}'"))),
                 }
-                "--no-same-permissions" => preserve_permissions = Some(false),
-                "--same-owner" => preserve_ownerships = Some(true),
-                "--no-same-owner" => preserve_ownerships = Some(false),
-                "--no-mtime" => preserve_mtime = false,
-                "--keep-old-files" => overwrite = false,
-                "--overwrite" => overwrite = true,
-                "--ignore-zeros" => ignore_zeros = true,
-                "-f" | "--file" => {
-                    archive = Some(
-                        iter.next()
-                            .ok_or_else(|| invalid("-f requires an archive"))?,
-                    );
-                }
-                "-O" => to_stdout = true,
-                "-C" | "--directory" => {
-                    directory = Some(PathBuf::from(
-                        iter.next()
-                            .ok_or_else(|| invalid("-C requires a directory"))?,
-                    ));
-                }
-                "--strip-components" => {
-                    let value = iter
-                        .next()
-                        .ok_or_else(|| invalid("--strip-components requires a count"))?;
-                    strip_components = parse_strip_components(&value)?;
-                }
-                "--exclude" => {
-                    excludes.push(
-                        iter.next()
-                            .ok_or_else(|| invalid("--exclude requires a pattern"))?,
-                    );
-                }
-                _ if text.starts_with("--file=") => {
-                    archive = Some(text["--file=".len()..].into());
-                }
-                _ if text.starts_with("--directory=") => {
-                    directory = Some(text["--directory=".len()..].into());
-                }
-                _ if text.starts_with("--strip-components=") => {
-                    strip_components =
-                        parse_strip_components(OsStr::new(&text["--strip-components=".len()..]))?;
-                }
-                _ if text.starts_with("--exclude=") => {
-                    excludes.push(text["--exclude=".len()..].into());
-                }
-                _ if text.starts_with("--") => {
-                    return Err(invalid(format!("unsupported option '{text}'")));
-                }
-                _ if text.starts_with('-') && text != "-" => {
-                    let mut chars = text[1..].chars().peekable();
-                    while let Some(flag) = chars.next() {
-                        match flag {
-                            'c' => set_action(&mut action, Action::Create)?,
-                            'x' => set_action(&mut action, Action::Extract)?,
-                            't' => set_action(&mut action, Action::List)?,
-                            'z' => compression = Some(Compression::Gzip),
-                            'j' => compression = Some(Compression::Bzip2),
-                            'J' => compression = Some(Compression::Xz),
-                            'v' => verbose = true,
-                            'p' => preserve_permissions = Some(true),
-                            'O' => to_stdout = true,
-                            'f' => {
-                                let rest: String = chars.collect();
-                                archive = Some(if rest.is_empty() {
-                                    iter.next()
-                                        .ok_or_else(|| invalid("-f requires an archive"))?
-                                } else {
-                                    rest.into()
-                                });
+                reject_option_value(option, value)?;
+            } else if old_style || (text.starts_with('-') && text != "-") {
+                let mut chars = if old_style { text } else { &text[1..] }.chars();
+                while let Some(flag) = chars.next() {
+                    match flag {
+                        'c' => set_action(&mut action, Action::Create)?,
+                        'x' => set_action(&mut action, Action::Extract)?,
+                        't' => set_action(&mut action, Action::List)?,
+                        'z' => compression = Some(Compression::Gzip),
+                        'j' => compression = Some(Compression::Bzip2),
+                        'J' => compression = Some(Compression::Xz),
+                        'v' => verbose = true,
+                        'p' => preserve_permissions = Some(true),
+                        'O' => to_stdout = true,
+                        'f' | 'C' => {
+                            // Old-style argument-taking options consume the next word,
+                            // not the remaining letters in the option cluster.
+                            let value = if !old_style && !chars.as_str().is_empty() {
+                                OsString::from(chars.as_str())
+                            } else {
+                                iter.next().ok_or_else(|| {
+                                    invalid(if old_style {
+                                        format!("Old option '{flag}' requires an argument.")
+                                    } else {
+                                        format!("option requires an argument -- '{flag}'")
+                                    })
+                                })?
+                            };
+                            if flag == 'f' {
+                                archive = Some(value);
+                            } else {
+                                directory = Some(PathBuf::from(value));
+                            }
+                            if !old_style {
                                 break;
                             }
-                            _ => return Err(invalid(format!("unsupported option -{flag}"))),
                         }
+                        _ => return Err(invalid(format!("invalid option -- '{flag}'"))),
                     }
                 }
-
-                _ => operands.push(arg),
+            } else {
+                operands.push(arg);
             }
         }
 
@@ -310,80 +296,94 @@ impl Options {
         archive.set_overwrite(self.overwrite);
         archive.set_ignore_zeros(self.ignore_zeros);
 
-        if list {
-            // GNU tar sizes the size column to the largest entry, with a
-            // fixed minimum; the width needs all entries up front.
-            let mut listed: Vec<(tar::Entry<'_, Box<dyn Read>>, PathBuf)> = Vec::new();
-            for entry in archive.entries()? {
-                let entry = entry?;
-                let path = entry.path()?.into_owned();
-                if is_excluded(&path, &self.excludes) || !member_selected(&path, &self.operands) {
-                    continue;
-                }
-                if let Some(path) = strip_components(&path, self.strip_components) {
-                    listed.push((entry, path));
-                }
-            }
-            let stdout = io::stdout();
-            let mut stdout = stdout.lock();
-            let size_width = listed
-                .iter()
-                .map(|(entry, _)| entry.header().size().map(|size| size.to_string().len()))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .max()
-                .unwrap_or(1)
-                .max(15);
-            for (entry, path) in listed {
-                if self.verbose {
-                    write_verbose_entry(&mut stdout, &entry, &path, size_width)?;
-                } else {
-                    writeln!(stdout, "{}", path.display())?;
-                }
-            }
-            return Ok(());
-        }
-
+        let operands: Vec<PathBuf> = self
+            .operands
+            .iter()
+            .map(|operand| {
+                Path::new(operand)
+                    .components()
+                    .filter(|part| !matches!(part, Component::Prefix(_) | Component::RootDir))
+                    .collect()
+            })
+            .collect();
+        let mut matched = vec![false; operands.len()];
+        let root = if list || self.to_stdout {
+            None
+        } else {
+            Some(fs::canonicalize(".")?)
+        };
         let stdout = io::stdout();
         let mut stdout = stdout.lock();
-        let mut directories: Vec<(tar::Entry<'_, Box<dyn Read>>, PathBuf)> = Vec::new();
+        let mut ugswidth = 19;
+        let mut directories = Vec::new();
         for entry in archive.entries()? {
             let mut entry = entry?;
-            let path = entry.path()?.into_owned();
-            if is_excluded(&path, &self.excludes) || !member_selected(&path, &self.operands) {
+            let path = entry.path()?;
+            if !member_selected(&path, &operands, &mut matched)
+                || is_excluded(&path, &self.excludes)
+            {
                 continue;
             }
-            let Some(path) = strip_components(&path, self.strip_components) else {
+            if list {
+                if self.verbose {
+                    write_verbose_entry(&mut stdout, &entry, &path, &mut ugswidth)?;
+                } else {
+                    write_escaped(&mut stdout, entry.path_bytes().as_ref())?;
+                    writeln!(stdout)?;
+                }
+                continue;
+            }
+
+            let Some(path) = extraction_path(&path, self.strip_components)? else {
                 continue;
             };
             if self.to_stdout {
-                if !entry.header().entry_type().is_dir() {
+                if !entry_is_directory(&entry) {
                     io::copy(&mut entry, &mut stdout)?;
                 }
             } else {
                 if self.verbose {
-                    writeln!(stdout, "{}", path.display())?;
+                    write_escaped(&mut stdout, path.as_os_str().as_encoded_bytes())?;
+                    writeln!(stdout)?;
                 }
-                if entry.header().entry_type().is_dir() {
-                    directories.push((entry, path));
-                } else if !path.as_os_str().is_empty() {
-                    if let Some(parent) = path.parent() {
-                        fs::create_dir_all(parent)?;
+                if entry_is_directory(&entry) {
+                    if let Some(root) = &root {
+                        let destination = extraction_destination(root, &path)?;
+                        if let Err(error) = fs::create_dir(&destination)
+                            && (error.kind() != io::ErrorKind::AlreadyExists
+                                || !fs::symlink_metadata(&destination)?.is_dir())
+                        {
+                            return Err(error);
+                        }
                     }
-                    entry.unpack(&path)?;
+                    directories.push((entry, path));
+                } else if let Some(root) = &root {
+                    unpack_entry(&mut entry, root, &path, self.strip_components)?;
                 }
             }
         }
 
         // Apply restrictive directory modes only after their contents exist.
+        // Revalidate parents here: later archive entries can introduce symlinks.
         directories.sort_by(|left, right| right.1.cmp(&left.1));
         for (mut directory, path) in directories {
-            if !path.as_os_str().is_empty() {
-                directory.unpack(&path)?;
+            if let Some(root) = &root {
+                unpack_entry(&mut directory, root, &path, self.strip_components)?;
             }
         }
 
-        Ok(())
+        let mut missing = false;
+        for (operand, matched) in operands.iter().zip(matched) {
+            if !matched {
+                eprintln!("tar: {}: Not found in archive", operand.display());
+                missing = true;
+            }
+        }
+        if missing {
+            Err(invalid("Exiting with failure status due to previous errors"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -489,37 +489,47 @@ fn write_verbose_entry<W: Write, R: Read>(
     output: &mut W,
     entry: &tar::Entry<'_, R>,
     path: &Path,
-    size_width: usize,
+    ugswidth: &mut usize,
 ) -> io::Result<()> {
     let header = entry.header();
-    let mut name = path.display().to_string();
-    if header.entry_type().is_symlink()
-        && let Ok(Some(target)) = entry.link_name()
-    {
-        name.push_str(" -> ");
-        name.push_str(&target.display().to_string());
-    }
-    writeln!(
+    let kind = header.entry_type();
+    let user = stored_name(header.username_bytes().unwrap_or_default(), header.uid()?);
+    let group = stored_name(header.groupname_bytes().unwrap_or_default(), header.gid()?);
+    let size = if kind.is_character_special() || kind.is_block_special() {
+        format!(
+            "{},{}",
+            header.device_major()?.unwrap_or(0),
+            header.device_minor()?.unwrap_or(0)
+        )
+    } else {
+        entry.size().to_string()
+    };
+    let pad = user.len() + group.len() + 2 + size.len();
+    *ugswidth = (*ugswidth).max(pad);
+    write!(
         output,
-        "{} {}/{} {:>width$} {} {}",
+        "{} {user}/{group} {size:>width$} {} ",
         mode_string(header)?,
-        stored_name(header.username_bytes().unwrap_or_default(), header.uid()?),
-        stored_name(header.groupname_bytes().unwrap_or_default(), header.gid()?),
-        header.size()?,
         local_datetime(header.mtime()?),
-        name,
-        width = size_width
-    )
+        width = *ugswidth - pad + size.len()
+    )?;
+    write_escaped(output, path.as_os_str().as_encoded_bytes())?;
+    if kind.is_symlink() || kind.is_hard_link() {
+        output.write_all(if kind.is_symlink() { b" -> " } else { b" link to " })?;
+        if let Some(target) = entry.link_name_bytes() {
+            write_escaped(output, &target)?;
+        }
+    }
+    writeln!(output)
 }
 
 /// GNU tar lists the owner name stored in the archive, falling back to the
 /// numeric id when the header carries none.
-fn stored_name(stored: &[u8], id: u64) -> String {
-    let stored = String::from_utf8_lossy(stored);
+fn stored_name(stored: &[u8], id: u64) -> Cow<'_, str> {
     if stored.is_empty() {
-        id.to_string()
+        Cow::Owned(id.to_string())
     } else {
-        stored.into_owned()
+        String::from_utf8_lossy(stored)
     }
 }
 
@@ -531,6 +541,7 @@ fn mode_string(header: &tar::Header) -> io::Result<String> {
     let mode = header.mode()? & 0o7777;
     let type_char = match header.entry_type() {
         tar::EntryType::Directory => 'd',
+        tar::EntryType::Link => 'h',
         tar::EntryType::Symlink => 'l',
         tar::EntryType::Char => 'c',
         tar::EntryType::Block => 'b',
@@ -541,7 +552,7 @@ fn mode_string(header: &tar::Header) -> io::Result<String> {
     text.push(type_char);
     for shift in [6, 3, 0] {
         let bits = (mode >> shift) & 0o7;
-        let special = (mode >> (shift + 9)) & 1 == 1;
+        let special = mode & (1 << (shift / 3 + 9)) != 0;
         let (read, write) = (bits & 4 != 0, bits & 2 != 0);
         let execute = bits & 1 != 0;
         text.push(if read { 'r' } else { '-' });
@@ -557,43 +568,46 @@ fn mode_string(header: &tar::Header) -> io::Result<String> {
     Ok(text)
 }
 
-/// Reports whether an archive member is selected by the name operands, using
-/// GNU tar's rule: an exact match or a matching parent directory.
-fn member_selected(path: &Path, operands: &[OsString]) -> bool {
-    operands.is_empty()
-        || operands
-            .iter()
-            .any(|operand| path == Path::new(operand) || path.strip_prefix(operand).is_ok())
-}
-
-/// Local-time `YYYY-MM-DD HH:MM` for the archive timestamp.
-fn local_datetime(seconds: u64) -> String {
-    let time = seconds as libc::time_t;
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: `tm` is a valid out-pointer for localtime_r.
-    if unsafe { libc::localtime_r(&time, &mut tm) }.is_null() {
-        return seconds.to_string();
+fn member_selected(path: &Path, operands: &[PathBuf], matched: &mut [bool]) -> bool {
+    let mut selected = operands.is_empty();
+    for (operand, matched) in operands.iter().zip(matched) {
+        if path.starts_with(operand) {
+            *matched = true;
+            selected = true;
+        }
     }
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}",
-        tm.tm_year + 1900,
-        tm.tm_mon + 1,
-        tm.tm_mday,
-        tm.tm_hour,
-        tm.tm_min
-    )
+    selected
 }
 
-/// Reports whether a dashless argument looks like an old-style flag cluster
-/// such as `czf` in `tar czf archive.tar.gz`.
-fn is_old_style_cluster(text: &str) -> bool {
-    !text.is_empty()
-        && text.chars().all(|flag| {
-            matches!(
-                flag,
-                'c' | 'x' | 't' | 'z' | 'j' | 'J' | 'v' | 'p' | 'O' | 'f'
-            )
-        })
+fn local_datetime(seconds: u64) -> String {
+    i64::try_from(seconds)
+        .ok()
+        .and_then(|seconds| Local.timestamp_opt(seconds, 0).single())
+        .map_or_else(
+            || seconds.to_string(),
+            |time| time.format("%Y-%m-%d %H:%M").to_string(),
+        )
+}
+
+fn long_argument(
+    option: &str,
+    value: Option<&str>,
+    args: &mut impl Iterator<Item = OsString>,
+) -> io::Result<OsString> {
+    value
+        .map(OsString::from)
+        .or_else(|| args.next())
+        .ok_or_else(|| invalid(format!("option '{option}' requires an argument")))
+}
+
+fn reject_option_value(option: &str, value: Option<&str>) -> io::Result<()> {
+    if value.is_some() {
+        Err(invalid(format!(
+            "option '{option}' doesn't allow an argument"
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 fn parse_strip_components(value: &OsStr) -> io::Result<usize> {
@@ -605,25 +619,111 @@ fn parse_strip_components(value: &OsStr) -> io::Result<usize> {
         .map_err(|_| invalid(format!("invalid strip-components count '{value}'")))
 }
 
-/// Drops the leading `count` path components; returns `None` when nothing
-/// would remain, matching GNU tar's `--strip-components` behaviour.
-fn strip_components(path: &Path, count: usize) -> Option<PathBuf> {
-    if count == 0 {
-        return Some(path.to_path_buf());
-    }
-    let mut components = path.components().peekable();
-    for _ in 0..count {
-        components.next()?;
-    }
+fn extraction_path(path: &Path, count: usize) -> io::Result<Option<PathBuf>> {
     let mut stripped = PathBuf::new();
-    for component in components {
-        stripped.push(component);
+    let mut remaining = count;
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(invalid(format!(
+                    "{}: Member name contains '..'",
+                    path.display()
+                )));
+            }
+            Component::Normal(part) if remaining == 0 => stripped.push(part),
+            Component::Normal(_) => remaining -= 1,
+        }
     }
-    (stripped.as_os_str() != ".").then_some(stripped)
+    Ok((!stripped.as_os_str().is_empty()).then_some(stripped))
+}
+
+fn entry_is_directory<R: Read>(entry: &tar::Entry<'_, R>) -> bool {
+    entry.header().entry_type().is_dir()
+        || (entry.header().as_ustar().is_none() && entry.path_bytes().ends_with(b"/"))
+}
+
+fn unpack_entry<R: Read>(
+    entry: &mut tar::Entry<'_, R>,
+    root: &Path,
+    path: &Path,
+    strip: usize,
+) -> io::Result<()> {
+    if strip == 0 {
+        entry.unpack_in(root)?;
+        return Ok(());
+    }
+
+    let destination = extraction_destination(root, path)?;
+    if entry.header().entry_type().is_hard_link() {
+        let target = entry
+            .link_name()?
+            .ok_or_else(|| invalid("hard link has no target"))?;
+        let target = extraction_path(&target, strip)?
+            .ok_or_else(|| invalid("hard link target has no remaining components"))?;
+        let target = validate_inside(root, &root.join(target))?;
+        fs::hard_link(target, destination)?;
+    } else {
+        entry.unpack(destination)?;
+    }
+    Ok(())
+}
+
+fn extraction_destination(root: &Path, path: &Path) -> io::Result<PathBuf> {
+    // Resolve each parent before creating its child, including existing symlinks.
+    // This mirrors Entry::unpack_in's filesystem containment checks.
+    let mut parent = root.to_path_buf();
+    if let Some(components) = path.parent() {
+        for component in components.components() {
+            parent.push(component);
+            match fs::create_dir(&parent) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+            parent = validate_inside(root, &parent)?;
+        }
+    }
+    let name = path.file_name().ok_or_else(|| invalid("empty member name"))?;
+    Ok(parent.join(name))
+}
+
+fn validate_inside(root: &Path, path: &Path) -> io::Result<PathBuf> {
+    let resolved = fs::canonicalize(path)?;
+    if !resolved.starts_with(root) {
+        return Err(invalid(format!(
+            "trying to unpack outside of destination path: {}",
+            path.display()
+        )));
+    }
+    Ok(resolved)
+}
+
+fn write_escaped<W: Write>(output: &mut W, bytes: &[u8]) -> io::Result<()> {
+    let mut start = 0;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if (b' '..=b'~').contains(&byte) && byte != b'\\' {
+            continue;
+        }
+        output.write_all(&bytes[start..index])?;
+        match byte {
+            b'\x07' => output.write_all(b"\\a")?,
+            b'\x08' => output.write_all(b"\\b")?,
+            b'\t' => output.write_all(b"\\t")?,
+            b'\n' => output.write_all(b"\\n")?,
+            b'\x0b' => output.write_all(b"\\v")?,
+            b'\x0c' => output.write_all(b"\\f")?,
+            b'\r' => output.write_all(b"\\r")?,
+            b'\\' => output.write_all(b"\\\\")?,
+            _ => write!(output, "\\{byte:03o}")?,
+        }
+        start = index + 1;
+    }
+    output.write_all(&bytes[start..])
 }
 
 fn set_action(slot: &mut Option<Action>, action: Action) -> io::Result<()> {
-    if slot.is_some() {
+    if slot.is_some_and(|current| current != action) {
         return Err(invalid("multiple operation modes specified"));
     }
 
