@@ -69,6 +69,7 @@ Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-sty
 
 | Category | Bundled commands |
 | --- | --- |
+| `files` — File management | `basename`, `cp`, `dir`, `dirname`, `find`, `inotifywait`, `inotifywatch`, `install`, `link`, `ln`, `ls`, `mkdir`, `mkfifo`, `mknod`, `mktemp`, `mv`, `pathchk`, `pwd`, `readlink`, `realpath`, `rm`, `rmdir`, `stat`, `touch`, `tree`, `truncate`, `unlink`, `vdir` |
 | `storage` — Storage & backup | `blkid`, `blockdev`, `dd`, `df`, `du`, `iostat`, `mount`, `mountpoint`, `sync`, `umount` |
 | `text` — Text & data | `awk`, `b2sum`, `base32`, `base64`, `basenc`, `cat`, `cksum`, `cmp`, `comm`, `csplit`, `cut`, `diff`, `diff3`, `expand`, `factor`, `fmt`, `fold`, `grep`, `egrep`, `fgrep`, `rgrep`, `head`, `hexdump`, `hd`, `join`, `jq`, `md5sum`, `nl`, `numfmt`, `od`, `paste`, `pr`, `ptx`, `sed`, `seq`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, `shuf`, `sort`, `split`, `sum`, `tac`, `tail`, `tee`, `tr`, `tsort`, `unexpand`, `uniq`, `wc` |
 | `archives` — Archives & compression | `tar`, `gzip`, `gunzip`, `zcat`, `gzcat`, `bzip2`, `bunzip2`, `bzcat`, `xz`, `unxz`, `xzcat`, `zstd` |
