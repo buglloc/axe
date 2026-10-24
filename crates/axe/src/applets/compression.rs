@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
@@ -446,7 +446,16 @@ impl Options {
     /// Decodes every concatenated stream and returns the decoded byte count.
     fn decode(&self, input: impl Read, mut output: impl Write) -> io::Result<u64> {
         let decoded = match self.format {
-            Format::Gzip => io::copy(&mut MultiGzDecoder::new(input), &mut output)?,
+            Format::Gzip => {
+                let mut peeked = io::BufReader::new(input);
+                let header = peeked.fill_buf()?;
+                if self.force && !header.starts_with(&[0x1f, 0x8b]) {
+                    // GNU gzip -f copies input that is not in gzip format.
+                    io::copy(&mut peeked, &mut output)?
+                } else {
+                    io::copy(&mut MultiGzDecoder::new(peeked), &mut output)?
+                }
+            }
             Format::Bzip2 => io::copy(&mut MultiBzDecoder::new(input), &mut output)?,
             Format::Xz => io::copy(&mut XzReader::new(input, true), &mut output)?,
             Format::Zstd => io::copy(&mut zstd::stream::read::Decoder::new(input)?, &mut output)?,
