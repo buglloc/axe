@@ -23,7 +23,9 @@ pub fn blockdev(args: Vec<OsString>) -> i32 {
     match run_blockdev(args) {
         Ok(()) => 0,
         Err(error) => {
-            eprintln!("blockdev: {error}");
+            if !error.is_empty() {
+                eprintln!("blockdev: {error}");
+            }
             1
         }
     }
@@ -75,6 +77,19 @@ fn run_blockdev(args: Vec<OsString>) -> Result<(), String> {
         }
     }
     if devices.is_empty() {
+        // Like util-linux, a bare --report lists every block device.
+        if report {
+            println!("RO    RA   SSZ   BSZ        StartSec            Size   Device");
+            let devices = system_block_devices();
+            if devices.is_empty() {
+                // util-linux fails when no block device can be reported.
+                return Err(String::new());
+            }
+            for device in devices {
+                report_block_device(&device.to_string_lossy())?;
+            }
+            return Ok(());
+        }
         return Err("no device specified".into());
     }
     if report {
@@ -191,8 +206,8 @@ fn parse_block_action(
             BLKRASET,
             parse_block_value::<usize>(args.next(), name)?,
         ),
-        "setro" => BlockAction::Operation("set read-only", BLKROSET, 1),
-        "setrw" => BlockAction::Operation("set read-write", BLKROSET, 0),
+        "setro" => BlockAction::SetIntPointer("set read-only", BLKROSET, 1),
+        "setrw" => BlockAction::SetIntPointer("set read-write", BLKROSET, 0),
         _ => return Err(format!("unknown command '--{name}'")),
     })
 }
