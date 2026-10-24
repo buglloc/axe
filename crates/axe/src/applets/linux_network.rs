@@ -1343,6 +1343,26 @@ fn run_arp(args: Vec<OsString>) -> Result<(), String> {
     let mut host = None;
     let mut iter = values.into_iter().skip(1);
     while let Some(value) = iter.next() {
+        if value.starts_with('-')
+            && value.len() > 1
+            && !value.starts_with("--")
+            && value[1..]
+                .chars()
+                .all(|flag| matches!(flag, 'n' | 'a' | 'e' | 'v' | 'i'))
+        {
+            // net-tools accepts bundled short options such as `arp -an`.
+            for flag in value[1..].chars() {
+                match flag {
+                    'n' => numeric = true,
+                    'a' => bsd = true,
+                    'e' => bsd = false,
+                    'v' => {}
+                    'i' => device = Some(iter.next().ok_or("option requires an argument -- 'i'")?),
+                    _ => unreachable!("flag filtered above"),
+                }
+            }
+            continue;
+        }
         match value.as_str() {
             "-n" | "--numeric" => numeric = true,
             "-a" | "--all" => bsd = true,
@@ -1377,12 +1397,22 @@ fn run_arp(args: Vec<OsString>) -> Result<(), String> {
         let entries = snapshot.neighbours.iter().filter_map(|message| {
             if message.header.family != AddressFamily::Inet { return None; }
             let ip = message.attributes.iter().find_map(|attribute| match attribute { NeighbourAttribute::Destination(address) => neighbour_ip(address), _ => None })?;
+            // net-tools hides multicast, broadcast and unspecified entries.
+            if ip.is_multicast() || ip == IpAddr::V4(Ipv4Addr::BROADCAST) || ip.is_unspecified() { return None; }
             if host.as_deref().is_some_and(|expected| expected != ip.to_string()) { return None; }
             let iface = snapshot.names.get(&message.header.ifindex).cloned().unwrap_or_else(|| message.header.ifindex.to_string());
             if options.device.as_deref().is_some_and(|expected| expected != iface) { return None; }
             let address = message.attributes.iter().find_map(|attribute| match attribute { NeighbourAttribute::LinkLayerAddress(bytes) => Some(mac(bytes)), _ => None }).unwrap_or_else(|| "<incomplete>".into());
+            // net-tools also hides entries whose hardware address is the
+            // broadcast or an IP-multicast MAC.
+            if address == "ff:ff:ff:ff:ff:ff" || address.starts_with("01:00:5e") { return None; }
             Some((ip, address, iface, message.header.state.to_string()))
         }).collect::<Vec<_>>();
+        if host.is_some() && entries.is_empty() {
+            // net-tools prints this when a hostname lookup yields no entry.
+            println!("-- no entry");
+            return Ok(());
+        }
         if bsd {
             for (ip, address, iface, _) in entries {
                 let name = if numeric { "?".into() } else { reverse_name(ip).unwrap_or_else(|| "?".into()) };
@@ -1440,6 +1470,17 @@ fn run_ifconfig(args: Vec<OsString>) -> Result<(), String> {
             device,
             ..IpOptions::default()
         };
+        if options.device.is_some()
+            && !snapshot
+                .links
+                .iter()
+                .any(|link| link_matches(link, &options))
+        {
+            let name = options.device.clone().unwrap_or_default();
+            return Err(format!(
+                "{name}: error fetching interface information: Device not found"
+            ));
+        }
         if short {
             println!(
                 "Iface             MTU    RX-OK RX-ERR RX-DRP RX-OVR    TX-OK TX-ERR TX-DRP TX-OVR Flg"
