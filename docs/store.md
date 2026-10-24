@@ -59,6 +59,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `lsns` | `containers/lsns` | Show Linux namespaces and processes | `aarch64-linux`, `x86_64-linux` |
 | `ltrace` | `debugging/ltrace` | Trace Linux library calls | `aarch64-linux`, `x86_64-linux` |
 | `masscan` | `network/masscan` | Scan large networks quickly | `aarch64-linux`, `x86_64-linux` |
+| `micro` | `text/micro` | Edit text in a terminal with syntax highlighting and familiar key bindings | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `naabu` | `network/naabu` | Find open ports | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `ncat`, `nc` | `network/ncat` | Connect, listen, and proxy network traffic | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `nmap` | `network/nmap` | Discover hosts and probe services with NSE | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
@@ -66,6 +67,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `nuclei` | `security/nuclei` | Scan targets with bundled vulnerability templates | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `objdump` | `debugging/objdump` | Disassemble binaries and inspect object files | `aarch64-linux`, `x86_64-linux` |
 | `openssl` | `security/openssl` | Inspect certificates and perform cryptographic operations | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `ox` | `text/ox` | Edit text in the terminal with Lua configuration and plugins | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `podman` | `containers/podman` | Manage Podman through a remote service | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `pspy` | `debugging/pspy` | Observe Linux processes without root | `aarch64-linux`, `x86_64-linux` |
 | `python`, `python3` | `runtime/python` | Static Python with HTTP, WebSocket, and HTML libraries | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
@@ -162,6 +164,12 @@ The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinn
 ```
 
 `python` includes pinned pure-Python HTTP, WebSocket, and HTML libraries and a certifi CA bundle. The package excludes pip, ensurepip, and virtual-environment tooling; update its interpreter and wheels together in the package definition.
+
+### Text editors
+
+`micro` embeds syntax definitions, themes, help, and its built-in plugins. The linter plugin is disabled by default; set `"linter": true` in `settings.json` to enable it. Backups, history, and configuration retain upstream behavior and need writable storage. Use `-config-dir DIR` or `MICRO_CONFIG_HOME` to select a writable configuration directory.
+
+`ox` embeds its default configuration, syntax highlighting, and the `autoindent`, `pairs`, and `quickcomment` plugins. It offers the upstream configuration assistant when `.oxrc` is absent; decline the assistant to edit without creating a configuration file. The assistant needs a writable home directory to save its settings. Additional plugins can require external commands or network access.
 
 ### File managers and read-only filesystems
 

@@ -1,0 +1,21 @@
+--- a/internal/config/settings.go
++++ b/internal/config/settings.go
+@@ -74,6 +74,7 @@
+ 	"incsearch":       true,
+ 	"indentchar":      " ", // Deprecated
+ 	"keepautoindent":  false,
++	"linter":          false,
+ 	"matchbrace":      true,
+ 	"matchbraceleft":  true,
+ 	"matchbracestyle": "underline",
+--- a/internal/config/plugin.go
++++ b/internal/config/plugin.go
+@@ -101,7 +101,7 @@
+ 		}
+ 	}
+ 	p.Loaded = true
+-	RegisterCommonOption(p.Name, true)
++	RegisterCommonOption(p.Name, p.Name != "linter")
+ 	return nil
+ }
+ 

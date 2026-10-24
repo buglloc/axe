@@ -5,7 +5,10 @@
   staticSetFor,
   goDarwin,
   ...
-}: {
+} @ helpers: {
+  micro = import ./text/micro.nix helpers;
+  ox = import ./text/ox.nix helpers;
+
   sqlite3 = mkNixpkgsBinary {
     name = "sqlite3";
     synopsis = "Query and modify SQLite databases";
