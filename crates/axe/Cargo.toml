@@ -92,7 +92,7 @@ netlink-packet-route.workspace = true
 rtnetlink.workspace = true
 surge-ping.workspace = true
 procps-uucore = { package = "uucore", version = "=0.7.0" }
-procutils-free = { version = "=0.2.0" }
+procutils-free = { git = "https://gitlab.com/rustutils/procutils", rev = "f82f6c72bdeb701c761bb4c0aed05dc7415b972c" }
 procutils-hugetop = { version = "=0.2.0" }
 procutils-killall = { version = "=0.2.0" }
 procutils-pgrep = { version = "=0.2.0" }
