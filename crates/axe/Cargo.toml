@@ -112,10 +112,10 @@ procutils-watch = { version = "=0.2.0" }
 uu_pidof = { git = "https://github.com/uutils/procps", rev = "d318892db47de95ed181aab4270dd9b4a1130c43" }
 uu_pidwait = { git = "https://github.com/uutils/procps", rev = "d318892db47de95ed181aab4270dd9b4a1130c43" }
 util-linux-uucore = { package = "uucore", version = "=0.2.2" }
-uu_dmesg = { git = "https://github.com/uutils/util-linux", rev = "77b6743fb63660a6a3f9a9ad09ff1963480d0e74" }
-uu_hexdump = { git = "https://github.com/uutils/util-linux", rev = "77b6743fb63660a6a3f9a9ad09ff1963480d0e74" }
-uu_last = { git = "https://github.com/uutils/util-linux", rev = "77b6743fb63660a6a3f9a9ad09ff1963480d0e74" }
-uu_mountpoint = { git = "https://github.com/uutils/util-linux", rev = "77b6743fb63660a6a3f9a9ad09ff1963480d0e74" }
+uu_dmesg = { git = "https://github.com/uutils/util-linux", rev = "0cb1f90b9983c504a7f895ba65caa4b0b1f51c20" }
+uu_hexdump = { git = "https://github.com/uutils/util-linux", rev = "0cb1f90b9983c504a7f895ba65caa4b0b1f51c20" }
+uu_last = { git = "https://github.com/uutils/util-linux", rev = "0cb1f90b9983c504a7f895ba65caa4b0b1f51c20" }
+uu_mountpoint = { git = "https://github.com/uutils/util-linux", rev = "0cb1f90b9983c504a7f895ba65caa4b0b1f51c20" }
 
 [dev-dependencies]
 serde_json.workspace = true

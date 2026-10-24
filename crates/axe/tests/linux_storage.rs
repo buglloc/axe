@@ -56,6 +56,33 @@ fn success(output: &Output) -> &str {
     std::str::from_utf8(&output.stdout).expect("UTF-8 storage output")
 }
 
+#[test]
+fn mountpoint_status_distinguishes_mounts_directories_and_missing_paths() {
+    let scratch = Scratch::new("mountpoint-status");
+    for cwd in [Path::new("/"), scratch.0.as_path()] {
+        for (path, expected) in [
+            (PathBuf::from("/"), 0),
+            (scratch.0.clone(), 32),
+            (scratch.0.join("missing"), 1),
+        ] {
+            let output = Command::new(env!("CARGO_BIN_EXE_axe"))
+                .args(["--applet", "mountpoint", "--"])
+                .arg(&path)
+                .current_dir(cwd)
+                .env("PATH", "/nonexistent")
+                .env("AXE_STORE_MODE", "off")
+                .output()
+                .expect("run mountpoint");
+            assert_eq!(
+                output.status.code(),
+                Some(expected),
+                "path={path:?}, cwd={cwd:?}, stderr={:?}",
+                output.stderr
+            );
+        }
+    }
+}
+
 fn fat16_header() -> Vec<u8> {
     let mut bytes = vec![0u8; 512];
     bytes[..3].copy_from_slice(&[0xeb, 0x3c, 0x90]);

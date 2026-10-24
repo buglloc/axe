@@ -105,6 +105,10 @@ The bundled `zstd` uses the linked Zstandard codec and keeps input files by defa
 
 `blockdev --report` accepts an optional device list. With no devices, `--report` must be the first argument; it reads `/proc/partitions`, skips zero-capacity entries, and continues quietly after device errors. An empty list succeeds; any device failure makes the report unsuccessful.
 
+`mountpoint PATH` exits with status 0 for a mountpoint, 32 for an existing
+non-mountpoint, and 1 when the path cannot be resolved. Linux mount detection
+uses `/proc/self/mountinfo`, including bind mounts on the same filesystem.
+
 ## Mounting filesystems
 
 The bundled `mount` follows util-linux `mount(8)`. Without arguments it lists mounts; with `-t`/`-o` it mounts a filesystem. It also supports remount, `--bind`/`--rbind`, `--move`, `--make-*` propagation, single-operand lookup in `/etc/fstab`, `-a` with `-t` and `-O` filters, and `/sbin/mount.<type>` helpers.
