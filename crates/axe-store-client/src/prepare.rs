@@ -26,6 +26,7 @@ const VERIFIED_STATE_FILE: &str = "verified.json";
 
 pub struct PreparedTool {
     executable: Executable,
+    package_dir: Option<PathBuf>,
     ca_bundle_pem: Arc<[u8]>,
 }
 
@@ -45,11 +46,29 @@ impl PreparedTool {
             .map_err(|error| StoreError::transient(StoreStage::Execute, error.to_string()))?;
 
         let result = match &self.executable {
-            Executable::Path(path) => run_path(path, name, args, ca_bundle.as_ref()),
+            Executable::Path(path) => run_path(
+                path,
+                name,
+                args,
+                ca_bundle.as_ref(),
+                self.package_dir.as_deref(),
+            ),
             #[cfg(target_os = "linux")]
-            Executable::Memory(file) => run_memfd(file, name, args, ca_bundle.as_ref()),
+            Executable::Memory(file) => run_memfd(
+                file,
+                name,
+                args,
+                ca_bundle.as_ref(),
+                self.package_dir.as_deref(),
+            ),
             #[cfg(not(target_os = "linux"))]
-            Executable::Temporary(path) => run_path(path, name, args, ca_bundle.as_ref()),
+            Executable::Temporary(path) => run_path(
+                path,
+                name,
+                args,
+                ca_bundle.as_ref(),
+                self.package_dir.as_deref(),
+            ),
         };
         result.map_err(|error| StoreError::transient(StoreStage::Execute, error.to_string()))
     }
@@ -490,6 +509,7 @@ fn prepare_single(
                     {
                         return Ok(PreparedTool {
                             executable: Executable::Path(destination),
+                            package_dir: None,
                             ca_bundle_pem: Arc::default(),
                         });
                     }
@@ -507,6 +527,7 @@ fn prepare_single(
                             )?;
                             return Ok(PreparedTool {
                                 executable: Executable::Path(destination),
+                                package_dir: None,
                                 ca_bundle_pem: Arc::default(),
                             });
                         }
@@ -578,6 +599,7 @@ fn prepare_single(
             cleanup.disarm();
             Ok(PreparedTool {
                 executable: Executable::Path(destination),
+                package_dir: None,
                 ca_bundle_pem: Arc::default(),
             })
         })();
@@ -601,6 +623,7 @@ fn prepare_single(
             .map_err(|error| StoreError::transient(StoreStage::Storage, error.to_string()))?;
         Ok(PreparedTool {
             executable: Executable::Memory(output),
+            package_dir: None,
             ca_bundle_pem: Arc::default(),
         })
     }
@@ -614,6 +637,7 @@ fn prepare_single(
         make_executable(&path).map_err(|error| storage_error(&path, error))?;
         Ok(PreparedTool {
             executable: Executable::Temporary(path),
+            package_dir: None,
             ca_bundle_pem: Arc::default(),
         })
     }
@@ -687,16 +711,22 @@ fn prepare_package(
     let relative = unpacked_relative(resolved.artifact.unpacked_sha256);
     let mut corruption = None;
     let mut last_storage = None;
-    for root in client.storage_roots() {
+    let mut roots = client.storage_roots();
+    roots.sort_by_cached_key(|root| {
+        root.ancestors()
+            .find_map(|ancestor| {
+                fs::canonicalize(if ancestor.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    ancestor
+                })
+                .ok()
+            })
+            .is_some_and(|path| axe_paths::path_is_noexec(&path))
+    });
+    for root in roots {
         if let Err(error) = ensure_writable_root(&root, reserve) {
             last_storage = Some(error);
-            continue;
-        }
-        if axe_paths::path_is_noexec(&root) {
-            last_storage = Some(StoreError::transient(
-                StoreStage::Storage,
-                format!("{} is mounted noexec", root.display()),
-            ));
             continue;
         }
         let cache = root.join(&relative);
@@ -723,38 +753,47 @@ fn prepare_package(
         if cache.exists() {
             match ensure_private_cache_directory(&cache) {
                 Ok(()) => {
-                    if read_matching_state(&cache, &destination, &client.metadata_namespace)
-                        .is_some()
-                        && is_executable(&executable)
-                    {
-                        return Ok(PreparedTool {
-                            executable: Executable::Path(executable),
-                            ca_bundle_pem: Arc::default(),
-                        });
-                    }
-                    match canonical_tree_digest(&destination) {
-                        Ok(digest)
-                            if digest == resolved.artifact.unpacked_sha256
-                                && is_executable(&executable) =>
+                    let verified =
+                        if read_matching_state(&cache, &destination, &client.metadata_namespace)
+                            .is_some()
+                            && is_executable(&executable)
                         {
-                            write_verified_state(
-                                &cache,
-                                &destination,
-                                None,
-                                &client.metadata_namespace,
-                            )?;
-                            return Ok(PreparedTool {
-                                executable: Executable::Path(executable),
-                                ca_bundle_pem: Arc::default(),
-                            });
-                        }
-                        Ok(_) | Err(_) => {
-                            corruption.get_or_insert_with(|| {
-                                StoreError::integrity(
-                                    StoreStage::Decode,
-                                    "cached package tree digest mismatch or invalid entrypoint",
-                                )
-                            });
+                            true
+                        } else {
+                            match canonical_tree_digest(&destination) {
+                                Ok(digest)
+                                    if digest == resolved.artifact.unpacked_sha256
+                                        && is_executable(&executable) =>
+                                {
+                                    write_verified_state(
+                                        &cache,
+                                        &destination,
+                                        None,
+                                        &client.metadata_namespace,
+                                    )?;
+                                    true
+                                }
+                                Ok(_) | Err(_) => {
+                                    corruption.get_or_insert_with(|| {
+                                    StoreError::integrity(
+                                        StoreStage::Decode,
+                                        "cached package tree digest mismatch or invalid entrypoint",
+                                    )
+                                });
+                                    false
+                                }
+                            }
+                        };
+                    if verified {
+                        match prepare_package_entrypoint(&destination, entrypoint, resolved) {
+                            Ok(prepared) => return Ok(prepared),
+                            Err(error) if error.class == FailureClass::Integrity => {
+                                return Err(error);
+                            }
+                            Err(error) => {
+                                last_storage = Some(error);
+                                continue;
+                            }
                         }
                     }
                 }
@@ -800,10 +839,7 @@ fn prepare_package(
             fs::rename(&temporary, &cache).map_err(|error| storage_error(&cache, error))?;
             sync_directory(parent)?;
             cleanup.disarm();
-            Ok(PreparedTool {
-                executable: Executable::Path(executable),
-                ca_bundle_pem: Arc::default(),
-            })
+            prepare_package_entrypoint(&destination, entrypoint, resolved)
         })();
 
         match result {
@@ -815,6 +851,142 @@ fn prepare_package(
     Err(corruption.or(last_storage).unwrap_or_else(|| {
         StoreError::transient(StoreStage::Storage, "no package filesystem backend")
     }))
+}
+
+fn prepare_package_entrypoint(
+    tree: &Path,
+    entrypoint: &str,
+    resolved: &ResolvedTool,
+) -> Result<PreparedTool, StoreError> {
+    let package_dir = fs::canonicalize(tree).map_err(|error| storage_error(tree, error))?;
+    let path = package_dir.join(entrypoint);
+    let executable = fs::canonicalize(&path).map_err(|error| storage_error(&path, error))?;
+    if !executable.starts_with(&package_dir) {
+        return Err(StoreError::integrity(
+            StoreStage::Decode,
+            "package entrypoint escapes the verified tree",
+        ));
+    }
+
+    let executable = if axe_paths::path_is_noexec(&executable) {
+        #[cfg(target_os = "linux")]
+        {
+            package_memfd(&executable, resolved)?
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = resolved;
+            return Err(StoreError::transient(
+                StoreStage::Storage,
+                format!("{} is mounted noexec", executable.display()),
+            ));
+        }
+    } else {
+        Executable::Path(executable)
+    };
+    Ok(PreparedTool {
+        executable,
+        package_dir: Some(package_dir),
+        ca_bundle_pem: Arc::default(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn package_memfd(path: &Path, resolved: &ResolvedTool) -> Result<Executable, StoreError> {
+    let input = File::open(path).map_err(|error| storage_error(path, error))?;
+    let size = input
+        .metadata()
+        .map_err(|error| storage_error(path, error))?
+        .len();
+    if size == 0 || size > resolved.artifact.unpacked_size {
+        return Err(StoreError::integrity(
+            StoreStage::Decode,
+            "package entrypoint exceeds signed package size or is empty",
+        ));
+    }
+
+    let mut output = create_memfd(&format!("axe-{}", resolved.name), true)
+        .map_err(|error| StoreError::transient(StoreStage::Storage, error.to_string()))?;
+    let copied = io::copy(&mut input.take(size.saturating_add(1)), &mut output)
+        .map_err(|error| storage_error(path, error))?;
+    if copied != size {
+        return Err(StoreError::integrity(
+            StoreStage::Decode,
+            "package entrypoint changed while preparing execution",
+        ));
+    }
+    seal_memfd(&output)
+        .map_err(|error| StoreError::transient(StoreStage::Storage, error.to_string()))?;
+    validate_memfd_entrypoint(&mut output, size, resolved.target)
+        .map_err(|error| StoreError::transient(StoreStage::Storage, error.to_string()))?;
+    Ok(Executable::Memory(output))
+}
+
+#[cfg(target_os = "linux")]
+fn validate_memfd_entrypoint(
+    file: &mut File,
+    size: u64,
+    target: axe_artifact::Target,
+) -> io::Result<()> {
+    let unsupported = || {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "package execution from noexec storage requires a native static ELF EXEC entrypoint",
+        )
+    };
+    if axe_artifact::Target::detect().ok() != Some(target) {
+        return Err(unsupported());
+    }
+    let machine = match target {
+        axe_artifact::Target::X86_64Linux => 62_u16,
+        axe_artifact::Target::Aarch64Linux => 183_u16,
+        axe_artifact::Target::Aarch64Darwin => return Err(unsupported()),
+    };
+
+    file.seek(SeekFrom::Start(0))?;
+    let mut header = [0_u8; 64];
+    file.read_exact(&mut header).map_err(|_| unsupported())?;
+    if &header[..7] != b"\x7fELF\x02\x01\x01"
+        || u16::from_le_bytes([header[16], header[17]]) != 2
+        || u16::from_le_bytes([header[18], header[19]]) != machine
+        || u32::from_le_bytes(header[20..24].try_into().expect("ELF version field")) != 1
+        || u16::from_le_bytes([header[52], header[53]]) != 64
+        || u16::from_le_bytes([header[54], header[55]]) != 56
+    {
+        return Err(unsupported());
+    }
+    let offset = u64::from_le_bytes(
+        header[32..40]
+            .try_into()
+            .expect("ELF program header offset"),
+    );
+    let count = u16::from_le_bytes([header[56], header[57]]);
+    if count == 0
+        || count == u16::MAX
+        || offset < header.len() as u64
+        || offset
+            .checked_add(u64::from(count) * 56)
+            .is_none_or(|end| end > size)
+    {
+        return Err(unsupported());
+    }
+
+    file.seek(SeekFrom::Start(offset))?;
+    let mut loadable = false;
+    for _ in 0..count {
+        let mut program = [0_u8; 56];
+        file.read_exact(&mut program)?;
+        match u32::from_le_bytes(program[..4].try_into().expect("ELF program header type")) {
+            1 => loadable = true,
+            // Exclude dynamic loading even when the signed package includes its dependencies.
+            2 | 3 => return Err(unsupported()),
+            _ => {}
+        }
+    }
+    if !loadable {
+        return Err(unsupported());
+    }
+    Ok(())
 }
 
 fn decode_and_extract_package(
@@ -1295,6 +1467,7 @@ fn run_path(
     name: &str,
     args: &[OsString],
     ca: Option<&CaBundle>,
+    package_dir: Option<&Path>,
 ) -> io::Result<ExitStatus> {
     let mut command = Command::new(path);
     #[cfg(unix)]
@@ -1308,6 +1481,11 @@ fn run_path(
     if let Some(ca) = ca {
         command.env("CURL_CA_BUNDLE", ca.path());
     }
+    if let Some(package_dir) = package_dir {
+        command.env("AXE_STORE_PACKAGE_DIR", package_dir);
+    } else {
+        command.env_remove("AXE_STORE_PACKAGE_DIR");
+    }
     command.status()
 }
 
@@ -1317,6 +1495,7 @@ fn run_memfd(
     name: &str,
     args: &[OsString],
     ca: Option<&CaBundle>,
+    package_dir: Option<&Path>,
 ) -> io::Result<ExitStatus> {
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
@@ -1329,7 +1508,9 @@ fn run_memfd(
     }
 
     let mut environment = std::env::vars_os()
-        .filter(|(key, _)| key != OsStr::new("CURL_CA_BUNDLE"))
+        .filter(|(key, _)| {
+            key != OsStr::new("CURL_CA_BUNDLE") && key != OsStr::new("AXE_STORE_PACKAGE_DIR")
+        })
         .map(|(key, value)| {
             let mut bytes = key.as_os_str().as_bytes().to_vec();
             bytes.push(b'=');
@@ -1340,6 +1521,11 @@ fn run_memfd(
     if let Some(ca) = ca {
         let mut bytes = b"CURL_CA_BUNDLE=".to_vec();
         bytes.extend_from_slice(ca.path().as_os_str().as_bytes());
+        environment.push(CString::new(bytes).map_err(io::Error::other)?);
+    }
+    if let Some(package_dir) = package_dir {
+        let mut bytes = b"AXE_STORE_PACKAGE_DIR=".to_vec();
+        bytes.extend_from_slice(package_dir.as_os_str().as_bytes());
         environment.push(CString::new(bytes).map_err(io::Error::other)?);
     }
 
@@ -1707,6 +1893,342 @@ mod tests {
         remove_cache_entry(&tree).expect("remove read-only package tree");
         assert!(!tree.exists());
         fs::remove_dir_all(root).expect("remove package fixture root");
+    }
+
+    #[cfg(target_os = "linux")]
+    fn package_execution_fixture(parent: &Path, noexec: bool) {
+        use axe_artifact::{Artifact, sign_artifact};
+        use ed25519_dalek::SigningKey;
+        use std::os::unix::fs::symlink;
+
+        let root = parent.join(format!(
+            "axe-store-package-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        ensure_private_cache_directory(&root).expect("create package fixture root");
+        let cleanup = CleanupPath::new(root.clone());
+        let root = fs::canonicalize(&root).expect("resolve fixture root");
+        let source_tree = root.join("source-tree");
+        fs::create_dir_all(source_tree.join("bin")).expect("create package binary directory");
+        fs::create_dir_all(source_tree.join("share/fixture"))
+            .expect("create package data directory");
+        fs::write(
+            source_tree.join("share/fixture/runtime.txt"),
+            b"verified package data\n",
+        )
+        .expect("write package runtime");
+        let source = root.join("fixture.c");
+        fs::write(
+            &source,
+            br#"#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "expect-no-package-root") == 0)
+        return getenv("AXE_STORE_PACKAGE_DIR") == NULL ? 24 : 37;
+    if (argc != 4 || strcmp(argv[0], "package-alias") != 0
+        || (unsigned char)argv[3][0] != 255 || strcmp(argv[3] + 1, "argument") != 0)
+        return 31;
+    const char *root = getenv("AXE_STORE_PACKAGE_DIR");
+    if (root == NULL || root[0] != '/' || strcmp(root, argv[1]) != 0)
+        return 32;
+    char cwd[4096];
+    if (getcwd(cwd, sizeof cwd) == NULL || strcmp(cwd, argv[2]) != 0)
+        return 33;
+    char path[4096];
+    int length = snprintf(path, sizeof path, "%s/share/fixture/runtime.txt", root);
+    if (length < 0 || (size_t)length >= sizeof path)
+        return 34;
+    FILE *runtime = fopen(path, "rb");
+    if (runtime == NULL)
+        return 35;
+    char data[64];
+    size_t size = fread(data, 1, sizeof data, runtime);
+    int failed = ferror(runtime);
+    if (fclose(runtime) != 0 || failed
+        || size != sizeof "verified package data\n" - 1
+        || memcmp(data, "verified package data\n", size) != 0)
+        return 36;
+    return 23;
+}
+"#,
+        )
+        .expect("write package executable source");
+        let compiler_variable = match axe_artifact::Target::detect().expect("supported test target")
+        {
+            axe_artifact::Target::X86_64Linux => "CC_x86_64_unknown_linux_musl",
+            axe_artifact::Target::Aarch64Linux => "CC_aarch64_unknown_linux_musl",
+            axe_artifact::Target::Aarch64Darwin => unreachable!("Linux test target"),
+        };
+        let compiler = std::env::var_os(compiler_variable).unwrap_or_else(|| "cc".into());
+        let binary = source_tree.join("bin/package-real");
+        let compiled = Command::new(compiler)
+            .args(["-Os", "-static", "-fno-pie", "-no-pie"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&binary)
+            .status()
+            .expect("compile static package fixture");
+        assert!(compiled.success(), "compile static package fixture");
+        symlink("package-real", source_tree.join("bin/package"))
+            .expect("create internal entrypoint symlink");
+        assert_eq!(axe_paths::path_is_noexec(&binary), noexec);
+        if noexec {
+            let error = Command::new(&binary)
+                .status()
+                .expect_err("fixture filesystem must reject direct execution");
+            assert_eq!(error.raw_os_error(), Some(libc::EACCES));
+        }
+        let script = source_tree.join("bin/package-script");
+        fs::write(&script, b"#!/bin/sh\nexit 0\n").expect("write script entrypoint");
+        make_executable(&script).expect("make script executable");
+        if noexec {
+            let compiled = Command::new("cc")
+                .args(["-Os", "-no-pie"])
+                .arg(&source)
+                .arg("-o")
+                .arg(source_tree.join("bin/package-dynamic"))
+                .status()
+                .expect("compile dynamic package entrypoint");
+            assert!(compiled.success(), "compile dynamic package entrypoint");
+        }
+
+        let digest = canonical_tree_digest(&source_tree).expect("hash package fixture tree");
+        let mut builder = tar::Builder::new(Vec::new());
+        builder.follow_symlinks(false);
+        builder
+            .append_dir_all(".", &source_tree)
+            .expect("archive package fixture tree");
+        let tar = builder.into_inner().expect("finish package fixture tar");
+        let compressed = zstd::stream::encode_all(tar.as_slice(), 0).expect("compress package");
+        let mut object = io::Cursor::new(Vec::new());
+        let signing = SigningKey::from_bytes(&[17; 32]);
+        let written = sign_artifact(&mut compressed.as_slice(), &mut object, &signing)
+            .expect("sign package fixture");
+        let artifact = Artifact {
+            kind: ArtifactKind::Package {
+                entrypoint: "bin/package".into(),
+            },
+            object_sha256: written.object_sha256,
+            compressed_size: written.compressed_size,
+            unpacked_size: tar.len() as u64,
+            unpacked_sha256: digest,
+            fully_static: false,
+        };
+        let cache = root.join(object_relative(written.object_sha256));
+        fs::create_dir_all(cache.parent().expect("object cache parent"))
+            .expect("create object cache parent");
+        ensure_private_cache_directory(&cache).expect("create private object cache");
+        fs::write(cache.join("object"), object.into_inner()).expect("cache signed package");
+        fs::write(
+            root.join("artifact.json"),
+            serde_json::to_vec(&artifact).expect("serialize fixture artifact"),
+        )
+        .expect("write fixture artifact");
+        remove_cache_entry(&source_tree).expect("remove original package tree");
+        fs::create_dir(root.join("working")).expect("create caller working directory");
+
+        let mut command = Command::new(std::env::current_exe().expect("locate test executable"));
+        command
+            .args([
+                "--exact",
+                "prepare::tests::package_execution_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("AXE_STORE_PACKAGE_FIXTURE_ROOT", &root)
+            .env("AXE_STORE_PACKAGE_DIR", "/untrusted-inherited-package")
+            .env("PATH", "/nonexistent")
+            .env_remove("AXE_STORE_PACKAGE_FIXTURE_EXEC_ROOT")
+            .current_dir(root.join("working"));
+        let status = command
+            .status()
+            .expect("run isolated package execution fixture");
+        assert!(status.success(), "package execution fixture failed");
+        if noexec {
+            let fallback = std::env::temp_dir().join(format!(
+                "axe-store-package-exec-{}",
+                root.file_name()
+                    .expect("fixture directory name")
+                    .to_string_lossy(),
+            ));
+            ensure_private_cache_directory(&fallback).expect("create exec-capable fallback root");
+            let fallback_cleanup = CleanupPath::new(fallback.clone());
+            let fallback = fs::canonicalize(&fallback).expect("resolve exec-capable fallback root");
+            assert!(
+                !axe_paths::path_is_noexec(&fallback),
+                "exec-capable fallback required"
+            );
+            let status = command
+                .env("AXE_STORE_PACKAGE_FIXTURE_EXEC_ROOT", fallback)
+                .status()
+                .expect("run exec-first package fixture");
+            assert!(status.success(), "exec-capable root must precede memfd");
+            drop(fallback_cleanup);
+        }
+        drop(cleanup);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn package_runtime_root_is_child_local_and_preserves_arguments() {
+        package_execution_fixture(&std::env::temp_dir(), false);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires AXE_STORE_TEST_NOEXEC_ROOT on writable noexec storage with 256 MiB free"]
+    fn noexec_package_runs_sealed_entrypoint_with_verified_runtime() {
+        let parent = PathBuf::from(
+            std::env::var_os("AXE_STORE_TEST_NOEXEC_ROOT")
+                .expect("set AXE_STORE_TEST_NOEXEC_ROOT to a writable noexec directory"),
+        );
+        let parent = fs::canonicalize(parent).expect("resolve noexec mount directory");
+        assert!(axe_paths::path_is_noexec(&parent), "noexec mount required");
+        package_execution_fixture(&parent, true);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "owned subprocess fixture for package execution regressions"]
+    fn package_execution_child() {
+        use axe_artifact::Artifact;
+        use ed25519_dalek::SigningKey;
+        use std::os::fd::AsRawFd;
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = PathBuf::from(
+            std::env::var_os("AXE_STORE_PACKAGE_FIXTURE_ROOT").expect("package fixture root"),
+        );
+        let artifact: Artifact = serde_json::from_slice(
+            &fs::read(root.join("artifact.json")).expect("read fixture artifact"),
+        )
+        .expect("decode fixture artifact");
+        let fallback = std::env::var_os("AXE_STORE_PACKAGE_FIXTURE_EXEC_ROOT").map(PathBuf::from);
+        let tree = fallback
+            .as_deref()
+            .unwrap_or(&root)
+            .join(unpacked_relative(artifact.unpacked_sha256))
+            .join("tree");
+        let noexec = fallback.is_none() && axe_paths::path_is_noexec(&root);
+        let resolved = ResolvedTool {
+            name: "package".into(),
+            version: "1".into(),
+            target: axe_artifact::Target::detect().expect("supported test target"),
+            artifact,
+        };
+        let mut client = client_for_signer(&SigningKey::from_bytes(&[17; 32]));
+        let mut roots = vec![PathBuf::from("..")];
+        roots.extend(fallback);
+        client.storage_roots_override = Some(roots);
+        struct NoProgress;
+        impl ProgressReporter for NoProgress {
+            fn report(&mut self, _: DownloadEvent<'_>) {
+                panic!("signed offline fixture must not download");
+            }
+        }
+
+        let cwd = std::env::current_dir().expect("caller working directory");
+        let inherited = std::env::var_os("AXE_STORE_PACKAGE_DIR");
+        assert_eq!(
+            inherited.as_deref(),
+            Some(OsStr::new("/untrusted-inherited-package"))
+        );
+        let args = [
+            tree.clone().into_os_string(),
+            cwd.clone().into_os_string(),
+            OsString::from_vec(b"\xffargument".to_vec()),
+        ];
+        for phase in ["cold", "warm", "repaired"] {
+            let prepared = client
+                .prepare(&resolved, &mut NoProgress)
+                .expect("prepare verified package");
+            assert_eq!(prepared.is_memory_backed(), noexec, "{phase}");
+            if let Executable::Memory(file) = &prepared.executable {
+                // SAFETY: file retains the valid memfd throughout this read-only fcntl call.
+                let seals = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GET_SEALS) };
+                assert!(seals >= 0, "read package memfd seals");
+                let required = libc::F_SEAL_WRITE
+                    | libc::F_SEAL_GROW
+                    | libc::F_SEAL_SHRINK
+                    | libc::F_SEAL_SEAL;
+                assert_eq!(seals & required, required, "sealed package entrypoint");
+            }
+            let status = prepared
+                .run("package-alias", &args)
+                .expect("run package with byte argv and no PATH");
+            assert_eq!(status.code(), Some(23), "{phase}");
+            assert_eq!(std::env::var_os("AXE_STORE_PACKAGE_DIR"), inherited);
+            assert_eq!(std::env::current_dir().expect("unchanged cwd"), cwd);
+            if phase == "warm" {
+                fs::write(
+                    tree.join("share/fixture/runtime.txt"),
+                    b"tampered package data\n",
+                )
+                .expect("modify cached runtime to require signed repair");
+            }
+        }
+        if noexec {
+            for entrypoint in ["bin/package-script", "bin/package-dynamic"] {
+                let mut unsupported = resolved.clone();
+                unsupported.artifact.kind = ArtifactKind::Package {
+                    entrypoint: entrypoint.into(),
+                };
+                let error = match client.prepare(&unsupported, &mut NoProgress) {
+                    Ok(_) => panic!("noexec storage cannot execute {entrypoint}"),
+                    Err(error) => error,
+                };
+                assert_eq!(
+                    (error.stage, error.class),
+                    (StoreStage::Storage, FailureClass::Transient)
+                );
+                assert!(error.source.contains("native static ELF EXEC"), "{error}");
+            }
+        }
+
+        let executable = fs::read(tree.join("bin/package-real")).expect("read static entrypoint");
+        let compressed = zstd::stream::encode_all(executable.as_slice(), 0)
+            .expect("compress single-binary fixture");
+        let mut object = io::Cursor::new(Vec::new());
+        let written = axe_artifact::sign_artifact(
+            &mut compressed.as_slice(),
+            &mut object,
+            &SigningKey::from_bytes(&[17; 32]),
+        )
+        .expect("sign single-binary fixture");
+        let cache = root.join(object_relative(written.object_sha256));
+        fs::create_dir_all(cache.parent().expect("single object cache parent"))
+            .expect("create single object cache parent");
+        ensure_private_cache_directory(&cache).expect("create private single object cache");
+        fs::write(cache.join("object"), object.into_inner()).expect("cache signed single binary");
+        let single = ResolvedTool {
+            name: "single".into(),
+            version: "1".into(),
+            target: resolved.target,
+            artifact: Artifact {
+                kind: ArtifactKind::SingleBinary,
+                object_sha256: written.object_sha256,
+                compressed_size: written.compressed_size,
+                unpacked_size: executable.len() as u64,
+                unpacked_sha256: Digest::of(&executable),
+                fully_static: true,
+            },
+        };
+        client.storage_roots_override = Some(vec![root]);
+        let prepared = client
+            .prepare(&single, &mut NoProgress)
+            .expect("prepare single binary with inherited package context");
+        let status = prepared
+            .run("single-alias", &["expect-no-package-root".into()])
+            .expect("run single binary without package context");
+        assert_eq!(status.code(), Some(24));
+        assert_eq!(std::env::var_os("AXE_STORE_PACKAGE_DIR"), inherited);
     }
 
     #[test]

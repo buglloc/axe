@@ -8,6 +8,7 @@
 } @ helpers: {
   micro = import ./text/micro.nix helpers;
   ox = import ./text/ox.nix helpers;
+  vim = import ./text/vim.nix helpers;
 
   sqlite3 = mkNixpkgsBinary {
     name = "sqlite3";

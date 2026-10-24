@@ -1,6 +1,6 @@
 # AXE Store
 
-AXE Store delivers tools on demand. Nix builds the packages; `axe-store` signs their metadata and publishes them. AXE verifies signatures, sizes, and SHA-256 hashes before execution. Previously cached tools can run offline. On Linux, supported single-file tools can run even without a writable executable filesystem.
+AXE Store delivers tools on demand. Nix builds the packages; `axe-store` signs their metadata and publishes them. AXE verifies signatures, sizes, and SHA-256 hashes before execution. Previously cached tools can run offline. On Linux, supported single-file tools and static package entrypoints can run without an executable cache filesystem. Packages still need writable storage for their data.
 
 `AXE_STORE_DIR` sets the preferred cache root. If it is unavailable, AXE tries configured roots, the platform cache, writable persistent mounts, tmpfs, and the temporary directory. Store metadata is isolated by URL, trust keys, and channel. Use separate roots for co-installed editions.
 
@@ -97,6 +97,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `tmux` | `terminal/tmux` | Multiplex terminal sessions and windows | `aarch64-linux`, `x86_64-linux` |
 | `tshark` | `network/tshark` | Analyze packet captures from the CLI | `aarch64-linux`, `x86_64-linux` |
 | `unshare` | `containers/unshare` | Run a program in new Linux namespaces | `aarch64-linux`, `x86_64-linux` |
+| `vim` | `text/vim` | Edit text with Vim and its standard runtime | `aarch64-linux`, `x86_64-linux` |
 | `websocat` | `network/websocat` | Relay data between WebSockets and streams | `aarch64-linux`, `x86_64-linux` |
 | `xh` | `network/xh` | Interactive-friendly HTTP client | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `yara` | `security/yara` | Match user-supplied YARA rules against files and process memory | `aarch64-linux`, `x86_64-linux` |
@@ -176,6 +177,10 @@ Uploads and remote streams are explicit network operations and use host TLS trus
 
 `ox` embeds its default configuration, syntax highlighting, and the `autoindent`, `pairs`, and `quickcomment` plugins. It offers the upstream configuration assistant when `.oxrc` is absent; decline the assistant to edit without creating a configuration file. The assistant needs a writable home directory to save its settings. Additional plugins can require external commands or network access.
 
+`vim` is a package with a static Linux executable and the standard runtime: syntax definitions, filetype and indent scripts, plugins, autoload functions, and help. It uses Vim's huge terminal build without GUI, X11, or embedded language interpreters. Store supplies the runtime location through `AXE_STORE_PACKAGE_DIR`; direct execution finds it beside the package's `bin` directory. When no home directory can be resolved, the default runtime paths omit personal directories. User vimrc files and Vim's swap, backup, undo, and viminfo settings retain their normal behavior.
+
+For an explicitly stateless session, use `vim -N -u NONE -i NONE -n FILE`. This skips vimrc files and startup plugins, disables viminfo, and disables swap recovery. Shell commands, filters, and plugins that invoke other programs still need those programs in the environment.
+
 ### File managers and read-only filesystems
 
 `broot` and `spf` (superfile) load embedded defaults when user configuration is absent. Ordinary directory navigation and built-in text previews do not require writable configuration, state, cache, or temporary directories. Existing user configuration takes precedence; malformed or unreadable files remain errors. Both need a usable interactive terminal and a readable directory to browse.
@@ -208,6 +213,8 @@ Library and CA-bundle updates require rebuilding their consumers, including tool
 ## Adding a package
 
 Package definitions live in [`store/nix/packages/`](../store/nix/packages/).
+
+Use a package artifact when a tool needs adjacent runtime files. Store sets `AXE_STORE_PACKAGE_DIR` to the absolute verified package tree for the entrypoint process without changing its working directory. Package entrypoints can use this path to locate their data when Linux runs a supported static executable through a sealed memfd. Single-file tools do not receive this variable.
 
 Each package belongs to one primary category, shared with bundled commands. Its Store ID is generated as `<category>/<name>`; command aliases use the same package and category. Choose the category by the tool's main purpose, not its implementation or transport:
 

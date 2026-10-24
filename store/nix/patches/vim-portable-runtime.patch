@@ -1,0 +1,96 @@
+diff --git a/src/misc1.c b/src/misc1.c
+--- a/src/misc1.c
++++ b/src/misc1.c
+@@ -1791,6 +1791,46 @@ vim_version_dir(char_u *vimdir)
+     return NULL;
+ }
+ 
++#ifdef __linux__
++/* Store supplies the tree separately when the executable runs from a memfd. */
++    static char_u *
++axe_vim_dir(int runtime)
++{
++    char_u	*root = mch_getenv((char_u *)"AXE_STORE_PACKAGE_DIR");
++    char_u	executable[MAXPATHL];
++    char_u	*tail;
++    char_u	*suffix = (char_u *)(runtime
++		? "share/vim/" VIM_VERSION_NODOT : "share/vim");
++    string_T	path;
++    ssize_t	len;
++
++    if (root == NULL || *root == NUL)
++    {
++	len = readlink("/proc/self/exe", (char *)executable,
++						 sizeof(executable) - 1);
++	if (len <= 0 || (size_t)len >= sizeof(executable) - 1)
++	    return NULL;
++	executable[len] = NUL;
++	tail = gettail(executable);
++	if (tail == executable)
++	    return NULL;
++	tail[-1] = NUL;
++	tail = gettail(executable);
++	if (STRCMP(tail, "bin") != 0)
++	    return NULL;
++	*tail = NUL;
++	root = executable;
++    }
++    if (*root != '/')
++	return NULL;
++
++    concat_fnames(root, STRLEN(root), suffix, STRLEN(suffix), TRUE, &path);
++    if (path.string != NULL && !mch_isdir(path.string))
++	VIM_CLEAR(path.string);
++    return path.string;
++}
++#endif
++
+ /*
+  * Vim's version of getenv().
+  * Special handling of $HOME, $VIM and $VIMRUNTIME.
+@@ -1859,11 +1899,17 @@ vim_getenv(char_u *name, int *mustfree)
+     if (!vimruntime && STRCMP(name, "VIM") != 0)
+ 	return NULL;
+ 
++#ifdef __linux__
++    p = axe_vim_dir(vimruntime);
++    if (p != NULL)
++	*mustfree = TRUE;
++#endif
++
+     /*
+      * When expanding $VIMRUNTIME fails, try using $VIM/vim<version> or $VIM.
+      * Don't do this when default_vimruntime_dir is non-empty.
+      */
+-    if (vimruntime
++    if (p == NULL && vimruntime
+ #ifdef HAVE_PATHDEF
+ 	    && *default_vimruntime_dir == NUL
+ #endif
+diff --git a/src/Makefile b/src/Makefile
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -3199,8 +3199,8 @@ auto/pathdef.c: Makefile auto/config.mk
+ 	-@echo '#include "vim.h"' >> $@
+ 	-@echo 'char_u *default_vim_dir = (char_u *)"$(VIMRCLOC)";' | $(QUOTESED) >> $@
+ 	-@echo 'char_u *default_vimruntime_dir = (char_u *)"$(VIMRUNTIMEDIR)";' | $(QUOTESED) >> $@
+-	-@echo 'char_u *all_cflags = (char_u *)"$(CC) -c -I$(srcdir) $(ALL_CFLAGS)";' | $(QUOTESED) >>  $@
+-	-@echo 'char_u *all_lflags = (char_u *)"$(CC) $(ALL_LIB_DIRS) $(LDFLAGS) -o $(VIMTARGET) $(ALL_LIBS) ";' | $(QUOTESED) >>  $@
++	-@echo 'char_u *all_cflags = (char_u *)"AXE Store static build";' >> $@
++	-@echo 'char_u *all_lflags = (char_u *)"AXE Store static build";' >> $@
+ 	-@echo 'char_u *compiled_user = (char_u *)"' | tr -d $(NL) >> $@
+ 	-@if test -n "$(COMPILEDBY)"; then \
+ 		echo "$(COMPILEDBY)" | tr -d $(NL) >> $@; \
+diff --git a/src/option.c b/src/option.c
+--- a/src/option.c
++++ b/src/option.c
+@@ -742,6 +742,8 @@ set_init_1(int clean_arg)
+ #ifdef CLEAN_RUNTIMEPATH
+-    if (clean_arg)
++    // Personal runtime paths cannot be resolved without a home directory.
++    if (clean_arg || ((homedir == NULL || *homedir == NUL)
++				&& STRCMP(p_rtp, DFLT_RUNTIMEPATH) == 0))
+ 	set_init_clean_rtp();
+ #endif
+ 
+ #ifdef FEAT_GUI
