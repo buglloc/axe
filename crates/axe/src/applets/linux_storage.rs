@@ -310,6 +310,8 @@ fn run_blkid(args: Vec<OsString>) -> Result<bool, String> {
     let values = utf8_args(args)?;
     let mut output = Output::Full;
     let mut tags = Vec::new();
+    let mut token_filters: Vec<(String, String)> = Vec::new();
+    let mut type_filter: Option<String> = None;
     let mut low_level_probe = false;
     let mut info = false;
     let mut devices = Vec::new();
@@ -331,8 +333,29 @@ fn run_blkid(args: Vec<OsString>) -> Result<bool, String> {
             }
             "-p" | "--probe" => low_level_probe = true,
             "-i" | "--info" => info = true,
-            "-c" | "--cache-file" => {
-                iter.next().ok_or("cache-file requires an argument")?;
+            "-l" | "--list" => {}
+            "-t" | "--match-token" => {
+                let token = iter.next().ok_or("-t requires a token")?;
+                match token.split_once('=') {
+                    Some((tag, value)) => {
+                        token_filters.push((tag.to_ascii_uppercase(), value.to_string()))
+                    }
+                    None => type_filter = Some(token),
+                }
+            }
+            "-L" | "--label" => {
+                let label = iter.next().ok_or("-L requires a label")?;
+                if !devices.is_empty() {
+                    return Err("The -L option can't be used with a device".into());
+                }
+                token_filters.push(("LABEL".into(), label));
+            }
+            "-U" | "--uuid" => {
+                let value = iter.next().ok_or("-U requires a uuid")?;
+                if !devices.is_empty() {
+                    return Err("The -U option can't be used with a device".into());
+                }
+                token_filters.push(("UUID".into(), value));
             }
             "-h" | "--help" => {
                 println!(
@@ -368,6 +391,17 @@ fn run_blkid(args: Vec<OsString>) -> Result<bool, String> {
                 continue;
             }
         };
+        if let Some(want) = &type_filter
+            && want != signature.fs_type
+        {
+            continue;
+        }
+        if token_filters
+            .iter()
+            .any(|(tag, want)| signature.tag_value(tag).is_none_or(|value| value != want))
+        {
+            continue;
+        }
         found = true;
         print_signature(&device, &signature, output, &tags);
     }
@@ -381,6 +415,21 @@ pub(super) struct Signature {
     pub(super) label: Option<String>,
     block_size: Option<String>,
     version: Option<String>,
+    pt_type: Option<&'static str>,
+    pt_uuid: Option<String>,
+}
+
+impl Signature {
+    fn tag_value(&self, tag: &str) -> Option<&str> {
+        match tag {
+            "LABEL" => self.label.as_deref(),
+            "UUID" => self.uuid.as_deref(),
+            "TYPE" => Some(self.fs_type),
+            "PTTYPE" => self.pt_type,
+            "PTUUID" => self.pt_uuid.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 pub(super) fn probe(path: &Path) -> std::io::Result<Option<Signature>> {
@@ -390,17 +439,27 @@ pub(super) fn probe(path: &Path) -> std::io::Result<Option<Signature>> {
     bytes.truncate(read);
 
     let signature = if bytes.get(0..6) == Some(b"LUKS\xba\xbe") {
-        let version = bytes
-            .get(6..8)
-            .map(|value| u16::from_be_bytes([value[0], value[1]]).to_string());
         Signature {
             fs_type: "crypto_LUKS",
-            version,
+            // Both LUKS1 and LUKS2 keep an ASCII UUID at offset 168.
+            uuid: bytes.get(168..208).and_then(text_label),
             ..Signature::default()
         }
     } else if bytes.get(3..11) == Some(b"EXFAT   ") {
         Signature {
             fs_type: "exfat",
+            uuid: bytes.get(100..104).map(|value| {
+                format!(
+                    "{:02X}{:02X}-{:02X}{:02X}",
+                    value[3], value[2], value[1], value[0]
+                )
+            }),
+            block_size: bytes.get(110).and_then(|shift| {
+                (9..=12)
+                    .contains(shift)
+                    .then(|| (1u64 << shift).to_string())
+                    .or_else(|| Some("512".into()))
+            }),
             ..Signature::default()
         }
     } else if bytes.get(3..11) == Some(b"NTFS    ") {
@@ -416,9 +475,19 @@ pub(super) fn probe(path: &Path) -> std::io::Result<Option<Signature>> {
             uuid: serial,
             ..Signature::default()
         }
-    } else if bytes.get(54..62) == Some(b"FAT16   ") || bytes.get(82..90) == Some(b"FAT32   ") {
+    } else if bytes.get(54..62) == Some(b"FAT12   ")
+        || bytes.get(54..62) == Some(b"FAT16   ")
+        || bytes.get(82..90) == Some(b"FAT32   ")
+    {
         let fat32 = bytes.get(82..90) == Some(b"FAT32   ");
         let (serial, label) = if fat32 { (67, 71..82) } else { (39, 43..54) };
+        let version = if fat32 {
+            "FAT32"
+        } else if bytes.get(54..62) == Some(b"FAT12   ") {
+            "FAT12"
+        } else {
+            "FAT16"
+        };
         Signature {
             fs_type: "vfat",
             uuid: bytes.get(serial..serial + 4).map(|value| {
@@ -428,8 +497,8 @@ pub(super) fn probe(path: &Path) -> std::io::Result<Option<Signature>> {
                 )
             }),
             label: bytes.get(label).and_then(text_label),
-            block_size: None,
-            version: Some(if fat32 { "FAT32" } else { "FAT16" }.into()),
+            version: Some(version.into()),
+            ..Signature::default()
         }
     } else if bytes.get(1080..1082) == Some(&[0x53, 0xef]) {
         let feature_compat = le_u32(&bytes, 1116).unwrap_or_default();
@@ -487,9 +556,25 @@ pub(super) fn probe(path: &Path) -> std::io::Result<Option<Signature>> {
             fs_type: "LVM2_member",
             ..Signature::default()
         }
-    } else if detect_swap(&mut file)? {
+    } else if let Some(swap) = detect_swap(&mut file)? {
+        swap
+    } else if bytes.get(512..520) == Some(b"EFI PART") {
         Signature {
-            fs_type: "swap",
+            fs_type: "",
+            pt_type: Some("gpt"),
+            pt_uuid: bytes.get(568..584).and_then(guid_mixed),
+            ..Signature::default()
+        }
+    } else if bytes.get(510..512) == Some(&[0x55, 0xaa]) {
+        Signature {
+            fs_type: "",
+            pt_type: Some("dos"),
+            pt_uuid: bytes.get(440..444).map(|value| {
+                format!(
+                    "{:02x}{:02x}{:02x}{:02x}",
+                    value[3], value[2], value[1], value[0]
+                )
+            }),
             ..Signature::default()
         }
     } else {
@@ -498,7 +583,7 @@ pub(super) fn probe(path: &Path) -> std::io::Result<Option<Signature>> {
     Ok(Some(signature))
 }
 
-fn detect_swap(file: &mut File) -> std::io::Result<bool> {
+fn detect_swap(file: &mut File) -> std::io::Result<Option<Signature>> {
     let length = file.metadata()?.len();
     for page in [4096u64, 8192, 16_384, 32_768, 65_536] {
         if length < page {
@@ -506,13 +591,27 @@ fn detect_swap(file: &mut File) -> std::io::Result<bool> {
         }
         file.seek(SeekFrom::Start(page - 10))?;
         let mut magic = [0u8; 10];
-        if file.read_exact(&mut magic).is_ok()
-            && (&magic == b"SWAPSPACE2" || &magic == b"SWAP-SPACE")
+        if file.read_exact(&mut magic).is_err()
+            || (&magic != b"SWAPSPACE2" && &magic != b"SWAP-SPACE")
         {
-            return Ok(true);
+            continue;
         }
+        let mut header = [0u8; 32];
+        file.seek(SeekFrom::Start(0x40c))?;
+        if file.read_exact(&mut header).is_err() {
+            return Ok(Some(Signature {
+                fs_type: "swap",
+                ..Signature::default()
+            }));
+        }
+        return Ok(Some(Signature {
+            fs_type: "swap",
+            uuid: uuid(&header[..16]),
+            label: text_label(&header[16..]),
+            ..Signature::default()
+        }));
     }
-    Ok(false)
+    Ok(None)
 }
 
 fn print_signature(path: &Path, signature: &Signature, output: Output, tags: &[String]) {
@@ -521,7 +620,12 @@ fn print_signature(path: &Path, signature: &Signature, output: Output, tags: &[S
         ("UUID", signature.uuid.as_deref()),
         ("BLOCK_SIZE", signature.block_size.as_deref()),
         ("VERSION", signature.version.as_deref()),
-        ("TYPE", Some(signature.fs_type)),
+        (
+            "TYPE",
+            (!signature.fs_type.is_empty()).then_some(signature.fs_type),
+        ),
+        ("PTUUID", signature.pt_uuid.as_deref()),
+        ("PTTYPE", signature.pt_type),
     ]
     .into_iter()
     .filter(|(name, value)| {
@@ -646,6 +750,32 @@ fn uuid(bytes: &[u8]) -> Option<String> {
         bytes[5],
         bytes[6],
         bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    ))
+}
+
+/// Formats a GPT GUID: the first three groups are little-endian.
+fn guid_mixed(bytes: &[u8]) -> Option<String> {
+    if bytes.len() != 16 || bytes.iter().all(|byte| *byte == 0) {
+        return None;
+    }
+    Some(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[3],
+        bytes[2],
+        bytes[1],
+        bytes[0],
+        bytes[5],
+        bytes[4],
+        bytes[7],
+        bytes[6],
         bytes[8],
         bytes[9],
         bytes[10],
