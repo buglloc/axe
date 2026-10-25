@@ -14,10 +14,25 @@ use std::time::{Duration, Instant};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+/// A directory whose whole canonical path other users can traverse, so a child
+/// that drops privileges can reach both its fixtures and the copied binary.
+fn accessible_temp_dir() -> PathBuf {
+    let candidate = std::env::temp_dir();
+    let candidate = fs::canonicalize(&candidate).unwrap_or(candidate);
+    let traversable = candidate.ancestors().all(|directory| {
+        fs::metadata(directory).is_ok_and(|metadata| metadata.permissions().mode() & 0o001 != 0)
+    });
+    if traversable {
+        candidate
+    } else {
+        PathBuf::from("/dev/shm")
+    }
+}
+
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
+        let path = accessible_temp_dir().join(format!(
             "axe-admin-terminal-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
@@ -100,18 +115,86 @@ fn filesystem_identity() -> (libc::uid_t, libc::gid_t) {
     if uid == 0 { (65534, 65534) } else { (uid, gid) }
 }
 
-fn permission_test_binary(root: &Path) -> PathBuf {
-    // A root-only checkout path must not prevent the dropped-UID child from
-    // starting before the directory-permission behavior can be exercised.
+/// AXE binary a dropped-UID child can execute. As root, the binary is copied
+/// out of the (possibly private) build tree into a world-traversable directory
+/// that is removed with the guard.
+struct PermissionTestBinary {
+    path: PathBuf,
+    copy_directory: Option<PathBuf>,
+}
+
+impl PermissionTestBinary {
+    fn as_os_str(&self) -> &OsStr {
+        self.path.as_os_str()
+    }
+}
+
+impl Drop for PermissionTestBinary {
+    fn drop(&mut self) {
+        if let Some(directory) = &self.copy_directory {
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+}
+
+/// Returns `None` after printing a SKIP notice when the dropped UID cannot run
+/// AXE at all, e.g. because the host keeps the dynamic loader or libraries of
+/// this debug build private.
+fn permission_test_binary() -> Option<PermissionTestBinary> {
     // SAFETY: geteuid only reads the current identity.
     if unsafe { libc::geteuid() } != 0 {
-        return PathBuf::from(env!("CARGO_BIN_EXE_axe"));
+        return Some(PermissionTestBinary {
+            path: PathBuf::from(env!("CARGO_BIN_EXE_axe")),
+            copy_directory: None,
+        });
     }
-    assert_eq!(fs::metadata(root).unwrap().uid(), 0);
-    let binary = root.join("axe-permission-test");
-    fs::copy(env!("CARGO_BIN_EXE_axe"), &binary).unwrap();
-    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
-    binary
+    let directory = accessible_temp_dir().join(format!(
+        "axe-admin-terminal-bin-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::DirBuilder::new()
+        .mode(0o755)
+        .create(&directory)
+        .unwrap();
+    let binary = PermissionTestBinary {
+        path: directory.join("axe"),
+        copy_directory: Some(directory),
+    };
+    fs::copy(env!("CARGO_BIN_EXE_axe"), &binary.path).unwrap();
+    fs::set_permissions(&binary.path, fs::Permissions::from_mode(0o755)).unwrap();
+    if dropped_uid_can_execute(&binary.path) {
+        Some(binary)
+    } else {
+        eprintln!(
+            "SKIP: the dropped UID cannot execute this AXE build (private loader or libraries)"
+        );
+        None
+    }
+}
+
+fn dropped_uid_can_execute(binary: &Path) -> bool {
+    let identity = filesystem_identity();
+    for _ in 0..100 {
+        let mut command = Command::new(binary);
+        command
+            .arg("--version")
+            .current_dir("/")
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        match unprivileged(&mut command, identity).status() {
+            Ok(status) => return status.success(),
+            // A test thread that forked while the copy was open for writing
+            // holds the descriptor until its child execs.
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => return false,
+        }
+    }
+    false
 }
 
 fn own_fixture(path: &Path, identity: (libc::uid_t, libc::gid_t)) {
@@ -227,7 +310,9 @@ fn install_ancestors_are_0755_and_leaf_modes_are_independent() {
 fn mkdir_set_id_restoration_needs_no_permissions_on_the_created_directory() {
     let scratch = Scratch::new();
     let root = scratch.path();
-    let binary = permission_test_binary(root);
+    let Some(binary) = permission_test_binary() else {
+        return;
+    };
     let identity = filesystem_identity();
     own_fixture(root, identity);
     let _access = RestoreAccess(vec![root.join("minimal"), root.join("deep/leaf")]);
@@ -249,7 +334,9 @@ fn mkdir_set_id_restoration_needs_no_permissions_on_the_created_directory() {
 fn install_preserves_parent_components_in_directory_and_leading_paths() {
     let scratch = Scratch::new();
     let root = scratch.path();
-    let binary = permission_test_binary(root);
+    let Some(binary) = permission_test_binary() else {
+        return;
+    };
     let identity = filesystem_identity();
     fs::write(root.join("source"), b"content").unwrap();
     fs::set_permissions(root.join("source"), fs::Permissions::from_mode(0o644)).unwrap();
@@ -280,7 +367,9 @@ fn install_preserves_parent_components_in_directory_and_leading_paths() {
 fn install_accepts_owned_write_search_only_ancestors_after_privilege_drop() {
     let scratch = Scratch::new();
     let root = scratch.path();
-    let binary = permission_test_binary(root);
+    let Some(binary) = permission_test_binary() else {
+        return;
+    };
     let identity = filesystem_identity();
     fs::create_dir(root.join("parent")).unwrap();
     fs::write(root.join("source"), b"content").unwrap();

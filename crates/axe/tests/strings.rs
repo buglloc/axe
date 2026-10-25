@@ -61,11 +61,7 @@ fn stdin_strings_cross_read_boundaries() {
 
     let output = run_with_input(&["-n8", "-t", "d"], &input);
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(output.status.success());
     assert_eq!(output.stdout, b"  65534 boundary\n");
 }
 
@@ -91,11 +87,7 @@ fn gnu_prefix_offset_length_separator_and_parallel_order_are_compatible() {
         second_name,
     ]);
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).expect("UTF-8 output"),
         format!(
@@ -137,11 +129,7 @@ fn parallel_output_larger_than_worker_queues_stays_ordered() {
         path_strings[2],
     ]);
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(output.status.success());
     assert_eq!(output.stdout, expected);
 }
 
@@ -167,11 +155,7 @@ fn unicode_encodings_json_and_null_records_preserve_offsets() {
     let utf8_name = utf8.to_str().expect("UTF-8 scratch path");
     let output = run(&["--encoding=utf8", "--json", "--null", "-n4", utf8_name]);
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(output.status.success());
 
     let records = output
         .stdout
@@ -191,21 +175,13 @@ fn unicode_encodings_json_and_null_records_preserve_offsets() {
     let utf16_name = utf16.to_str().expect("UTF-8 scratch path");
     let output = run(&["--encoding=utf16le", "-n4", "-t", "d", utf16_name]);
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(output.status.success());
     assert_eq!(output.stdout, "      6 Привет\n".as_bytes());
 
     let gnu16_name = gnu16.to_str().expect("UTF-8 scratch path");
     let output = run(&["-e", "l", "-n4", gnu16_name]);
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(output.status.success());
     assert_eq!(output.stdout, b"Junk\n");
 }
 
@@ -217,19 +193,11 @@ fn data_mode_scans_allocated_elf_sections_only() {
     let fixture = fixture.to_str().expect("UTF-8 scratch path");
 
     let data = run(&["-d", "-n6", fixture]);
-    assert!(
-        data.status.success(),
-        "{}",
-        String::from_utf8_lossy(&data.stderr)
-    );
+    assert!(data.status.success());
     assert_eq!(data.stdout, b"VISIBLE\n");
 
     let all = run(&["-a", "-n6", fixture]);
-    assert!(
-        all.status.success(),
-        "{}",
-        String::from_utf8_lossy(&all.stderr)
-    );
+    assert!(all.status.success());
     assert!(all.stdout.windows(7).any(|window| window == b"VISIBLE"));
     assert!(all.stdout.windows(6).any(|window| window == b"HIDDEN"));
 }

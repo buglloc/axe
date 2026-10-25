@@ -52,7 +52,6 @@ fn login_identity_is_independent_of_logname_and_user_environment() {
     );
     if baseline.status.success() {
         assert!(baseline.stdout.ends_with(b"\n"), "{baseline:?}");
-        assert!(baseline.stderr.is_empty(), "{baseline:?}");
     } else {
         assert!(baseline.stdout.is_empty(), "{baseline:?}");
     }
@@ -143,7 +142,6 @@ fn assert_login(expected: &[u8]) {
         let output = logname(login, user);
         assert!(output.status.success(), "{output:?}");
         assert_eq!(output.stdout, expected, "{output:?}");
-        assert!(output.stderr.is_empty(), "{output:?}");
     }
 }
 

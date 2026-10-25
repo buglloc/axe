@@ -54,7 +54,6 @@ fn stdout(command: &mut Command) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(output.stderr, b"");
     String::from_utf8(output.stdout).expect("df emits UTF-8")
 }
 

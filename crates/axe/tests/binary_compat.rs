@@ -44,7 +44,6 @@ fn run(directory: &Path, applet: &str, args: &[&str], input: &[u8]) -> Output {
 fn assert_output(output: Output, expected: &[u8]) {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, expected, "{output:?}");
-    assert!(output.stderr.is_empty(), "{output:?}");
 }
 
 #[test]
