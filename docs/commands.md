@@ -109,8 +109,10 @@ with status 2.
 
 `jq` keeps one execution state across input files. `input_filename` is the current
 input file, `<stdin>` for standard input, and `null` before input is consumed in
-null-input mode. Output uses JSON values and escaping, including ASCII-output
-mode; `halt_error` preserves its requested status and raw stderr payload.
+null-input mode. JSON input uses jq-compatible number spellings, invalid UTF-8 is
+replaced with U+FFFD, and output is valid JSON. `--tab`, `--indent`, `--seq`,
+`--raw-output0`, `--jsonargs`, and `$__loc__` are supported; `halt_error` keeps
+string payloads raw and terminates non-string JSON payloads with a newline.
 `--stream` and `--stream-errors` are not supported.
 
 `diff -u` and `diff -c` combine nearby changes into one hunk when their context

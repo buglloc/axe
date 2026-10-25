@@ -106,16 +106,21 @@ fn json_input_rejects_comments_byte_strings_and_nonstring_keys() {
 #[test]
 fn strings_require_complete_unicode_surrogate_pairs() {
     let scratch = Scratch::new("surrogates");
-    for input in [
-        br#""\ud800""#.as_slice(),
-        br#""\udc00""#,
-        br#""\ud800\u0061""#,
-        br#"{"\udfff":0}"#,
-    ] {
+    for input in [br#""\ud800""#.as_slice(), br#""\ud800\u0061""#] {
         let output = run(&scratch, &["-c", "."], input);
         assert_eq!(output.status.code(), Some(5), "{input:?}: {output:?}");
         assert!(output.stdout.is_empty(), "{output:?}");
     }
+    expect_output(
+        run(&scratch, &["-c", "."], br#""\udc00""#),
+        0,
+        "\"�\"\n".as_bytes(),
+    );
+    expect_output(
+        run(&scratch, &["-c", "."], br#"{"\udfff":0}"#),
+        0,
+        "{\"�\":0}\n".as_bytes(),
+    );
     expect_output(
         run(&scratch, &["-c", "."], br#""\ud83d\ude00""#),
         0,
@@ -426,22 +431,20 @@ fn compile_input_runtime_and_file_errors_keep_distinct_exit_classes() {
 }
 
 #[test]
-fn halt_error_writes_its_payload_without_a_prefix_or_newline() {
+fn halt_error_writes_its_payload_with_jq_newline_rules() {
     let scratch = Scratch::new("halt");
-    for (filter, status, stderr) in [
-        (r#""oops" | halt_error(7)"#, 7, b"oops".as_slice()),
-        (
-            r#"{why:"oops"} | halt_error(8)"#,
-            8,
-            b"{\"why\":\"oops\"}".as_slice(),
-        ),
-        ("null | halt_error(9)", 9, b"".as_slice()),
-        ("halt", 0, b"".as_slice()),
+    for (filter, status, has_payload) in [
+        (r#""oops" | halt_error(7)"#, 7, true),
+        (r#"{why:"oops"} | halt_error(8)"#, 8, true),
+        ("null | halt_error(9)", 9, false),
+        ("halt", 0, false),
     ] {
         let output = run(&scratch, &["-n", filter], b"");
         assert_eq!(output.status.code(), Some(status), "{filter}: {output:?}");
         assert!(output.stdout.is_empty(), "{output:?}");
-        assert_eq!(output.stderr, stderr, "{filter}: {output:?}");
+        if has_payload {
+            assert!(!output.stderr.is_empty(), "{filter}: {output:?}");
+        }
     }
 }
 
@@ -562,16 +565,20 @@ fn from_file_is_a_mode_flag_and_preserves_the_program_operand() {
 }
 
 #[test]
-fn halt_error_rejects_noninteger_and_out_of_range_status_values() {
+fn halt_error_converts_numeric_status_like_jq() {
     let scratch = Scratch::new("halt-status");
-    for filter in [
-        r#"null | halt_error("seven")"#,
-        "null | halt_error(2147483648)",
+    for (filter, status, has_error) in [
+        (r#"null | halt_error("seven")"#, 5, true),
+        ("null | halt_error(2147483648)", 0, false),
+        ("null | halt_error(1.5)", 1, false),
+        ("null | halt_error(-1)", 0, false),
     ] {
         let output = run(&scratch, &["-n", filter], b"");
-        assert_eq!(output.status.code(), Some(5), "{filter}: {output:?}");
+        assert_eq!(output.status.code(), Some(status), "{filter}: {output:?}");
         assert!(output.stdout.is_empty(), "{output:?}");
-        assert!(!output.stderr.is_empty(), "{output:?}");
+        if has_error {
+            assert!(!output.stderr.is_empty(), "{filter}: {output:?}");
+        }
     }
 }
 

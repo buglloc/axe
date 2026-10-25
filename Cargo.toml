@@ -84,6 +84,7 @@ zip = { version = "8.0", default-features = false, features = ["deflate"] }
 zstd = "0.13"
 
 [patch.crates-io]
+jaq-json = { path = "vendor/jaq-json" }
 brush-shell = { path = "vendor/brush-shell" }
 brush-core = { path = "vendor/brush-core" }
 brush-builtins = { path = "vendor/brush-builtins" }

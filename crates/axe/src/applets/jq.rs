@@ -1,12 +1,12 @@
 use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 
 use jaq_all::jaq_core::{self, Ctx, DataT, Exn, Lut, ValT, Vars};
+use jaq_all::jaq_std;
 use jaq_all::jaq_std::input::{HasInputs, Inputs, RcIter};
-use jaq_all::jaq_std::{self, ValT as _};
 use jaq_all::json::{self, Num, Val};
 
 const HELP: &str = "Usage: jq [OPTIONS] FILTER [FILE ...]\n\
@@ -22,12 +22,17 @@ Options:\n\
   -e, --exit-status      set status from the last output value\n\
   -n, --null-input       run FILTER once with null input\n\
   -f, --from-file FILE   read FILTER from FILE\n\
-      --args            bind remaining operands in $ARGS.positional\n\
+      --tab              use tabs for indentation\n\
+      --indent n         use n spaces for indentation (-1 through 7)\n\
+      --seq              parse and emit JSON-sequence records\n\
+      --raw-output0      output raw values followed by NUL\n\
+      --args              bind remaining operands in $ARGS.positional\n\
+      --jsonargs          parse remaining operands as JSON in $ARGS.positional\n\
       --arg NAME VALUE   bind VALUE as a string\n\
       --argjson NAME JSON bind VALUE as JSON\n\
       --rawfile NAME FILE bind the complete file as a string\n\
       --slurpfile NAME FILE bind the file's JSON values as an array\n\
-      --stream          not supported by this applet\n\
+      --stream           not supported by this applet\n\
   -h, --help             show this help\n\
   -V, --version          show version";
 
@@ -42,6 +47,9 @@ struct Options {
     sort_keys: bool,
     exit_status: bool,
     null_input: bool,
+    indent: Option<i8>,
+    seq: bool,
+    raw_output0: bool,
     bindings: Vec<(String, Val)>,
     filter: Option<String>,
     positional: Vec<Val>,
@@ -111,7 +119,7 @@ fn parse_args(args: Vec<OsString>) -> Result<ParseOutcome, String> {
     let mut options = Options::default();
     let mut args = args.into_iter().skip(1);
     let mut positional_only = false;
-    let mut string_args = false;
+    let mut argument_mode = None::<bool>;
     let mut from_file = false;
     let mut program = None;
 
@@ -136,7 +144,25 @@ fn parse_args(args: Vec<OsString>) -> Result<ParseOutcome, String> {
                 "--exit-status" => options.exit_status = true,
                 "--null-input" => options.null_input = true,
                 "--from-file" => from_file = true,
-                "--args" => string_args = true,
+                "--tab" => options.indent = Some(-1),
+                "--indent" => {
+                    let value = next_arg(&mut args, &text)?;
+                    let indent = value
+                        .to_string_lossy()
+                        .parse::<i8>()
+                        .map_err(|_| "--indent takes a number between -1 and 7".to_string())?;
+                    if !(-1..=7).contains(&indent) {
+                        return Err("--indent takes a number between -1 and 7".to_string());
+                    }
+                    options.indent = Some(indent);
+                }
+                "--seq" => options.seq = true,
+                "--raw-output0" => {
+                    options.raw_output = true;
+                    options.raw_output0 = true;
+                }
+                "--args" => argument_mode = Some(false),
+                "--jsonargs" => argument_mode = Some(true),
                 "--arg" | "--argjson" | "--rawfile" | "--slurpfile" => {
                     let name = next_arg(&mut args, &text)?.to_string_lossy().into_owned();
                     let value = next_arg(&mut args, &text)?;
@@ -159,15 +185,16 @@ fn parse_args(args: Vec<OsString>) -> Result<ParseOutcome, String> {
                                 .map_err(|error| format!("{}: {error}", value.to_string_lossy()))?,
                         ),
                         "--slurpfile" => {
-                            let file = File::open(&value)
+                            let bytes = fs::read(&value)
                                 .map_err(|error| format!("{}: {error}", value.to_string_lossy()))?;
-                            let mut reader = JsonInput::new(BufReader::new(file));
                             let mut values = Vec::new();
-                            while let Some(value) = reader
-                                .next_value()
-                                .map_err(|error| format!("{}: {error}", value.to_string_lossy()))?
-                            {
-                                values.push(value);
+                            for parsed in json::read::parse_many_jq(strip_bom(&bytes)) {
+                                let parsed = parsed.map_err(|error| {
+                                    format!("{}: {error}", value.to_string_lossy())
+                                })?;
+                                values.push(normalize_input(parsed).map_err(|error| {
+                                    format!("{}: {error}", value.to_string_lossy())
+                                })?);
                             }
                             Val::Arr(json::Rc::new(values))
                         }
@@ -222,10 +249,14 @@ fn parse_args(args: Vec<OsString>) -> Result<ParseOutcome, String> {
 
         if program.is_none() {
             program = Some(arg);
-        } else if string_args {
-            options
-                .positional
-                .push(lossy_value(arg.into_encoded_bytes()));
+        } else if let Some(json_args) = argument_mode {
+            let value = if json_args {
+                parse_single_json(arg.as_encoded_bytes())
+                    .map_err(|error| format!("invalid JSON argument: {error}"))?
+            } else {
+                lossy_value(arg.into_encoded_bytes())
+            };
+            options.positional.push(value);
         } else {
             options.files.push(PathBuf::from(arg));
         }
@@ -268,6 +299,35 @@ fn parse_args(args: Vec<OsString>) -> Result<ParseOutcome, String> {
     } else {
         options.bindings.push(("ARGS".to_string(), args));
     }
+    if !options.bindings.iter().any(|(name, _)| name == "__loc__") {
+        let line = options
+            .filter
+            .as_deref()
+            .and_then(|filter| {
+                filter.find("$__loc__").map(|offset| {
+                    filter[..offset]
+                        .bytes()
+                        .filter(|byte| *byte == b'\n')
+                        .count()
+                        + 1
+                })
+            })
+            .unwrap_or(1);
+        options.bindings.push((
+            "__loc__".to_string(),
+            Val::obj(
+                [
+                    (Val::utf8_str("file"), Val::utf8_str("<top-level>")),
+                    (
+                        Val::utf8_str("line"),
+                        Val::Num(Num::Int(isize::try_from(line).unwrap_or(isize::MAX))),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        ));
+    }
     Ok(ParseOutcome::Run(options))
 }
 
@@ -307,9 +367,18 @@ fn run(options: Options) -> Result<i32, RunError> {
         ascii: options.ascii_output,
         raw: options.raw_output,
         join: options.join_output,
+        indent: options.indent,
+        seq: options.seq,
+        raw_output0: options.raw_output0,
     };
     let filename = RefCell::new(Val::Null);
-    let inputs = FileInputs::new(options.files, options.raw_input, options.slurp, &filename);
+    let inputs = FileInputs::new(
+        options.files,
+        options.raw_input,
+        options.slurp,
+        options.seq,
+        &filename,
+    );
     let stdout = io::stdout();
     let mut stdout = io::BufWriter::new(stdout.lock());
     let result = execute(
@@ -411,10 +480,7 @@ fn jq_funs() -> impl Iterator<Item = jaq_core::native::Fun<JqKind>> {
             })),
             native(("halt_error", v(1), |mut cv| {
                 let code = cv.0.pop_var();
-                let result = code
-                    .as_isize()
-                    .ok_or_else(|| json::Error::typ(code, "integer"))
-                    .and_then(|code| i32::try_from(code).map_err(json::Error::str))
+                let result = halt_status(&code)
                     .map_err(Exn::from)
                     .and_then(|code| halt_with_payload(&cv.1, code));
                 Box::new(std::iter::once(result))
@@ -427,6 +493,48 @@ fn halt_with_payload<'a>(value: &Val, code: i32) -> json::ValX<'a> {
         write_stderr(value).map_err(|error| Exn::from(json::Error::str(error)))?;
     }
     Err(Exn::halt(code))
+}
+
+fn halt_status(value: &Val) -> Result<i32, json::Error> {
+    let number = match value {
+        Val::Num(Num::Int(number)) => number.to_string(),
+        Val::Num(Num::BigInt(number)) => number.to_string(),
+        Val::Num(Num::Dec(number)) => number.as_str().to_string(),
+        Val::Num(Num::Float(number)) if number.is_finite() => format!("{:.0}", number.trunc()),
+        Val::Num(Num::Float(_)) => return Ok(0),
+        _ => return Err(json::Error::typ(value.clone(), "number")),
+    };
+    if number.starts_with('-') {
+        return Ok(0);
+    }
+    let number = number.strip_prefix('+').unwrap_or(&number);
+    let (coefficient, exponent) = number
+        .split_once(['e', 'E'])
+        .map_or((number, 0_i64), |(coefficient, exponent)| {
+            (coefficient, exponent.parse().unwrap_or(0))
+        });
+    let (integer, fractional) = coefficient
+        .split_once('.')
+        .map_or((coefficient, ""), |(integer, fractional)| {
+            (integer, fractional)
+        });
+    let decimal_position = i64::try_from(integer.len()).unwrap_or(i64::MAX) + exponent;
+    if decimal_position <= 0 {
+        return Ok(0);
+    }
+    let mut digits = integer
+        .bytes()
+        .chain(fractional.bytes())
+        .filter(u8::is_ascii_digit);
+    let count = usize::try_from(decimal_position)
+        .unwrap_or(usize::MAX)
+        .min(integer.len() + fractional.len());
+    let mut status = 0_u16;
+    for _ in 0..count {
+        let digit = digits.next().map_or(0, |digit| digit - b'0');
+        status = (status * 10 + u16::from(digit)) % 256;
+    }
+    Ok(i32::from(status))
 }
 
 fn write_stderr(value: &Val) -> Result<(), RunError> {
@@ -444,7 +552,8 @@ fn write_stderr(value: &Val) -> Result<(), RunError> {
                 ..OutputOptions::default()
             },
             value,
-        )
+        )?;
+        stderr.write_all(b"\n").map_err(RunError::Io)
     }
 }
 
@@ -496,19 +605,29 @@ fn execute(
                     .take()
                     .map_or_else(|| map_exception(error), RunError::Io)
             })?;
+            if options.seq && !options.raw {
+                output.write_all(b"\x1e").map_err(RunError::Io)?;
+            }
             if options.raw && !options.ascii {
                 if let Val::TStr(text) = &value {
-                    output
-                        .write_all(String::from_utf8_lossy(text).as_bytes())
-                        .map_err(RunError::Io)?;
+                    let bytes = String::from_utf8_lossy(text);
+                    if options.raw_output0 && bytes.as_bytes().contains(&0) {
+                        return Err(RunError::Filter(
+                            "Cannot dump a string containing NUL with --raw-output0 option"
+                                .to_string(),
+                        ));
+                    }
+                    output.write_all(bytes.as_bytes()).map_err(RunError::Io)?;
                 } else {
                     write_json(output, options, &value)?;
                 }
             } else {
                 write_json(output, options, &value)?;
             }
-            if !options.join {
-                output.write_all(b"\n").map_err(RunError::Io)?;
+            if !options.join || options.raw_output0 {
+                output
+                    .write_all(if options.raw_output0 { b"\0" } else { b"\n" })
+                    .map_err(RunError::Io)?;
             }
             last = Some(value.as_bool());
         }
@@ -519,17 +638,18 @@ fn execute(
     Ok(last)
 }
 
-struct FileInputs<'a> {
+struct InputStream<'a> {
     files: std::vec::IntoIter<PathBuf>,
-    current: Option<JsonInput<Box<dyn BufRead>>>,
+    current: Option<Box<dyn Read>>,
     filename: &'a RefCell<Val>,
-    raw: bool,
-    slurp: bool,
-    finished: bool,
+    first: bool,
+    bom: Vec<u8>,
+    buffer: Vec<u8>,
+    offset: usize,
 }
 
-impl<'a> FileInputs<'a> {
-    fn new(mut files: Vec<PathBuf>, raw: bool, slurp: bool, filename: &'a RefCell<Val>) -> Self {
+impl<'a> InputStream<'a> {
+    fn new(mut files: Vec<PathBuf>, filename: &'a RefCell<Val>, strip_bom: bool) -> Self {
         if files.is_empty() {
             files.push(PathBuf::from("-"));
         }
@@ -537,82 +657,236 @@ impl<'a> FileInputs<'a> {
             files: files.into_iter(),
             current: None,
             filename,
+            first: strip_bom,
+            bom: Vec::new(),
+            buffer: Vec::new(),
+            offset: 0,
+        }
+    }
+
+    fn open_next(&mut self) -> io::Result<bool> {
+        let Some(path) = self.files.next() else {
+            return Ok(false);
+        };
+        if path.as_os_str() == "-" {
+            self.current = Some(Box::new(io::stdin()));
+            *self.filename.borrow_mut() = Val::utf8_str("<stdin>");
+        } else {
+            let file = File::open(&path).map_err(|error| {
+                io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+            })?;
+            self.current = Some(Box::new(file));
+            *self.filename.borrow_mut() = Val::utf8_str(
+                String::from_utf8_lossy(path.as_os_str().as_encoded_bytes()).into_owned(),
+            );
+        }
+        Ok(true)
+    }
+
+    fn fill_buffer(&mut self) -> io::Result<bool> {
+        if self.offset < self.buffer.len() {
+            return Ok(true);
+        }
+        self.buffer.clear();
+        self.offset = 0;
+        loop {
+            if self.current.is_none() && !self.open_next()? {
+                if !self.bom.is_empty() {
+                    self.buffer.extend_from_slice(&self.bom);
+                    self.bom.clear();
+                    self.first = false;
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+            let mut chunk = [0_u8; 8192];
+            let Some(reader) = self.current.as_mut() else {
+                continue;
+            };
+            let length = reader.read(&mut chunk)?;
+            if length == 0 {
+                self.current = None;
+                continue;
+            }
+            for byte in &chunk[..length] {
+                if self.first {
+                    self.bom.push(*byte);
+                    if (self.bom.len() == 1 && self.bom[0] != 0xef)
+                        || (self.bom.len() == 2 && self.bom[1] != 0xbb)
+                        || (self.bom.len() == 3 && self.bom[2] != 0xbf)
+                    {
+                        self.buffer.extend_from_slice(&self.bom);
+                        self.bom.clear();
+                        self.first = false;
+                    } else if self.bom.len() == 3 {
+                        self.bom.clear();
+                        self.first = false;
+                    }
+                } else {
+                    self.buffer.push(*byte);
+                }
+            }
+            if !self.buffer.is_empty() {
+                return Ok(true);
+            }
+        }
+    }
+}
+
+impl Read for InputStream<'_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() || !self.fill_buffer()? {
+            return Ok(0);
+        }
+        let available = &self.buffer[self.offset..];
+        let length = available.len().min(output.len());
+        output[..length].copy_from_slice(&available[..length]);
+        self.offset += length;
+        Ok(length)
+    }
+}
+
+impl BufRead for InputStream<'_> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        self.fill_buffer()?;
+        Ok(&self.buffer[self.offset..])
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.offset = self.offset.saturating_add(amount).min(self.buffer.len());
+    }
+}
+
+struct SharedBufRead<'a> {
+    stream: std::rc::Rc<RefCell<InputStream<'a>>>,
+    buffer: Vec<u8>,
+    offset: usize,
+}
+
+impl<'a> SharedBufRead<'a> {
+    fn new(stream: std::rc::Rc<RefCell<InputStream<'a>>>) -> Self {
+        Self {
+            stream,
+            buffer: Vec::new(),
+            offset: 0,
+        }
+    }
+}
+
+impl Read for SharedBufRead<'_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        let bytes = self.fill_buf()?;
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        let length = bytes.len().min(output.len());
+        output[..length].copy_from_slice(&bytes[..length]);
+        self.consume(length);
+        Ok(length)
+    }
+}
+
+impl BufRead for SharedBufRead<'_> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        if self.offset == self.buffer.len() {
+            self.buffer.clear();
+            self.offset = 0;
+            let mut chunk = [0_u8; 8192];
+            let length = self.stream.borrow_mut().read(&mut chunk)?;
+            self.buffer.extend_from_slice(&chunk[..length]);
+        }
+        Ok(&self.buffer[self.offset..])
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.offset = self.offset.saturating_add(amount).min(self.buffer.len());
+    }
+}
+
+struct FileInputs<'a> {
+    stream: std::rc::Rc<RefCell<InputStream<'a>>>,
+    parser: Option<Box<dyn Iterator<Item = io::Result<Val>> + 'a>>,
+    seq: bool,
+    raw: bool,
+    slurp: bool,
+    finished: bool,
+}
+
+impl<'a> FileInputs<'a> {
+    fn new(
+        files: Vec<PathBuf>,
+        raw: bool,
+        slurp: bool,
+        seq: bool,
+        filename: &'a RefCell<Val>,
+    ) -> Self {
+        let stream = std::rc::Rc::new(RefCell::new(InputStream::new(files, filename, !raw)));
+        let parser = (!raw).then(|| {
+            if seq {
+                Box::new(json::read::read_many_jq_seq(SharedBufRead::new(
+                    stream.clone(),
+                ))) as Box<dyn Iterator<Item = io::Result<Val>> + 'a>
+            } else {
+                Box::new(json::read::read_many_jq(SharedBufRead::new(stream.clone())))
+                    as Box<dyn Iterator<Item = io::Result<Val>> + 'a>
+            }
+        });
+        Self {
+            stream,
+            parser,
+            seq,
             raw,
             slurp,
             finished: false,
         }
     }
 
-    fn open_next(&mut self) -> Result<bool, RunError> {
-        let Some(path) = self.files.next() else {
-            return Ok(false);
-        };
-        let (reader, filename): (Box<dyn BufRead>, Val) = if path.as_os_str() == "-" {
-            (
-                Box::new(BufReader::new(io::stdin())),
-                Val::utf8_str("<stdin>"),
-            )
-        } else {
-            let file = File::open(&path).map_err(|error| {
-                RunError::Io(io::Error::new(
-                    error.kind(),
-                    format!("{}: {error}", path.display()),
-                ))
-            })?;
-            (
-                Box::new(BufReader::new(file)),
-                Val::utf8_str(
-                    String::from_utf8_lossy(path.as_os_str().as_encoded_bytes()).into_owned(),
-                ),
-            )
-        };
-        *self.filename.borrow_mut() = filename;
-        self.current = Some(JsonInput::new(reader));
-        Ok(true)
-    }
-
     fn read_next(&mut self) -> Result<Option<Val>, RunError> {
-        loop {
-            if self.current.is_none() && !self.open_next()? {
+        if self.raw {
+            let mut bytes = Vec::new();
+            let length = self
+                .stream
+                .borrow_mut()
+                .read_until(b'\n', &mut bytes)
+                .map_err(RunError::Io)?;
+            if length == 0 {
                 return Ok(None);
             }
-            let reader = self.current.as_mut().expect("opened input");
-            let value = if self.raw {
-                let mut bytes = Vec::new();
-                let length = reader
-                    .reader
-                    .read_until(b'\n', &mut bytes)
-                    .map_err(RunError::Io)?;
-                if length == 0 {
-                    None
-                } else {
-                    if bytes.last() == Some(&b'\n') {
-                        bytes.pop();
-                    }
-                    Some(lossy_value(bytes))
-                }
-            } else {
-                reader.next_value()?
-            };
-            if value.is_some() {
-                return Ok(value);
+            if bytes.last() == Some(&b'\n') {
+                bytes.pop();
             }
-            self.current = None;
+            return Ok(Some(lossy_value(bytes)));
+        }
+        let Some(parser) = self.parser.as_mut() else {
+            return Ok(None);
+        };
+        loop {
+            match parser.next() {
+                None => return Ok(None),
+                Some(Ok(value)) => {
+                    return normalize_input(value).map(Some).map_err(RunError::Input);
+                }
+                Some(Err(error)) if self.seq && error.kind() == io::ErrorKind::InvalidData => {
+                    continue;
+                }
+                Some(Err(error)) if error.kind() == io::ErrorKind::InvalidData => {
+                    return Err(RunError::Input(error.to_string()));
+                }
+                Some(Err(error)) => return Err(RunError::Io(error)),
+            }
         }
     }
 
     fn slurp_all(&mut self) -> Result<Val, RunError> {
         if self.raw {
             let mut bytes = Vec::new();
-            while self.open_next()? {
-                self.current
-                    .as_mut()
-                    .expect("opened input")
-                    .reader
-                    .read_to_end(&mut bytes)
-                    .map_err(RunError::Io)?;
-                self.current = None;
-            }
+            self.stream
+                .borrow_mut()
+                .read_to_end(&mut bytes)
+                .map_err(RunError::Io)?;
             Ok(lossy_value(bytes))
         } else {
             let mut values = Vec::new();
@@ -649,287 +923,39 @@ impl Iterator for FileInputs<'_> {
     }
 }
 
-enum JsonFrame {
-    Array(Vec<Val>),
-    Object(json::Map),
-    Key(Val),
-}
-
-struct JsonInput<R> {
-    reader: R,
-    line: usize,
-    column: usize,
-}
-
-impl<R: BufRead> JsonInput<R> {
-    fn new(reader: R) -> Self {
-        Self {
-            reader,
-            line: 1,
-            column: 0,
-        }
-    }
-
-    fn peek(&mut self) -> Result<Option<u8>, RunError> {
-        self.reader
-            .fill_buf()
-            .map(|bytes| bytes.first().copied())
-            .map_err(RunError::Io)
-    }
-
-    fn take(&mut self) -> Result<Option<u8>, RunError> {
-        let next = self.peek()?;
-        if let Some(byte) = next {
-            self.reader.consume(1);
-            if byte == b'\n' {
-                self.line += 1;
-                self.column = 0;
-            } else {
-                self.column += 1;
-            }
-        }
-        Ok(next)
-    }
-
-    fn error(&self, message: &str) -> RunError {
-        RunError::Input(format!(
-            "{message} at line {}, column {}",
-            self.line, self.column
-        ))
-    }
-
-    fn whitespace(&mut self) -> Result<(), RunError> {
-        while matches!(self.peek()?, Some(b' ' | b'\t' | b'\r' | b'\n')) {
-            self.take()?;
-        }
-        Ok(())
-    }
-
-    fn next_value(&mut self) -> Result<Option<Val>, RunError> {
-        let mut stack = Vec::new();
-        let mut value = None;
-        loop {
-            if stack.is_empty() && value.is_some() {
-                return Ok(value);
-            }
-            self.whitespace()?;
-            let Some(next) = self.peek()? else {
-                return if stack.is_empty() {
-                    Ok(None)
-                } else {
-                    Err(self.error("Unfinished JSON term at EOF"))
+fn normalize_input(value: Val) -> Result<Val, String> {
+    match value {
+        Val::Null | Val::Bool(_) | Val::Num(_) => Ok(value),
+        Val::BStr(_) => Err("byte strings are not JSON values".to_string()),
+        Val::TStr(text) => Ok(Val::utf8_str(String::from_utf8_lossy(&text).into_owned())),
+        Val::Arr(values) => values
+            .iter()
+            .cloned()
+            .map(normalize_input)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|values| Val::Arr(json::Rc::new(values))),
+        Val::Obj(values) => {
+            let mut normalized = json::Map::default();
+            for (key, value) in values.iter() {
+                let key = match key {
+                    Val::TStr(text) => Val::utf8_str(String::from_utf8_lossy(text).into_owned()),
+                    _ => return Err("object keys must be strings".to_string()),
                 };
-            };
-            match next {
-                b'[' | b'{' => {
-                    self.take()?;
-                    if value.is_some() {
-                        return Err(self.error("Expected separator between values"));
-                    }
-                    if stack.len() >= 10_000 {
-                        return Err(self.error("Exceeds depth limit for parsing"));
-                    }
-                    stack.push(if next == b'[' {
-                        JsonFrame::Array(Vec::new())
-                    } else {
-                        JsonFrame::Object(json::Map::default())
-                    });
-                }
-                b':' => {
-                    self.take()?;
-                    let key = value
-                        .take()
-                        .ok_or_else(|| self.error("Expected string key before ':'"))?;
-                    if !matches!(stack.last(), Some(JsonFrame::Object(_))) {
-                        return Err(self.error("':' not as part of an object"));
-                    }
-                    if !matches!(key, Val::TStr(_)) {
-                        return Err(self.error("Object keys must be strings"));
-                    }
-                    stack.push(JsonFrame::Key(key));
-                }
-                b',' => {
-                    self.take()?;
-                    let item = value
-                        .take()
-                        .ok_or_else(|| self.error("Expected value before ','"))?;
-                    match stack.last_mut() {
-                        Some(JsonFrame::Array(values)) => values.push(item),
-                        Some(JsonFrame::Key(_)) => {
-                            let Some(JsonFrame::Key(key)) = stack.pop() else {
-                                unreachable!()
-                            };
-                            let Some(JsonFrame::Object(values)) = stack.last_mut() else {
-                                unreachable!()
-                            };
-                            values.insert(key, item);
-                        }
-                        Some(JsonFrame::Object(_)) => {
-                            return Err(self.error("Objects must consist of key:value pairs"));
-                        }
-                        None => return Err(self.error("',' not as part of an object or array")),
-                    }
-                }
-                b']' => {
-                    self.take()?;
-                    let Some(JsonFrame::Array(mut values)) = stack.pop() else {
-                        return Err(self.error("Unmatched ']'"));
-                    };
-                    if let Some(item) = value.take() {
-                        values.push(item);
-                    } else if !values.is_empty() {
-                        return Err(self.error("Expected another array element"));
-                    }
-                    value = Some(Val::Arr(json::Rc::new(values)));
-                }
-                b'}' => {
-                    self.take()?;
-                    if let Some(item) = value.take() {
-                        let Some(JsonFrame::Key(key)) = stack.pop() else {
-                            return Err(self.error("Objects must consist of key:value pairs"));
-                        };
-                        let Some(JsonFrame::Object(mut values)) = stack.pop() else {
-                            unreachable!()
-                        };
-                        values.insert(key, item);
-                        value = Some(Val::obj(values));
-                    } else {
-                        let Some(JsonFrame::Object(values)) = stack.pop() else {
-                            return Err(self.error("Unmatched '}'"));
-                        };
-                        if !values.is_empty() {
-                            return Err(self.error("Expected another key-value pair"));
-                        }
-                        value = Some(Val::obj(values));
-                    }
-                }
-                _ => {
-                    if value.is_some() {
-                        return Err(self.error("Expected separator between values"));
-                    }
-                    value = Some(if next == b'"' {
-                        self.string()?
-                    } else {
-                        self.literal()?
-                    });
-                }
+                normalized.insert(key, normalize_input(value.clone())?);
             }
-        }
-    }
-
-    fn string(&mut self) -> Result<Val, RunError> {
-        self.take()?;
-        let mut bytes = vec![b'"'];
-        loop {
-            let byte = self
-                .take()?
-                .ok_or_else(|| self.error("Unfinished string at EOF"))?;
-            bytes.push(byte);
-            if byte == b'"' {
-                break;
-            }
-            if byte == b'\\' {
-                bytes.push(
-                    self.take()?
-                        .ok_or_else(|| self.error("Unfinished string at EOF"))?,
-                );
-            }
-        }
-        let text = String::from_utf8_lossy(&bytes);
-        serde_json::from_str::<String>(&text)
-            .map(Val::utf8_str)
-            .map_err(|error| self.error(&format!("Invalid string: {error}")))
-    }
-
-    fn literal(&mut self) -> Result<Val, RunError> {
-        let mut bytes = Vec::new();
-        while let Some(byte) = self.peek()? {
-            if matches!(
-                byte,
-                b' ' | b'\t' | b'\r' | b'\n' | b'[' | b']' | b'{' | b'}' | b',' | b':' | b'"'
-            ) {
-                break;
-            }
-            bytes.push(byte);
-            self.take()?;
-        }
-        let number = match bytes.as_slice() {
-            b"null" => return Ok(Val::Null),
-            b"true" => return Ok(Val::Bool(true)),
-            b"false" => return Ok(Val::Bool(false)),
-            b"NaN" | b"-NaN" | b"+NaN" => Some(Num::Float(f64::NAN)),
-            b"Infinity" | b"+Infinity" => Some(Num::Float(f64::INFINITY)),
-            b"-Infinity" => Some(Num::Float(f64::NEG_INFINITY)),
-            number => {
-                // jq accepts a leading plus on input, but JSON output numbers must not have one.
-                let number = number
-                    .strip_prefix(b"+")
-                    .filter(|unsigned| !unsigned.starts_with(b"-"))
-                    .unwrap_or(number);
-                if valid_number(number) {
-                    json::read::parse_single_num(number)
-                } else {
-                    None
-                }
-            }
-        };
-        match number {
-            Some(number) => Ok(Val::Num(number)),
-            None => {
-                self.take()?;
-                Err(self.error("Invalid numeric literal"))
-            }
+            Ok(Val::obj(normalized))
         }
     }
 }
 
-fn valid_number(bytes: &[u8]) -> bool {
-    let mut index = usize::from(bytes.first() == Some(&b'-'));
-    match bytes.get(index) {
-        Some(b'0') => index += 1,
-        Some(b'1'..=b'9') => {
-            index += 1;
-            while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-                index += 1;
-            }
-        }
-        _ => return false,
-    }
-    if bytes.get(index) == Some(&b'.') {
-        index += 1;
-        let start = index;
-        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            index += 1;
-        }
-        if index == start {
-            return false;
-        }
-    }
-    if matches!(bytes.get(index), Some(b'e' | b'E')) {
-        index += 1;
-        if matches!(bytes.get(index), Some(b'+' | b'-')) {
-            index += 1;
-        }
-        let start = index;
-        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            index += 1;
-        }
-        if index == start {
-            return false;
-        }
-    }
-    index == bytes.len()
+fn strip_bom(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)
 }
 
 fn parse_single_json(bytes: &[u8]) -> Result<Val, RunError> {
-    let mut reader = JsonInput::new(io::Cursor::new(bytes));
-    let value = reader
-        .next_value()?
-        .ok_or_else(|| reader.error("Expected JSON value"))?;
-    if reader.next_value()?.is_some() {
-        return Err(reader.error("Unexpected extra JSON value"));
-    }
-    Ok(value)
+    let value = json::read::parse_single_jq(strip_bom(bytes))
+        .map_err(|error| RunError::Input(error.to_string()))?;
+    normalize_input(value).map_err(RunError::Input)
 }
 
 #[derive(Default)]
@@ -939,6 +965,9 @@ struct OutputOptions {
     ascii: bool,
     raw: bool,
     join: bool,
+    indent: Option<i8>,
+    seq: bool,
+    raw_output0: bool,
 }
 
 fn json_text(value: &Val) -> Result<Val, json::Error> {
@@ -973,9 +1002,6 @@ fn validate_json(value: &Val) -> Result<(), RunError> {
                     pending.push(value);
                 }
             }
-            Val::Num(Num::Dec(number)) if !valid_number(number.as_bytes()) => {
-                return Err(RunError::Filter("invalid JSON number".to_string()));
-            }
             _ => {}
         }
     }
@@ -986,6 +1012,101 @@ enum WriteFrame<'a> {
     Value(&'a Val, usize),
     Array(&'a [Val], usize, usize),
     Object(&'a json::Map, Option<Vec<usize>>, usize, usize),
+}
+
+fn write_number(output: &mut dyn Write, number: &Num) -> Result<(), RunError> {
+    if let Num::Float(number) = number {
+        if *number == 0.0 && number.is_sign_negative() {
+            output.write_all(b"-0").map_err(RunError::Io)?;
+        } else {
+            write!(output, "{number}").map_err(RunError::Io)?;
+        }
+        return Ok(());
+    }
+    if let Num::Dec(number) = number {
+        output
+            .write_all(format_decimal(number).as_bytes())
+            .map_err(RunError::Io)?;
+    } else {
+        write!(output, "{number}").map_err(RunError::Io)?;
+    }
+    Ok(())
+}
+
+fn format_decimal(number: &str) -> String {
+    let (negative, number) = number
+        .strip_prefix('-')
+        .map_or((false, number), |number| (true, number));
+    let (coefficient, exponent) =
+        number
+            .split_once(['e', 'E'])
+            .map_or((number, 0_i64), |(coefficient, exponent)| {
+                let exponent = exponent.parse::<i64>().unwrap_or_else(|_| {
+                    if exponent.starts_with('-') {
+                        i64::MIN
+                    } else {
+                        i64::MAX
+                    }
+                });
+                (coefficient, exponent)
+            });
+    let (integer, fractional) = coefficient
+        .split_once('.')
+        .map_or((coefficient, ""), |(integer, fractional)| {
+            (integer, fractional)
+        });
+    let mut digits = String::with_capacity(integer.len() + fractional.len());
+    digits.push_str(integer);
+    digits.push_str(fractional);
+    let leading = digits
+        .bytes()
+        .position(|byte| byte != b'0')
+        .unwrap_or(digits.len());
+    let sign = if negative { "-" } else { "" };
+    if leading == digits.len() {
+        let scale = i64::try_from(fractional.len()).unwrap_or(i64::MAX) - exponent;
+        return if scale > 0 {
+            format!(
+                "{sign}0.{}0",
+                "0".repeat(usize::try_from(scale - 1).unwrap_or(0))
+            )
+        } else if scale == 0 {
+            format!("{sign}0")
+        } else {
+            format!("{sign}0E+{}", scale.saturating_neg())
+        };
+    }
+    let digits = &digits[leading..];
+    let position = i64::try_from(integer.len()).unwrap_or(i64::MAX)
+        - i64::try_from(leading).unwrap_or(i64::MAX)
+        + exponent;
+    let mut result = String::new();
+    result.push_str(sign);
+    if position <= 0 {
+        result.push_str("0.");
+        result.push_str(&"0".repeat(usize::try_from(position.saturating_neg()).unwrap_or(0)));
+        result.push_str(digits);
+    } else if usize::try_from(position).unwrap_or(usize::MAX) <= digits.len() {
+        let position = usize::try_from(position).unwrap_or(digits.len());
+        result.push_str(&digits[..position]);
+        if position < digits.len() {
+            result.push('.');
+            result.push_str(&digits[position..]);
+        }
+    } else {
+        result.push(digits.as_bytes()[0] as char);
+        if digits.len() > 1 {
+            result.push('.');
+            result.push_str(&digits[1..]);
+        }
+        result.push('E');
+        let exponent = position - 1;
+        if exponent >= 0 {
+            result.push('+');
+        }
+        result.push_str(&exponent.to_string());
+    }
+    result
 }
 
 fn write_json(
@@ -1014,7 +1135,7 @@ fn write_json(
                         })
                         .map_err(RunError::Io)?;
                 }
-                Val::Num(number) => write!(output, "{number}").map_err(RunError::Io)?,
+                Val::Num(number) => write_number(output, number)?,
                 Val::TStr(text) => {
                     write_string(output, text, options.ascii).map_err(RunError::Io)?
                 }
@@ -1082,7 +1203,7 @@ fn write_separator(
     }
     if !options.compact {
         output.write_all(b"\n")?;
-        write_indent(output, depth)?;
+        write_indent(output, depth, options.indent)?;
     }
     Ok(())
 }
@@ -1096,14 +1217,30 @@ fn write_end(
 ) -> io::Result<()> {
     if !options.compact && length != 0 {
         output.write_all(b"\n")?;
-        write_indent(output, depth)?;
+        write_indent(output, depth, options.indent)?;
     }
     output.write_all(end)
 }
 
-fn write_indent(output: &mut dyn Write, depth: usize) -> io::Result<()> {
-    for _ in 0..depth {
-        output.write_all(b"  ")?;
+fn write_indent(output: &mut dyn Write, depth: usize, indent: Option<i8>) -> io::Result<()> {
+    match indent {
+        Some(-1) => {
+            for _ in 0..depth {
+                output.write_all(b"\t")?;
+            }
+        }
+        Some(spaces) => {
+            for _ in 0..depth {
+                for _ in 0..spaces {
+                    output.write_all(b" ")?;
+                }
+            }
+        }
+        None => {
+            for _ in 0..depth {
+                output.write_all(b"  ")?;
+            }
+        }
     }
     Ok(())
 }
