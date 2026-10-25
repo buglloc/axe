@@ -1005,7 +1005,6 @@ fn compare_directory(
 fn write_output(program: &str, output: &[u8], status: i32) -> i32 {
     match io::stdout().lock().write_all(output) {
         Ok(()) => status,
-        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => status,
         Err(error) => {
             eprintln!("{program}: {error}");
             2

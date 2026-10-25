@@ -1080,8 +1080,19 @@ fn a_closed_stdout_consumer_does_not_erase_earlier_operand_errors() {
                 .stderr(Stdio::piped())
                 .output()
                 .expect("run with an already-closed stdout consumer");
-            let expected = if corrupt && format == "bzip2" { 2 } else { 1 };
-            assert_eq!(output.status.code(), Some(expected), "{applet}: {output:?}");
+            if corrupt && format == "bzip2" {
+                assert!(
+                    output.status.signal() == Some(libc::SIGPIPE)
+                        || output.status.code() == Some(2),
+                    "{applet}: {output:?}"
+                );
+            } else {
+                assert_eq!(
+                    output.status.signal(),
+                    Some(libc::SIGPIPE),
+                    "{applet}: {output:?}"
+                );
+            }
             assert!(
                 !String::from_utf8_lossy(&output.stderr).contains("not-reached"),
                 "{output:?}"

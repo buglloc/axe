@@ -76,9 +76,9 @@ fn entry(args: Vec<OsString>, format: Format) -> i32 {
 
     match Options::parse(name.clone(), format, args.into_iter().skip(1)).and_then(Options::run) {
         Ok(code) => code,
+        // --help and --version finish parsing with an empty Interrupted error.
         Err(error)
-            if error.kind() == io::ErrorKind::BrokenPipe
-                || (error.kind() == io::ErrorKind::Interrupted && error.to_string().is_empty()) =>
+            if error.kind() == io::ErrorKind::Interrupted && error.to_string().is_empty() =>
         {
             0
         }
@@ -390,12 +390,6 @@ impl Options {
             } else {
                 self.process_file(Path::new(file))
             };
-            if result
-                .as_ref()
-                .is_err_and(|error| error.kind() == io::ErrorKind::BrokenPipe)
-            {
-                return Ok(status);
-            }
             let code = self.finish_operand(&file.to_string_lossy(), result)?;
             status = self.merge_status(status, code);
         }
@@ -420,7 +414,6 @@ impl Options {
     fn finish_operand(&self, name: &str, result: io::Result<i32>) -> io::Result<i32> {
         match result {
             Ok(code) => Ok(code),
-            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Err(error),
             Err(error) => {
                 let message = error.to_string();
                 let message = if error.raw_os_error().is_some() {

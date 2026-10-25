@@ -1,5 +1,6 @@
 //! Process management utilities
 
+use std::io;
 use std::process::Stdio;
 
 use futures::FutureExt as _;
@@ -69,6 +70,23 @@ fn compose_std_command(command: LaunchRequest) -> std::io::Result<std::process::
     cmd.current_dir(command.working_dir);
     cmd.env_clear();
     cmd.envs(command.env);
+    #[cfg(unix)]
+    if let Some(sigpipe_handler) = crate::sys::sigpipe::child_sigpipe_handler() {
+        use std::os::unix::process::CommandExt as _;
+
+        // std resets SIGPIPE to SIG_DFL in the forked child.  AXE's shell
+        // records an inherited SIG_IGN disposition in process-global state
+        // so it can be restored for this child, matching bash.
+        unsafe {
+            cmd.pre_exec(move || {
+                let result = libc::signal(libc::SIGPIPE, sigpipe_handler);
+                if result == libc::SIG_ERR {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
 
     // A closed standard stream gets the null device.
     // TODO(redirection): close it instead, as bash does (e.g., with a `pre_exec`

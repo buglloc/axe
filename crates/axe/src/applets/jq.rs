@@ -83,7 +83,6 @@ pub fn jq(args: Vec<OsString>) -> i32 {
     match run(options) {
         Ok(code) => code,
         Err(RunError::Halt(code)) => code,
-        Err(RunError::Io(error)) if error.kind() == io::ErrorKind::BrokenPipe => 0,
         Err(RunError::Io(error)) => {
             eprintln!("jq: {error}");
             2

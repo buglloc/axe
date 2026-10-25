@@ -222,6 +222,7 @@ pub fn doctor(args: Vec<OsString>) -> i32 {
         ScopeInput::Process,
         &mut stdout.lock(),
         &mut stderr.lock(),
+        false,
     )
 }
 
@@ -233,7 +234,13 @@ pub fn doctor_builtin(invocation: InProcessInvocation) -> u8 {
         mut stdout,
         mut stderr,
     } = invocation;
-    run(argv, ScopeInput::Shell(shell), &mut stdout, &mut stderr) as u8
+    run(
+        argv,
+        ScopeInput::Shell(shell),
+        &mut stdout,
+        &mut stderr,
+        true,
+    ) as u8
 }
 
 fn run(
@@ -241,10 +248,11 @@ fn run(
     scope: ScopeInput,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
+    shell_mode: bool,
 ) -> i32 {
     let options = match parse_options(&args) {
         Ok(Some(options)) => options,
-        Ok(None) => return write_output(stdout, HELP.as_bytes()),
+        Ok(None) => return write_output(stdout, HELP.as_bytes(), shell_mode),
         Err(error) => {
             let _ = writeln!(stderr, "doctor: {error}");
             return 2;
@@ -256,7 +264,7 @@ fn run(
         match serde_json::to_vec(&report) {
             Ok(mut output) => {
                 output.push(b'\n');
-                write_output(stdout, &output)
+                write_output(stdout, &output, shell_mode)
             }
             Err(error) => {
                 let _ = writeln!(stderr, "doctor: cannot serialize report: {error}");
@@ -264,7 +272,11 @@ fn run(
             }
         }
     } else {
-        write_output(stdout, render_human(&report, options.verbose).as_bytes())
+        write_output(
+            stdout,
+            render_human(&report, options.verbose).as_bytes(),
+            shell_mode,
+        )
     }
 }
 
@@ -1058,10 +1070,13 @@ fn bundled_failure_class(errno: Option<i32>) -> &'static str {
     }
 }
 
-fn write_output(writer: &mut impl Write, bytes: &[u8]) -> i32 {
-    match writer.write_all(bytes) {
+fn write_output(writer: &mut impl Write, bytes: &[u8], shell_mode: bool) -> i32 {
+    let result = writer.write_all(bytes);
+    if shell_mode {
+        return crate::applets::in_process_io_status(result, 5);
+    }
+    match result {
         Ok(()) => 0,
-        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => 0,
         Err(_) => 5,
     }
 }

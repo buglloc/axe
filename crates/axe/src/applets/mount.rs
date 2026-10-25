@@ -1630,9 +1630,6 @@ fn list(args: &Args) -> Result<(), Failure> {
         }
         line.push(b'\n');
         if let Err(error) = stdout.write_all(&line) {
-            if error.kind() == io::ErrorKind::BrokenPipe {
-                return Ok(());
-            }
             return Err(failed(format!("write error: {}", strerror(&error))));
         }
     }

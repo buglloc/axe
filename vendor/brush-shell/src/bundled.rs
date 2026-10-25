@@ -234,6 +234,11 @@ pub fn install_with_executable(
     let _ = REGISTRY.set(commands);
 }
 
+/// Selects the SIGPIPE disposition restored for bundled child processes.
+pub fn set_child_sigpipe_ignored(ignored: bool) {
+    brush_core::sys::sigpipe::set_child_sigpipe_ignored(ignored);
+}
+
 /// Installs the registry from all compiled-in providers.
 ///
 /// Providers are controlled by Cargo features. Binaries should call this

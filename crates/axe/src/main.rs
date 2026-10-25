@@ -5,6 +5,7 @@ mod ondemand;
 #[cfg(unix)]
 mod path_bridge;
 mod registry;
+mod sigpipe;
 mod tls_roots;
 
 mod embedded {
@@ -19,6 +20,7 @@ const HELP: &str = include_str!("help.txt");
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("AXE_BUILD_COMMIT"));
 
 fn main() {
+    sigpipe::initialize();
     // SAFETY: AXE has not initialized executable state or started any threads.
     unsafe {
         std::env::set_var("AXE", "true");
@@ -251,6 +253,7 @@ impl<'a> DirectInvocation<'a> {
             return None;
         }
 
+        sigpipe::restore_for_applet();
         let code = brush_shell::bundled::invoke_installed(name, self.args.iter().cloned())
             .unwrap_or_else(|error| {
                 eprintln!("axe: {error}");

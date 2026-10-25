@@ -67,6 +67,14 @@ pub fn vzik(args: Vec<std::ffi::OsString>) -> i32 {
     ::vzik::entry(args)
 }
 
+pub(crate) fn in_process_io_status(result: std::io::Result<()>, error_status: i32) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => 141,
+        Err(_) => error_status,
+    }
+}
+
 pub fn grep(args: Vec<OsString>) -> i32 {
     uu_grep::uumain(args.into_iter())
 }

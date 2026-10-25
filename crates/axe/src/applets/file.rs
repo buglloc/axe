@@ -111,7 +111,6 @@ pub fn file(args: Vec<OsString>) -> i32 {
 
     match run(&args, &mut io::BufWriter::new(io::stdout().lock())) {
         Ok(code) => code,
-        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => 0,
         Err(error) => {
             eprintln!("file: {error}");
             1

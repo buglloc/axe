@@ -42,25 +42,19 @@ impl Printer {
         file_info: &WalkEntry,
         matcher_io: &mut MatcherIO,
         mut out: impl Write,
-        print_error_message: bool,
     ) {
         let result = out
             .write_all(file_info.path().as_os_str().as_encoded_bytes())
             .and_then(|()| write!(out, "{}", self.delimiter))
             .and_then(|()| out.flush());
         if let Err(e) = result {
-            if e.kind() == std::io::ErrorKind::BrokenPipe {
-                std::process::exit(0);
-            }
-            if print_error_message {
-                writeln!(
-                    &mut stderr(),
-                    "Error writing {:?} for {}",
-                    file_info.path().to_string_lossy(),
-                    e
-                )
-                .unwrap();
-            }
+            writeln!(
+                &mut stderr(),
+                "Error writing {:?} for {}",
+                file_info.path().to_string_lossy(),
+                e
+            )
+            .unwrap();
             matcher_io.set_exit_code(1);
         }
     }
@@ -69,13 +63,12 @@ impl Printer {
 impl Matcher for Printer {
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         if let Some(file) = &self.output_file {
-            self.print(file_info, matcher_io, file, true);
+            self.print(file_info, matcher_io, file);
         } else {
             self.print(
                 file_info,
                 matcher_io,
                 &mut *matcher_io.deps.get_output().borrow_mut(),
-                false,
             );
         }
         true

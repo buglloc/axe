@@ -95,9 +95,6 @@ pub fn goblin(args: Vec<OsString>) -> i32 {
             if let Err(error) =
                 result.and_then(|()| output.write_all(b"\n").map_err(serde_json::Error::io))
             {
-                if error.io_error_kind() == Some(io::ErrorKind::BrokenPipe) {
-                    return 0;
-                }
                 write_error("output", &args.file, &error.to_string());
                 return 1;
             }

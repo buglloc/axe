@@ -150,7 +150,6 @@ fn run_output(
     let flushed = out.flush().map_err(CommandError::from);
     match result.and(flushed) {
         Ok(()) => 0,
-        Err(error) if error.io_kind == Some(io::ErrorKind::BrokenPipe) => 0,
         Err(error) => {
             let mut stderr = io::stderr().lock();
             if error.io_kind.is_some() {

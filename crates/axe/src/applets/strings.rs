@@ -320,9 +320,6 @@ pub fn strings(args: Vec<OsString>) -> i32 {
             print_input_error(path.as_deref(), &error);
             true
         }
-        Err((_, RunError::Output(error))) if error.kind() == io::ErrorKind::BrokenPipe => {
-            return 0;
-        }
         Err((_, RunError::Output(error))) => {
             eprintln!("strings: write error: {error}");
             return 1;
@@ -330,12 +327,8 @@ pub fn strings(args: Vec<OsString>) -> i32 {
     };
 
     if let Err(error) = output.flush() {
-        return if error.kind() == io::ErrorKind::BrokenPipe {
-            0
-        } else {
-            eprintln!("strings: write error: {error}");
-            1
-        };
+        eprintln!("strings: write error: {error}");
+        return 1;
     }
 
     i32::from(failed)

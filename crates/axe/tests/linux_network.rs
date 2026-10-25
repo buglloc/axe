@@ -5,6 +5,7 @@ use std::net::Ipv6Addr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
@@ -106,7 +107,9 @@ fn actual_ip_output_handles_full_devices_and_closed_consumers() {
         .stdout(Stdio::from(fd))
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", describe(&output));
+    // Like iproute2, a closed consumer terminates ip with the inherited SIGPIPE.
+    assert_eq!(output.status.signal(), Some(13), "{}", describe(&output));
+    assert!(output.stderr.is_empty());
 }
 
 #[test]

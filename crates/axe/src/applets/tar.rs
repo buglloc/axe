@@ -24,9 +24,9 @@ use lzma_rust2::{XzOptions, XzReader, XzWriter};
 pub fn tar(args: Vec<OsString>) -> i32 {
     match Options::parse(args).and_then(Options::run) {
         Ok(()) => 0,
+        // --help and --version finish parsing with an empty Interrupted error.
         Err(error)
-            if error.kind() == io::ErrorKind::BrokenPipe
-                || (error.kind() == io::ErrorKind::Interrupted && error.to_string().is_empty()) =>
+            if error.kind() == io::ErrorKind::Interrupted && error.to_string().is_empty() =>
         {
             0
         }

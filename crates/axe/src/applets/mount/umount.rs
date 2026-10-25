@@ -224,7 +224,6 @@ fn run_inner(args: Vec<OsString>) -> Result<i32, Failure> {
             };
             return match writeln!(io::stdout().lock(), "{text}") {
                 Ok(()) => Ok(0),
-                Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(0),
                 Err(error) => Err(failed(format!("write error: {}", strerror(&error)))),
             };
         }

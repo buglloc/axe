@@ -29,6 +29,32 @@ pub mod tokio_process;
 #[cfg(any(unix, windows))]
 pub(crate) mod tokio_tasks;
 
+#[cfg(unix)]
+/// Signal policy used by child processes launched through Brush.
+pub mod sigpipe {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static CHILD_SIGPIPE_IGNORED: AtomicBool = AtomicBool::new(false);
+
+    /// Selects whether child process setup restores an inherited SIG_IGN.
+    pub fn set_child_sigpipe_ignored(ignored: bool) {
+        CHILD_SIGPIPE_IGNORED.store(ignored, Ordering::Relaxed);
+    }
+
+    pub(crate) fn child_sigpipe_handler() -> Option<libc::sighandler_t> {
+        CHILD_SIGPIPE_IGNORED
+            .load(Ordering::Relaxed)
+            .then_some(libc::SIG_IGN)
+    }
+}
+
+#[cfg(not(unix))]
+/// Signal policy stubs for platforms without Unix signal dispositions.
+pub mod sigpipe {
+    /// Selects the child signal policy; this is a no-op on non-Unix targets.
+    pub fn set_child_sigpipe_ignored(_ignored: bool) {}
+}
+
 pub mod fs;
 
 pub use platform::async_pipe;
