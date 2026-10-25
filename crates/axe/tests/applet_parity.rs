@@ -837,8 +837,22 @@ fn blkid_matches_util_linux_for_filtered_filesystem_type() {
     let scratch = Scratch::new("blkid");
     let image = scratch.path().join("ext4.img");
     let mut bytes = vec![0u8; 2048];
+    bytes[1024..1028].copy_from_slice(&2048u32.to_le_bytes());
+    bytes[1028..1032].copy_from_slice(&16_384u32.to_le_bytes());
+    bytes[1044..1048].copy_from_slice(&1u32.to_le_bytes());
+    bytes[1056..1060].copy_from_slice(&8192u32.to_le_bytes());
+    bytes[1064..1068].copy_from_slice(&1024u32.to_le_bytes());
+    bytes[1100..1104].copy_from_slice(&1u32.to_le_bytes());
+    bytes[1112..1114].copy_from_slice(&128u16.to_le_bytes());
+    bytes[1120..1124].copy_from_slice(&0x40u32.to_le_bytes());
     bytes[1080..1082].copy_from_slice(&[0x53, 0xef]);
-    fs::write(image, bytes).expect("write ext4 fixture");
+    fs::write(&image, bytes).expect("write ext4 fixture");
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&image)
+        .expect("open ext4 fixture")
+        .set_len(16 * 1024 * 1024)
+        .expect("size ext4 fixture");
 
     assert_parity(
         "blkid",
