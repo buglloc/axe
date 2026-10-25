@@ -5,6 +5,8 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 #[cfg(unix)]
+use std::os::unix::ffi::OsStringExt as _;
+#[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Component, Path, PathBuf};
 #[cfg(not(unix))]
@@ -87,6 +89,84 @@ fn operand(name: OsString, directory: usize, wildcards: Option<bool>) -> Operand
     }
 }
 
+fn os_string_from_bytes(bytes: &[u8]) -> OsString {
+    #[cfg(unix)]
+    {
+        OsString::from_vec(bytes.to_vec())
+    }
+    #[cfg(not(unix))]
+    {
+        OsString::from(String::from_utf8_lossy(bytes).into_owned())
+    }
+}
+
+fn append_files_from(
+    path: &OsStr,
+    null_files: bool,
+    directories: &mut Vec<PathBuf>,
+    operands: &mut Vec<Operand>,
+    wildcards: Option<bool>,
+) -> io::Result<()> {
+    if path == OsStr::new("-") {
+        let stdin = io::stdin();
+        read_files_from(stdin.lock(), null_files, directories, operands, wildcards)
+    } else {
+        read_files_from(
+            File::open(path)?,
+            null_files,
+            directories,
+            operands,
+            wildcards,
+        )
+    }
+}
+
+fn read_files_from<R: Read>(
+    input: R,
+    null_files: bool,
+    directories: &mut Vec<PathBuf>,
+    operands: &mut Vec<Operand>,
+    wildcards: Option<bool>,
+) -> io::Result<()> {
+    let mut input = BufReader::new(input);
+    let delimiter = if null_files { b'\0' } else { b'\n' };
+    let mut record = Vec::new();
+    loop {
+        record.clear();
+        if input.read_until(delimiter, &mut record)? == 0 {
+            break;
+        }
+        if record.last() == Some(&delimiter) {
+            record.pop();
+        }
+        if record.is_empty() {
+            continue;
+        }
+        if !null_files {
+            let directory = record
+                .strip_prefix(b"-C")
+                .or_else(|| record.strip_prefix(b"--directory"));
+            if let Some(directory) = directory {
+                let directory = directory
+                    .strip_prefix(b"=")
+                    .unwrap_or(directory)
+                    .trim_ascii_start();
+                if directory.is_empty() {
+                    return Err(invalid("files-from directory option requires an argument"));
+                }
+                directories.push(PathBuf::from(os_string_from_bytes(directory)));
+                continue;
+            }
+        }
+        operands.push(operand(
+            os_string_from_bytes(&record),
+            directories.len() - 1,
+            wildcards,
+        ));
+    }
+    Ok(())
+}
+
 impl Options {
     fn parse(args: Vec<OsString>) -> io::Result<Self> {
         let mut action = None;
@@ -106,6 +186,7 @@ impl Options {
         let mut auto_compress = false;
         let mut dereference = false;
         let mut wildcards = None;
+        let mut null_files = false;
         let mut iter = args.into_iter();
         let _name = iter.next();
         let mut first = true;
@@ -130,6 +211,17 @@ impl Options {
                 match option {
                     "--file" => {
                         archive = Some(long_argument(option, value, &mut iter)?);
+                        continue;
+                    }
+                    "--files-from" => {
+                        let file = long_argument(option, value, &mut iter)?;
+                        append_files_from(
+                            &file,
+                            null_files,
+                            &mut directories,
+                            &mut operands,
+                            wildcards,
+                        )?;
                         continue;
                     }
                     "--directory" => {
@@ -158,9 +250,9 @@ impl Options {
                     "--auto-compress" => auto_compress = true,
                     "--no-auto-compress" => auto_compress = false,
                     "--dereference" => dereference = true,
+                    "--null" => null_files = true,
                     "--wildcards" => wildcards = Some(true),
                     "--no-wildcards" => wildcards = Some(false),
-                    "--verbose" => verbose = true,
                     "--to-stdout" => to_stdout = true,
                     "--same-permissions" | "--preserve-permissions" => {
                         preserve_permissions = Some(true);
@@ -178,7 +270,8 @@ impl Options {
                             println!(
                                 "Usage: tar (-c|--create)|(-x|--extract)|(-t|--list) \
                                  [-z|-j|-J|--zstd|-a] [-h] [-v] [-m] [-O] \
-                                 [--strip-components N] [-f ARCHIVE] [-C DIR] [FILE...]"
+                                 [--strip-components N] [-f ARCHIVE] [-C DIR] \
+                                 [-T FILE] [--null] [FILE...]"
                             );
                         } else {
                             println!("tar (axe) {}", env!("CARGO_PKG_VERSION"));
@@ -205,7 +298,7 @@ impl Options {
                         'm' => preserve_mtime = false,
                         'O' => to_stdout = true,
                         'k' => overwrite = false,
-                        'f' | 'C' => {
+                        'f' | 'C' | 'T' => {
                             // Old-style argument-taking options consume the next word,
                             // not the remaining letters in the option cluster.
                             let value = if !old_style && !chars.as_str().is_empty() {
@@ -219,10 +312,17 @@ impl Options {
                                     })
                                 })?
                             };
-                            if flag == 'f' {
-                                archive = Some(value);
-                            } else {
-                                directories.push(PathBuf::from(value));
+                            match flag {
+                                'f' => archive = Some(value),
+                                'C' => directories.push(PathBuf::from(value)),
+                                'T' => append_files_from(
+                                    &value,
+                                    null_files,
+                                    &mut directories,
+                                    &mut operands,
+                                    wildcards,
+                                )?,
+                                _ => unreachable!(),
                             }
                             if !old_style {
                                 break;

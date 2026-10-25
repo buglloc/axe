@@ -190,6 +190,10 @@ Zstd `-l`; these are rejected, not silently ignored.
 
 `tar` accepts old-style clusters such as `tar cfz archive.tgz directory`;
 argument-taking options consume following words, and `-C` is positional.
+`-T FILE`/`--files-from=FILE` adds byte-exact names from a newline-delimited list;
+`--null` switches lists to NUL delimiters. List entries may include `-C DIR`
+or `--directory=DIR` directives, and files-from operands combine with positional
+members and `--exclude`.
 Listings stream as entries are read. `--strip-components=N` affects extraction,
 not listing. Extraction checks member paths, parent directories and hardlink
 targets against the destination. Missing requested members exit with status 2.
