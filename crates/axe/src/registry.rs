@@ -321,7 +321,7 @@ fn bundled_category(name: &str) -> &'static str {
         | "pathchk" | "pwd" | "readlink" | "realpath" | "rm" | "rmdir" | "stat" | "touch"
         | "tree" | "truncate" | "unlink" | "vdir" => "files",
         "awk" | "b2sum" | "base32" | "base64" | "basenc" | "cat" | "cksum" | "cmp" | "comm"
-        | "csplit" | "cut" | "diff" | "diff3" | "expand" | "factor" | "fmt" | "fold" | "grep"
+        | "csplit" | "cut" | "diff" | "expand" | "factor" | "fmt" | "fold" | "grep"
         | "head" | "hexdump" | "join" | "jq" | "md5sum" | "nl" | "numfmt" | "od" | "paste"
         | "pr" | "ptx" | "sed" | "seq" | "sha1sum" | "sha224sum" | "sha256sum" | "sha384sum"
         | "sha512sum" | "shuf" | "sort" | "split" | "sum" | "tac" | "tail" | "tee" | "tr"
@@ -380,7 +380,6 @@ fn bundled_synopsis(name: &str) -> &'static str {
         "dd" => "Copy and convert raw data streams",
         "df" => "Report filesystem space usage",
         "diff" => "Compare files line by line",
-        "diff3" => "Compare three files line by line",
         "dir" | "ls" | "vdir" => "List directory contents",
         "dircolors" => "Generate color settings for directory listings",
         "dirname" => "Strip the final component from paths",
@@ -575,7 +574,6 @@ pub fn build(
     {
         commands.insert_bundled("diff", None, crate::applets::diff as BundledFn);
         commands.insert_bundled("cmp", None, crate::applets::cmp as BundledFn);
-        commands.insert_bundled("diff3", None, crate::applets::diff3 as BundledFn);
     }
     commands.insert_bundled("file", None, crate::applets::file as BundledFn);
     commands.insert_bundled("goblin", None, crate::applets::goblin as BundledFn);

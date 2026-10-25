@@ -40,7 +40,7 @@ use std::ffi::OsString;
 pub use awk::awk;
 pub use commands::commands;
 pub use compression::{bzip2, gzip, xz, zstd};
-pub use diffutils::{cmp, diff, diff3};
+pub use diffutils::{cmp, diff};
 #[cfg(target_os = "linux")]
 pub use dns::{host, nslookup};
 pub use doctor::{doctor, doctor_builtin};

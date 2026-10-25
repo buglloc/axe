@@ -94,12 +94,7 @@ fn informational_options_do_not_override_delimited_file_operands() {
             1,
             b"1c1\n< one\n---\n> two\n",
         );
-        assert_output(
-            run(&scratch.0, "diff3", &["--", name, "base", "b"], b""),
-            0,
-            b"====\n1:1c\n  one\n2:1c\n  base\n3:1c\n  two\n",
-        );
-    }
+}
 }
 
 #[test]
@@ -116,17 +111,6 @@ fn labels_are_option_values_even_when_they_look_informational() {
         ),
         1,
         b"--- --help\n+++ --version\n@@ -1 +1 @@\n-old\n+new\n",
-    );
-    scratch.write("base", b"base\n");
-    assert_output(
-        run(
-            &scratch.0,
-            "diff3",
-            &["-m", "-L", "--help", "a", "base", "b"],
-            b"",
-        ),
-        1,
-        b"<<<<<<< --help\nold\n||||||| base\nbase\n=======\nnew\n>>>>>>> b\n",
     );
 }
 
@@ -288,128 +272,6 @@ fn shallow_directories_and_recursive_new_files_report_the_right_entries() {
     );
 }
 
-#[test]
-fn diff3_merge_groups_same_changes_and_adjacent_edits_as_gnu_conflicts() {
-    let scratch = Scratch::new("three-way-grouping");
-    scratch.write("mine", b"A\nb\n");
-    scratch.write("base", b"a\nb\n");
-    scratch.write("yours", b"A\nb\n");
-    assert_output(
-        run(&scratch.0, "diff3", &["-m", "mine", "base", "yours"], b""),
-        1,
-        b"<<<<<<< base\na\n=======\nA\n>>>>>>> yours\nb\n",
-    );
-    scratch.write("yours", b"a\nB\n");
-    assert_output(
-        run(
-            &scratch.0,
-            "diff3",
-            &["-m", "-A", "mine", "base", "yours"],
-            b"",
-        ),
-        1,
-        b"<<<<<<< mine\nA\nb\n||||||| base\na\nb\n=======\na\nB\n>>>>>>> yours\n",
-    );
-    scratch.write("mine", b"A\nb\nc\n");
-    scratch.write("base", b"a\nb\nc\n");
-    scratch.write("yours", b"a\nb\nC\n");
-    assert_output(
-        run(&scratch.0, "diff3", &["-m", "mine", "base", "yours"], b""),
-        0,
-        b"A\nb\nC\n",
-    );
-}
-
-#[test]
-fn diff3_reports_equal_sides_once_in_the_gnu_section_order() {
-    let scratch = Scratch::new("three-way-report");
-    for (mine, base, yours, expected) in [
-        (
-            b"A\nb\n".as_slice(),
-            b"a\nb\n".as_slice(),
-            b"a\nb\n".as_slice(),
-            b"====1\n1:1c\n  A\n2:1c\n3:1c\n  a\n".as_slice(),
-        ),
-        (
-            b"a\nb\n".as_slice(),
-            b"a\nb\n".as_slice(),
-            b"a\nB\n".as_slice(),
-            b"====3\n1:2c\n2:2c\n  b\n3:2c\n  B\n".as_slice(),
-        ),
-        (
-            b"A\nb\n".as_slice(),
-            b"a\nb\n".as_slice(),
-            b"A\nb\n".as_slice(),
-            b"====2\n1:1c\n3:1c\n  A\n2:1c\n  a\n".as_slice(),
-        ),
-    ] {
-        scratch.write("mine", mine);
-        scratch.write("base", base);
-        scratch.write("yours", yours);
-        assert_output(
-            run(&scratch.0, "diff3", &["mine", "base", "yours"], b""),
-            0,
-            expected,
-        );
-    }
-}
-
-#[test]
-fn diff3_incomplete_lines_are_annotated_in_reports_but_not_changed_in_merges() {
-    let scratch = Scratch::new("three-way-newline");
-    scratch.write("mine", b"ours");
-    scratch.write("base", b"base");
-    scratch.write("yours", b"theirs");
-    assert_output(run(&scratch.0, "diff3", &["mine", "base", "yours"], b""), 0,
-        b"====\n1:1c\n  ours\n\\ No newline at end of file\n2:1c\n  base\n\\ No newline at end of file\n3:1c\n  theirs\n\\ No newline at end of file\n");
-    assert_output(
-        run(&scratch.0, "diff3", &["-m", "mine", "base", "yours"], b""),
-        1,
-        b"<<<<<<< mine\nours||||||| base\nbase=======\ntheirs>>>>>>> yours\n",
-    );
-}
-
-#[test]
-fn diff3_binary_rejection_happens_before_any_report_or_merge_output() {
-    let scratch = Scratch::new("three-way-binary");
-    scratch.write("mine", b"a\0x\n");
-    scratch.write("base", b"a\0b\n");
-    scratch.write("yours", b"a\0y\n");
-    for flags in [&[][..], &["-m"][..]] {
-        let mut args = flags.to_vec();
-        args.extend(["mine", "base", "yours"]);
-        let output = run(&scratch.0, "diff3", &args, b"");
-        assert_eq!(output.status.code(), Some(2), "{output:?}");
-        assert!(output.stdout.is_empty(), "{output:?}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("diff failed: Binary files"),
-            "{output:?}"
-        );
-    }
-}
-
-#[test]
-fn diff3_accepts_partial_labels_stdin_and_ed_output() {
-    let scratch = Scratch::new("three-way-input");
-    scratch.write("mine", b"ours\n");
-    scratch.write("base", b"base\n");
-    scratch.write("yours", b"theirs\n");
-    assert_output(
-        run(
-            &scratch.0,
-            "diff3",
-            &["-m", "-L", "OURS", "-", "base", "yours"],
-            b"ours\n",
-        ),
-        1,
-        b"<<<<<<< OURS\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> yours\n",
-    );
-    assert_output(
-        run(&scratch.0, "diff3", &["-e", "mine", "base", "yours"], b""),
-        0,
-        b"1c\ntheirs\n.\n",
-    );
-}
 
 #[test]
 fn recursive_new_file_comparison_treats_missing_directory_roots_as_empty_trees() {
@@ -428,20 +290,6 @@ fn recursive_new_file_comparison_treats_missing_directory_roots_as_empty_trees()
     );
 }
 
-#[test]
-fn diff3_ed_escapes_literal_terminators_after_completing_incomplete_lines() {
-    let scratch = Scratch::new("ed-dot-terminator");
-    scratch.write("mine", b"keep\nold\n");
-    scratch.write("base", b"keep\nold\n");
-    for yours in [b"keep\n.".as_slice(), b"keep\n.\n".as_slice()] {
-        scratch.write("yours", yours);
-        assert_output(
-            run(&scratch.0, "diff3", &["-e", "mine", "base", "yours"], b""),
-            0,
-            b"2c\n..\n.\ns/.//\na\n.\n",
-        );
-    }
-}
 
 #[test]
 fn ignore_matching_lines_preserves_basic_bracket_backslashes_and_named_classes() {
@@ -528,20 +376,6 @@ fn side_by_side_ignored_replacements_use_common_row_markers() {
     );
 }
 
-#[test]
-fn diff3_ed_modes_emit_no_script_for_identical_incomplete_inputs() {
-    let scratch = Scratch::new("ed-incomplete-noop");
-    for name in ["mine", "base", "yours"] {
-        scratch.write(name, b"x");
-    }
-    for flag in ["-A", "-e"] {
-        assert_output(
-            run(&scratch.0, "diff3", &[flag, "mine", "base", "yours"], b""),
-            0,
-            b"",
-        );
-    }
-}
 
 #[test]
 fn cmp_byte_limits_stop_before_eof_or_differences_outside_the_selected_prefix() {
