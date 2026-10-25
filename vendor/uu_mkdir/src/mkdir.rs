@@ -325,6 +325,20 @@ fn restore_set_id(
     use rustix::fs::{AtFlags, Mode, OFlags};
     use std::os::fd::AsRawFd;
     use uucore::libc;
+    // libc 0.2.189 does not expose the Linux UAPI number on aarch64-musl.
+    // The syscall number is stable for this architecture.
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_os = "linux",
+        target_env = "musl"
+    ))]
+    const FCHMODAT2: libc::c_long = 452;
+    #[cfg(not(all(
+        target_arch = "aarch64",
+        target_os = "linux",
+        target_env = "musl"
+    )))]
+    const FCHMODAT2: libc::c_long = libc::SYS_fchmodat2;
 
     // O_PATH permits mode 000 directories.  Opening relative to the already
     // opened parent avoids resolving the pathname again after mkdirat().
@@ -347,7 +361,7 @@ fn restore_set_id(
     // SAFETY: the descriptor is open and the path is a NUL-terminated empty string.
     let result = unsafe {
         libc::syscall(
-            libc::SYS_fchmodat2,
+            FCHMODAT2,
             directory.as_raw_fd(),
             c"".as_ptr(),
             mode as libc::mode_t,
