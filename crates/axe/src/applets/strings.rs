@@ -609,7 +609,10 @@ fn scan_data_object(
         return Err(RunError::Input("object nesting is too deep".into()));
     }
 
-    let object = Object::parse(bytes).map_err(|error| RunError::Input(error.to_string()))?;
+    let object = match Object::parse(bytes) {
+        Ok(object) => object,
+        Err(_) => return scan_region(bytes, 0, label, options, output),
+    };
     match object {
         Object::Elf(elf) => {
             use goblin::elf::section_header::{SHF_ALLOC, SHT_NOBITS};
@@ -686,7 +689,7 @@ fn scan_data_object(
                 )?;
             }
         }
-        _ => return Err(RunError::Input("file format not recognized".into())),
+        _ => return scan_region(bytes, 0, label, options, output),
     }
 
     Ok(())
@@ -785,10 +788,11 @@ fn scan_wide(
                 run_start = cursor;
             }
             run.push(byte);
+            cursor += width;
         } else {
             emit_owned_run(&mut run, run_start, base_offset, options.minimum, emit)?;
+            cursor += 1;
         }
-        cursor += width;
     }
 
     emit_owned_run(&mut run, run_start, base_offset, options.minimum, emit)

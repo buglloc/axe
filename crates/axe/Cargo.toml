@@ -66,6 +66,7 @@ tokio = { version = "1.52", features = ["fs", "io-util", "macros", "net", "proce
 which.workspace = true
 ureq.workspace = true
 url.workspace = true
+unicode-width = "0.2"
 webpki-root-certs.workspace = true
 vzik.workspace = true
 whoami = { version = "2.1.3" }

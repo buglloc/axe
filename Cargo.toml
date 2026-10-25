@@ -93,6 +93,7 @@ brush-interactive = { git = "https://github.com/reubeno/brush", rev = "b562e0586
 brush-coreutils-builtins = { git = "https://github.com/reubeno/brush", rev = "b562e0586b366d0558b27019276e591856253947" }
 brush-clap-adapter = { git = "https://github.com/reubeno/brush", rev = "b562e0586b366d0558b27019276e591856253947" }
 awk-rs = { path = "vendor/awk-rs" }
+diffutils = { path = "vendor/diffutils" }
 sed-rs = { path = "vendor/sed-rs" }
 procutils-ps = { path = "vendor/procutils-ps" }
 uu_df = { path = "vendor/uu_df" }

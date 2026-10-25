@@ -517,6 +517,7 @@ dependencies = [
  "tar",
  "testcontainers",
  "tokio",
+ "unicode-width 0.2.2",
  "ureq",
  "url",
  "uu_chgrp",
@@ -2265,8 +2266,6 @@ checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 [[package]]
 name = "diffutils"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba25a244878378958384fa02533c31017f07dd7448687bba8c7ddfc6c48a8dde"
 dependencies = [
  "chrono",
  "diff",

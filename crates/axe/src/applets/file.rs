@@ -248,32 +248,37 @@ impl Kind {
                 sample,
                 complete,
             } => {
-                let plain_text = *format == FileFormat::PlainText;
+                let charset = content_charset(sample, *complete);
+                let plain_text = *format == FileFormat::PlainText
+                    || (*format == FileFormat::ArbitraryBinaryData && charset != "binary");
                 let json = plain_text
                     && *complete
                     && serde_json::from_slice::<serde_json::Value>(sample).is_ok();
                 let media_type = if json {
                     "application/json"
+                } else if let Some(media_type) = elf_media_type(sample) {
+                    media_type
+                } else if plain_text {
+                    "text/plain"
                 } else {
                     format.media_type()
-                };
-                let charset = if !plain_text {
-                    "binary"
-                } else if sample.is_ascii() {
-                    "us-ascii"
-                } else {
-                    "utf-8"
                 };
                 mode.render(
                     || {
                         if json {
                             "JSON text data".into()
+                        } else if plain_text {
+                            match charset {
+                                "us-ascii" => "ASCII text",
+                                "utf-8" => "Unicode text, UTF-8 text",
+                                "utf-16le" => "Unicode text, UTF-16, little-endian text",
+                                "utf-16be" => "Unicode text, UTF-16, big-endian text",
+                                "iso-8859-1" => "ISO-8859 text",
+                                _ => "data",
+                            }
+                            .into()
                         } else if *format == FileFormat::ArbitraryBinaryData {
                             "data".into()
-                        } else if plain_text && sample.is_ascii() {
-                            "ASCII text".into()
-                        } else if plain_text {
-                            "Unicode text, UTF-8 text".into()
                         } else {
                             format.name().into()
                         }
@@ -379,23 +384,153 @@ fn describe(path: &Path, dereference: bool, mode: MimeMode, hard: bool) -> Resul
     }
 
     let format = FileFormat::from_file(path).map_err(Failure::Open)?;
-    let (sample, complete) = if format == FileFormat::PlainText {
-        let mut sample = Vec::with_capacity(TEXT_SAMPLE_LIMIT as usize + 1);
-        fs::File::open(path)
-            .map_err(Failure::Open)?
-            .take(TEXT_SAMPLE_LIMIT + 1)
-            .read_to_end(&mut sample)
-            .map_err(Failure::Open)?;
-        let complete = sample.len() <= TEXT_SAMPLE_LIMIT as usize;
-        sample.truncate(TEXT_SAMPLE_LIMIT as usize);
-        (sample, complete)
-    } else {
-        (Vec::new(), false)
-    };
+    let mut sample = Vec::with_capacity(TEXT_SAMPLE_LIMIT as usize + 1);
+    fs::File::open(path)
+        .map_err(Failure::Open)?
+        .take(TEXT_SAMPLE_LIMIT + 1)
+        .read_to_end(&mut sample)
+        .map_err(Failure::Open)?;
+    let complete = sample.len() <= TEXT_SAMPLE_LIMIT as usize;
+    sample.truncate(TEXT_SAMPLE_LIMIT as usize);
     Ok(Kind::Content {
         format,
         sample,
         complete,
+    })
+}
+
+fn content_charset(sample: &[u8], complete: bool) -> &'static str {
+    if sample.starts_with(b"\xff\xfe") || sample.starts_with(b"\xfe\xff") {
+        let little_endian = sample.starts_with(b"\xff\xfe");
+        let mut bytes = &sample[2..];
+        if complete && !bytes.len().is_multiple_of(2) {
+            return "binary";
+        }
+        let decode_unit = |unit: &[u8; 2]| {
+            if little_endian {
+                u16::from_le_bytes([unit[0], unit[1]])
+            } else {
+                u16::from_be_bytes([unit[0], unit[1]])
+            }
+        };
+        bytes = &bytes[..bytes.len() / 2 * 2];
+        if !complete
+            && bytes
+                .last_chunk::<2>()
+                .is_some_and(|unit| (0xd800..=0xdbff).contains(&decode_unit(unit)))
+        {
+            bytes = &bytes[..bytes.len() - 2];
+        }
+        let units = bytes.as_chunks::<2>().0.iter().map(decode_unit);
+        if char::decode_utf16(units).all(|character| {
+            character.is_ok_and(|character| {
+                !character.is_control() || matches!(character, '\t' | '\n' | '\r' | '\u{c}')
+            })
+        }) {
+            return if little_endian {
+                "utf-16le"
+            } else {
+                "utf-16be"
+            };
+        }
+        return "binary";
+    }
+    let text_byte = |byte: u8| {
+        byte >= 0x20 && byte != 0x7f
+            || matches!(
+                byte,
+                b'\x07' | b'\x08' | b'\t' | b'\n' | b'\x0b' | b'\x0c' | b'\r' | b'\x1b'
+            )
+    };
+    if !sample.iter().copied().all(text_byte) {
+        return "binary";
+    }
+    if sample.is_ascii() {
+        return "us-ascii";
+    }
+    match std::str::from_utf8(sample) {
+        Ok(_) => return "utf-8",
+        Err(error) if !complete && error.error_len().is_none() => return "utf-8",
+        Err(_) => {}
+    }
+    if sample.iter().all(|byte| *byte < 0x80 || *byte >= 0xa0) {
+        "iso-8859-1"
+    } else {
+        "binary"
+    }
+}
+
+fn elf_media_type(sample: &[u8]) -> Option<&'static str> {
+    if !sample.starts_with(b"\x7fELF") {
+        return None;
+    }
+    let little_endian = match sample.get(5)? {
+        1 => true,
+        2 => false,
+        _ => return None,
+    };
+    let integer = |offset: usize, width: usize| -> Option<u64> {
+        let bytes = sample.get(offset..offset.checked_add(width)?)?;
+        Some(if little_endian {
+            bytes
+                .iter()
+                .rev()
+                .fold(0, |value, byte| value << 8 | u64::from(*byte))
+        } else {
+            bytes
+                .iter()
+                .fold(0, |value, byte| value << 8 | u64::from(*byte))
+        })
+    };
+    Some(match integer(16, 2)? {
+        1 => "application/x-object",
+        2 => "application/x-executable",
+        3 => {
+            let (offset, entry_size, count, wide) = match sample.get(4)? {
+                1 => (integer(28, 4)?, integer(42, 2)?, integer(44, 2)?, false),
+                2 => (integer(32, 8)?, integer(54, 2)?, integer(56, 2)?, true),
+                _ => return None,
+            };
+            let mut pie = false;
+            for index in 0..count {
+                let entry =
+                    usize::try_from(offset.checked_add(index.checked_mul(entry_size)?)?).ok()?;
+                match integer(entry, 4) {
+                    Some(3) => pie = true, // PT_INTERP
+                    Some(2) => {
+                        let (file_offset, file_size, word) = if wide {
+                            (integer(entry + 8, 8)?, integer(entry + 32, 8)?, 8)
+                        } else {
+                            (integer(entry + 4, 4)?, integer(entry + 16, 4)?, 4)
+                        };
+                        let start = usize::try_from(file_offset).ok()?;
+                        let size = usize::try_from(file_size).ok()?;
+                        let end = start.checked_add(size)?.min(sample.len());
+                        let mut cursor = start;
+                        while cursor.checked_add(word * 2).is_some_and(|next| next <= end) {
+                            let tag = integer(cursor, word)?;
+                            if tag == 0 {
+                                break;
+                            }
+                            if tag == 0x6fff_fffb
+                                && integer(cursor + word, word)? & 0x0800_0000 != 0
+                            {
+                                pie = true; // DT_FLAGS_1 / DF_1_PIE
+                            }
+                            cursor += word * 2;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if pie {
+                "application/x-pie-executable"
+            } else {
+                "application/x-sharedlib"
+            }
+        }
+        4 => "application/x-coredump",
+        _ => return None,
     })
 }
 

@@ -1,0 +1,52 @@
+[package]
+name = "diffutils"
+version = "0.6.0"
+edition = "2021"
+description = "A CLI app for generating diff files"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/uutils/diffutils"
+
+[lib]
+name = "diffutilslib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "diffutils"
+path = "src/main.rs"
+
+[dependencies]
+chrono = "0.4.38"
+diff = "0.1.13"
+itoa = "1.0.11"
+regex = "1.10.4"
+same-file = "1.0.6"
+unicode-width = "0.2.0"
+
+[dev-dependencies]
+assert_cmd = "2.0.14"
+divan = { version = "6.0.0", package = "codspeed-divan-compat" }
+pretty_assertions = "1.4.0"
+predicates = "3.1.0"
+rand = "0.10.0"
+tempfile = "3.26.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+# alias profile for 'dist'
+[profile.dist]
+inherits = "release"
+
+[[bench]]
+name = "bench_diffutils"
+path = "benches/bench-diffutils.rs"
+harness = false
+
+[features]
+# default = ["feat_bench_not_diff"]
+# Turn bench for diffutils cmp off
+feat_bench_not_cmp = []
+# Turn bench for diffutils diff off
+feat_bench_not_diff = []

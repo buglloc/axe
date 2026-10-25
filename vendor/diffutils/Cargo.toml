@@ -1,0 +1,32 @@
+# Vendored from diffutils 0.6.0; upstream provenance is in .cargo_vcs_info.json.
+[package]
+name = "diffutils"
+version = "0.6.0"
+edition = "2021"
+autobins = false
+autotests = false
+autobenches = false
+autoexamples = false
+description = "A CLI app for generating diff files"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/uutils/diffutils"
+
+[lib]
+name = "diffutilslib"
+path = "src/lib.rs"
+
+[features]
+feat_bench_not_cmp = []
+feat_bench_not_diff = []
+
+[dependencies]
+chrono = "0.4.38"
+diff = "0.1.13"
+itoa = "1.0.11"
+regex = "1.10.4"
+same-file = "1.0.6"
+unicode-width = "0.2.0"
+
+[dev-dependencies]
+pretty_assertions = "1.4.0"
+tempfile = "3.26.0"
