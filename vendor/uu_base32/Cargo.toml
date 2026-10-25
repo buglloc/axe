@@ -1,0 +1,27 @@
+# Vendored from uu_base32 0.12.0; also provides base64/basenc shared processing.
+# See .cargo_vcs_info.json for upstream provenance.
+[package]
+name = "uu_base32"
+version = "0.12.0"
+edition = "2024"
+rust-version = "1.88.0"
+description = "base32 ~ (uutils) decode/encode input (base32-encoding)"
+homepage = "https://github.com/uutils/coreutils"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/base32"
+license = "MIT"
+
+[lib]
+path = "src/base32.rs"
+doctest = false
+
+[[bin]]
+name = "base32"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["wrap_help", "cargo", "color"] }
+fluent = "0.17.0"
+uucore = { version = "0.12.0", features = ["encoding"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))'.dependencies]
+rustix = { version = "1.1.4", default-features = false, features = ["fs"] }

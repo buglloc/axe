@@ -1,0 +1,28 @@
+# Vendored from uu_csplit 0.12.0; see .cargo_vcs_info.json for upstream provenance.
+[package]
+name = "uu_csplit"
+version = "0.12.0"
+edition = "2024"
+rust-version = "1.88.0"
+description = "csplit ~ (uutils) split a file into sections determined by context lines"
+homepage = "https://github.com/uutils/coreutils"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/csplit"
+license = "MIT"
+
+[features]
+diagnostics = ["uucore/diagnostics"]
+
+[lib]
+path = "src/csplit.rs"
+doctest = false
+
+[[bin]]
+name = "csplit"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["wrap_help", "cargo", "color"] }
+fluent = "0.17.0"
+regex = "1.10.4"
+thiserror = "2.0.3"
+uucore = { version = "0.12.0", features = ["entries", "fs", "format", "i18n-charmap"] }

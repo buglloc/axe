@@ -1,0 +1,31 @@
+# Vendored from uu_pr 0.12.0; upstream revision is recorded in .cargo_vcs_info.json.
+# AXE keeps input bytes intact and fixes GNU merge, column, and control rendering.
+[package]
+name = "uu_pr"
+version = "0.12.0"
+edition = "2024"
+rust-version = "1.88.0"
+description = "pr ~ (uutils) convert text files for printing"
+homepage = "https://github.com/uutils/coreutils"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/pr"
+license = "MIT"
+
+[lib]
+path = "src/pr.rs"
+test = false
+doctest = false
+
+[[bin]]
+name = "pr"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["wrap_help", "cargo", "color"] }
+fluent = "0.17.0"
+itertools = "0.15.0"
+memchr = "2.7.2"
+thiserror = "2.0.3"
+uucore = { version = "0.12.0", features = ["entries", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"

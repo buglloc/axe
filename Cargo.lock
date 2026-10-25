@@ -8157,8 +8157,6 @@ dependencies = [
 [[package]]
 name = "uu_base32"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4472f433014202b99debd2907cda4650aafbb6881b8a5dca139b255dceed892"
 dependencies = [
  "clap",
  "fluent",
@@ -8319,8 +8317,6 @@ dependencies = [
 [[package]]
 name = "uu_csplit"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55aa4ee843fea3f6ec8ab55c69c39f5758e52f1f00c8b5a6f941001b66d11acb"
 dependencies = [
  "clap",
  "fluent",
@@ -8480,8 +8476,6 @@ dependencies = [
 [[package]]
 name = "uu_expand"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb12c2abb138ad08d01557ab6fdf2d201e06a0f88122d7d5a283fe2d8273151c"
 dependencies = [
  "clap",
  "fluent",
@@ -8533,8 +8527,6 @@ dependencies = [
 [[package]]
 name = "uu_fmt"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9180eae586d5947c9c85915dfeb14bfdef2316c143c1b713b85a3dd630a3be77"
 dependencies = [
  "clap",
  "fluent",
@@ -8545,8 +8537,6 @@ dependencies = [
 [[package]]
 name = "uu_fold"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b28755578b0b98318371e055fcc70b94c9198bacfce0d125d3049ab1c2d2beb2"
 dependencies = [
  "clap",
  "fluent",
@@ -9000,14 +8990,12 @@ dependencies = [
 [[package]]
 name = "uu_pr"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a86126634ad64f323a8e2d487fc7fa3b92b1b251a08eef631c113ae57d112678"
 dependencies = [
  "clap",
  "fluent",
  "itertools 0.15.0",
+ "libc",
  "memchr",
- "regex",
  "thiserror 2.0.20",
  "uucore 0.12.0",
 ]
@@ -9037,8 +9025,6 @@ dependencies = [
 [[package]]
 name = "uu_ptx"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a31e18a9e4519f59376c0fe3667bdaaf2ce3cb0fb100256e3968fe4ac9296ea"
 dependencies = [
  "clap",
  "fluent",
@@ -9481,8 +9467,6 @@ dependencies = [
 [[package]]
 name = "uu_unexpand"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4bd141cb78bd0e7611ff4b3040901d3bafbe45621bdd2372484848e5a2b1f34"
 dependencies = [
  "clap",
  "fluent",

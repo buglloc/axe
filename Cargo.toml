@@ -99,7 +99,15 @@ rust_tree = { path = "vendor/rust_tree" }
 sed-rs = { path = "vendor/sed-rs" }
 procutils-ps = { path = "vendor/procutils-ps" }
 uu_df = { path = "vendor/uu_df" }
+uu_base32 = { path = "vendor/uu_base32" }
+uu_csplit = { path = "vendor/uu_csplit" }
+uu_expand = { path = "vendor/uu_expand" }
+uu_fmt = { path = "vendor/uu_fmt" }
+uu_fold = { path = "vendor/uu_fold" }
 uu_grep = { path = "vendor/uu_grep" }
+uu_pr = { path = "vendor/uu_pr" }
+uu_ptx = { path = "vendor/uu_ptx" }
+uu_unexpand = { path = "vendor/uu_unexpand" }
 # uucore embeds utility locales from the complete upstream source tree.
 uucore = { git = "https://github.com/uutils/coreutils", tag = "0.12.0" }
 

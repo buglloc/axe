@@ -1,0 +1,28 @@
+# Vendored from uu_ptx 0.12.0; see .cargo_vcs_info.json for upstream provenance.
+# AXE uses byte-preserving sentence contexts and GNU field/reference layout.
+[package]
+name = "uu_ptx"
+version = "0.12.0"
+edition = "2024"
+rust-version = "1.88.0"
+description = "ptx ~ (uutils) display a permuted index of input"
+homepage = "https://github.com/uutils/coreutils"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/ptx"
+license = "MIT"
+
+[lib]
+path = "src/ptx.rs"
+test = false
+doctest = false
+
+[[bin]]
+name = "ptx"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["wrap_help", "cargo", "color"] }
+fluent = "0.17.0"
+regex = "1.10.4"
+rustc-hash = "2.1.1"
+thiserror = "2.0.3"
+uucore = "0.12.0"
