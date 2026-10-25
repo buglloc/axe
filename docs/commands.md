@@ -142,6 +142,11 @@ with `-0` and `-d`.
 `-N` prints pathname bytes as-is; `-q` replaces non-printable characters with
 `?` in UTF-8 locales. JSON (`-J`), following directory symlinks (`-l`), and
 `--charset` are not supported.
+
+`mkdir -m` preserves all requested permission and special bits, including
+sticky, set-user-ID and set-group-ID bits. With `-p`, only newly created
+ancestors use the parent policy; the final directory receives the requested
+mode.
 `hexdump`/`hd` do not implement the custom format languages of `-e` and `-f`.
 
 `file` uses bounded content heuristics, not the complete libmagic database. It
@@ -198,6 +203,8 @@ classes, not locale collation.
 `blkid -l -t NAME=value` prints the first match; `-L LABEL` and `-U UUID` print
 only the matching device path. Tokens are case-sensitive. `-p` includes
 filesystem version metadata; an ambiguous low-level probe exits with status 8.
+LUKS1 detection requires a complete probe-readable header and rejects
+truncated images.
 Partition-table metadata is separate from filesystem type detection. A matching
 magic number alone does not identify a truncated or structurally invalid image.
 These are identity probes, not complete filesystem consistency checks.
@@ -326,8 +333,9 @@ including its precision and range; it is not arbitrary-precision decimal
 arithmetic. `more` copies input without a terminal; its interactive layout and
 `stty -a` wrapping are not exact replicas of the reference.
 `stty -g` preserves active control characters and independent Linux baud rates.
-Linux `BOTHER` saves append numeric input/output speeds; GNU builds that omit
-these fields cannot round-trip arbitrary rates.
+Linux `stty` accepts arbitrary decimal speeds through termios2/BOTHER, and
+recognizes the GNU `exta`/`extb` aliases. Other targets accept their standard
+baud-rate names and reject unsupported numeric rates.
 
 Safe divergences are retained: compression preserves existing output after a
 failed decode, `strings` reports stdout failures, and valid JSON scalars remain

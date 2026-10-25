@@ -281,96 +281,135 @@ fn create_dir_with_mode(
     mode: u32,
     shaped_umask: rustix::fs::Mode,
 ) -> std::io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
+    use rustix::fs::{Mode, OFlags};
 
     let _guard = UmaskGuard::set(shaped_umask);
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "directory path has no final component",
+        )
+    })?;
 
-    std::fs::DirBuilder::new().mode(mode).create(path)?;
-    if mode & 0o6000 != 0 {
-        restore_set_id(path, mode & 0o6000)?;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let access = OFlags::PATH;
+    #[cfg(target_vendor = "apple")]
+    let access = OFlags::from_bits_retain(uucore::libc::O_SEARCH as _);
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple"
+    )))]
+    let access = OFlags::RDONLY;
+
+    let parent_flags = access | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let parent_fd = rustix::fs::open(parent, parent_flags, Mode::empty())?;
+    rustix::fs::mkdirat(&parent_fd, name, Mode::from_bits_truncate(mode as _))?;
+
+    if mode & 0o7000 != 0 {
+        restore_set_id(&parent_fd, name, mode)?;
     }
     Ok(())
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn restore_set_id(path: &Path, bits: u32) -> std::io::Result<()> {
-    use rustix::fs::{Mode, OFlags};
+fn restore_set_id(
+    parent: &impl std::os::fd::AsFd,
+    name: &std::ffi::OsStr,
+    requested_mode: u32,
+) -> std::io::Result<()> {
+    use rustix::fs::{AtFlags, Mode, OFlags};
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::PermissionsExt;
     use uucore::libc;
 
-    // O_PATH permits mode 000 directories; DIRECTORY|NOFOLLOW rejects a
-    // replacement symlink and pins the directory used for stat and chmod.
-    let directory = rustix::fs::open(
-        path,
+    // O_PATH permits mode 000 directories.  Opening relative to the already
+    // opened parent avoids resolving the pathname again after mkdirat().
+    let directory = rustix::fs::openat(
+        parent,
+        name,
         OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )?;
-    let actual = rustix::fs::fstat(&directory)?.st_mode as u32;
-    let mode = (actual | bits) & 0o7777;
-    #[cfg(any(
-        target_arch = "x86_64",
-        target_arch = "x86",
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "riscv64",
-        target_arch = "riscv32",
-    ))]
-    {
-        // fchmodat2 is syscall 452 on these architectures (Linux 6.6+).
-        // SAFETY: directory is live, the empty C string is valid, and
-        // AT_EMPTY_PATH applies chmod to that pinned descriptor.
-        let result = unsafe {
-            libc::syscall(
-                452 as libc::c_long,
-                directory.as_raw_fd(),
-                c"".as_ptr(),
-                mode as libc::mode_t,
-                libc::AT_EMPTY_PATH,
-            )
-        };
-        if result == 0 {
-            return Ok(());
-        }
-        let error = std::io::Error::last_os_error();
-        if !matches!(error.raw_os_error(), Some(libc::ENOSYS | libc::EINVAL)) {
-            return Err(error);
-        }
+    let pinned = rustix::fs::fstat(&directory)?;
+    let actual = pinned.st_mode as u32;
+    if actual & libc::S_IFMT as u32 != libc::S_IFDIR as u32 {
+        return Err(std::io::Error::from_raw_os_error(libc::ENOTDIR));
     }
-    // Older kernels cannot fchmod an O_PATH descriptor. The procfs magic
-    // link still names the pinned directory, not an attacker-controlled path.
-    std::fs::set_permissions(
-        format!("/proc/self/fd/{}", directory.as_raw_fd()),
-        std::fs::Permissions::from_mode(mode),
-    )
-}
+    let mode = (actual & 0o777) | (requested_mode & 0o7000);
 
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
-fn restore_set_id(path: &Path, bits: u32) -> std::io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::MetadataExt;
-    use uucore::libc;
-
-    // Native fchmodat supports NOFOLLOW on Darwin and does not require read
-    // or search permission on the new directory itself.
-    let actual = std::fs::symlink_metadata(path)?.mode();
-    let path = CString::new(path.as_os_str().as_bytes())
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
-    // SAFETY: path is NUL-terminated and mode/flags are valid native values.
+    // fchmod(2) rejects O_PATH descriptors.  fchmodat2() (Linux 6.6+) applies
+    // the chmod to the descriptor itself, including directories with no caller
+    // permissions, and does not need procfs.
+    // SAFETY: the descriptor is open and the path is a NUL-terminated empty string.
     let result = unsafe {
-        libc::fchmodat(
-            libc::AT_FDCWD,
-            path.as_ptr(),
-            ((actual | bits) & 0o7777) as libc::mode_t,
-            libc::AT_SYMLINK_NOFOLLOW,
+        libc::syscall(
+            libc::SYS_fchmodat2,
+            directory.as_raw_fd(),
+            c"".as_ptr(),
+            mode as libc::mode_t,
+            libc::AT_EMPTY_PATH,
         )
     };
     if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
+        return Ok(());
     }
+    let error = std::io::Error::last_os_error();
+    // Older kernels lack the syscall; seccomp filters may reject it.
+    if !matches!(
+        error.raw_os_error(),
+        Some(libc::ENOSYS | libc::EPERM | libc::EINVAL)
+    ) {
+        return Err(error);
+    }
+
+    // The procfs magic link still targets the pinned inode.
+    let mode = Mode::from_bits_truncate(mode as _);
+    let proc_path = format!("/proc/self/fd/{}", directory.as_raw_fd());
+    match rustix::fs::chmod(proc_path.as_str(), mode) {
+        Ok(()) => return Ok(()),
+        Err(rustix::io::Errno::NOENT) => {}
+        Err(errno) => return Err(errno.into()),
+    }
+
+    // Without procfs, chmod by name inside the pinned parent, and only while
+    // that name still refers to the directory created above.
+    let current = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
+    if (current.st_dev, current.st_ino) != (pinned.st_dev, pinned.st_ino) {
+        return Err(std::io::Error::from_raw_os_error(libc::ESTALE));
+    }
+    rustix::fs::chmodat(parent, name, mode, AtFlags::empty()).map_err(Into::into)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn restore_set_id(
+    parent: &impl std::os::fd::AsFd,
+    name: &std::ffi::OsStr,
+    requested_mode: u32,
+) -> std::io::Result<()> {
+    use rustix::fs::{Mode, OFlags};
+    use uucore::libc;
+
+    #[cfg(target_vendor = "apple")]
+    let access = OFlags::from_bits_retain(uucore::libc::O_SEARCH as _);
+    #[cfg(not(target_vendor = "apple"))]
+    let access = OFlags::RDONLY;
+
+    let directory = rustix::fs::openat(
+        parent,
+        name,
+        access | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let actual = rustix::fs::fstat(&directory)?.st_mode as u32;
+    if actual & libc::S_IFMT as u32 != libc::S_IFDIR as u32 {
+        return Err(std::io::Error::from_raw_os_error(libc::ENOTDIR));
+    }
+    let mode = (actual & 0o777) | (requested_mode & 0o7000);
+    rustix::fs::fchmod(&directory, Mode::from_bits_truncate(mode as _))
 }
 
 #[cfg(not(unix))]
