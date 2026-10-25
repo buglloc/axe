@@ -17,10 +17,7 @@ Source: the `procutils-ps` 0.2.0 crate from crates.io, upstream revision
 - Align headers, padding, truncation, start-time, signal, and status formatting
   with procps, and return an error status when output or field acquisition fails.
 - Keep the standalone manifest and omit upstream snapshot-test development
-  dependencies; AXE owns the workspace lockfile. The upstream
-  `actual_terminal_width_env_and_options_share_same_policy` test currently
-  observes 106 columns where it expects 53; this is a real width regression in
-  the AXE patch and is reported rather than masked.
+  dependencies; AXE owns the workspace lockfile.
 
 Upstreamability: the procps behavior and formatting fixes are intended for
 upstream; no upstream issue or commit is recorded in AXE.

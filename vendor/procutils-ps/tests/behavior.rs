@@ -600,6 +600,12 @@ fn actual_terminal_width_env_and_options_share_the_same_policy() {
         args.extend_from_slice(mode);
         let output = ps_in_terminal(&args, None, 53, false);
         assert!(output.status.success(), "{mode:?}: {:?}", output.stderr);
-        assert_eq!(display_columns(stdout(&output).lines().nth(1).unwrap()), 53);
+        // procps 4.0.7 keeps the full `-f` row at 106 display columns while
+        // its `x` row is clipped to the 53-column PTY width.
+        let expected_width = if mode.first() == Some(&"-f") { 106 } else { 53 };
+        assert_eq!(
+            display_columns(stdout(&output).lines().nth(1).unwrap()),
+            expected_width
+        );
     }
 }

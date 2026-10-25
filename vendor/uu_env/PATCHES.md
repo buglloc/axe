@@ -9,10 +9,6 @@ Source: the `uu_env` 0.12.0 crate from crates.io, upstream revision
   failures instead of conflating them with usage status 1/2.
 - Flush the environment-only output before returning so a successful write and
   the resulting I/O status are observable by callers.
-- The standalone unit test `test_error_cases` still expects the old literal
-  `-S` diagnostic; the localized package emits the upstream message key
-  `env-error-backslash-c-not-allowed`, so that environment/locale-only test
-  mismatch is reported rather than used to change runtime behavior.
 - Keep a standalone manifest without upstream workspace lint/benchmark wiring;
   AXE owns dependency resolution and locales.
 

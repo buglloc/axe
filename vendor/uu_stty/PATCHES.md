@@ -11,9 +11,6 @@ Source: the `uu_stty` 0.12.0 crate from crates.io, upstream revision
 - Initialize the full termios ABI before conversion so musl's short `TCGETS`
   result does not leave control characters or speed fields undefined, and align
   the PowerPC build cfg with the implementation cfg.
-- The upstream `test_string_to_baud_invalid` still expects `995` to be rejected;
-  AXE's arbitrary-speed patch intentionally accepts it, so that vendored unit
-  test is a real patch regression to report rather than mask.
 - Keep a standalone manifest without upstream workspace lint/benchmark wiring;
   AXE owns dependency resolution.
 

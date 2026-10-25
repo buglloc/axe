@@ -11,6 +11,8 @@ Source: the `uu_more` 0.12.0 crate from crates.io, upstream revision
   control sequences from contaminating redirected output.
 - Keep the standalone manifest with explicit `tempfile` test support and
   without the upstream workspace lint/benchmark wiring; AXE owns resolution.
+  Cargo refuses this dev-dependency-bearing, non-member package in the shipped
+  workspace test graph, so `vendor-test` reports it as an explicit skip.
 
 Upstreamability: non-terminal behavior is intended for upstream; no upstream
 issue or commit is recorded in AXE.

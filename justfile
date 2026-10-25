@@ -260,10 +260,62 @@ check-store-bootstrap:
 nix-fmt:
     alejandra store/nix flake.nix
 
-check: _prepare-axe-dev-keys check-store-bootstrap
+check-vendor:
+    sh "{{source_root}}/tools/check-vendor.sh" "{{source_root}}"
+
+vendor-test:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    root="{{source_root}}"
+    status=0
+
+    # These path dependencies have test-only dependency graphs that Cargo will
+    # not test as non-members of this workspace with the shipped lockfile.
+    # Keep every skip explicit and retain the reason in the crate PATCHES.md
+    # where this hygiene slice owns that document.
+    skip_reason() {
+        case "$1" in
+            brush-builtins|brush-core|brush-shell)
+                printf '%s' 'requires dev-dependencies but is not a workspace member; the shipped lockfile cannot test the patched Brush package'
+                ;;
+            diffutils|findutils)
+                printf '%s' 'requires dev-dependencies but is not a workspace member; Cargo refuses its vendored test targets under the shipped lockfile'
+                ;;
+            jaq-json)
+                printf '%s' 'upstream defs/funs tests require jaq-std/format and the optional serde feature, absent from the vendored test manifest'
+                ;;
+            uu_df)
+                printf '%s' 'upstream tests reference the omitted tempfile dev-dependency in the standalone manifest'
+                ;;
+            uu_more)
+                printf '%s' 'requires dev-dependencies but is not a workspace member; Cargo refuses its vendored test targets under the shipped lockfile'
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    }
+
+    for manifest in "$root"/vendor/*/Cargo.toml; do
+        dir=$(dirname "$manifest")
+        package=$(awk '$0 == "[package]" { in_package = 1; next } in_package && /^\[/ { exit } in_package && $1 == "name" && $2 == "=" { value = $3; gsub(/"/, "", value); print value; exit }' "$manifest")
+        test -n "$package"
+        if reason=$(skip_reason "$package"); then
+            printf 'SKIP vendor/%s (%s): %s\n' "${dir##*/}" "$package" "$reason"
+            continue
+        fi
+        printf '== vendor/%s (%s) ==\n' "${dir##*/}" "$package"
+        if ! AXE_EDITION_ROOT="{{edition_root}}" CARGO_TARGET_DIR="{{cargo_target_dir}}" cargo test --locked -p "$package"; then
+            status=1
+        fi
+    done
+    exit "$status"
+
+
+check: _prepare-axe-dev-keys check-store-bootstrap check-vendor
     AXE_EDITION_ROOT="{{edition_root}}" cargo check --locked --workspace --all-targets --all-features
 
-smoke: _require-reference-tools _prepare-axe-dev-keys
+smoke: _require-reference-tools _prepare-axe-dev-keys vendor-test
     AXE_EDITION_ROOT="{{edition_root}}" cargo test --locked --workspace --all-features
 
 applet-parity: _require-reference-tools _prepare-axe-dev-keys

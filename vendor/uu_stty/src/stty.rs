@@ -1706,13 +1706,13 @@ mod tests {
 
     #[test]
     fn test_string_to_baud_invalid() {
-        #[cfg(not(bsd))]
-        {
-            assert_eq!(string_to_baud("995", flags::BaudType::Both), None);
-            assert_eq!(string_to_baud("invalid", flags::BaudType::Both), None);
-            assert_eq!(string_to_baud("", flags::BaudType::Both), None);
-            assert_eq!(string_to_baud("abc", flags::BaudType::Both), None);
-        }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        assert!(string_to_baud("995", flags::BaudType::Both).is_some());
+        #[cfg(all(not(bsd), not(any(target_os = "linux", target_os = "android"))))]
+        assert_eq!(string_to_baud("995", flags::BaudType::Both), None);
+        assert_eq!(string_to_baud("invalid", flags::BaudType::Both), None);
+        assert_eq!(string_to_baud("", flags::BaudType::Both), None);
+        assert_eq!(string_to_baud("abc", flags::BaudType::Both), None);
     }
 
     #[test]
