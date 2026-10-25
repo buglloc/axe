@@ -2716,22 +2716,36 @@ fn unlinked_binary_launches_embedded_shell() {
     let executable = fs::File::open(&copy).expect("retain axe executable");
     fs::remove_file(&copy).expect("unlink axe binary");
 
-    let output = Command::new(format!("/proc/self/fd/{}", executable.as_raw_fd()))
-        .env_clear()
-        .env("HOME", scratch.path())
-        .env("PATH", "/nonexistent")
-        .env("AXE_STORE_DIR", scratch.path().join("store"))
-        .env("AXE_STORE_URL", "http://127.0.0.1:9")
-        .env("AXE_STORE_ADDRESSES", "127.0.0.1")
-        .args([
-            "--no-config",
-            "--norc",
-            "--noprofile",
-            "-c",
-            "printf 'b\\na\\na\\n' | sort | uniq",
-        ])
-        .output()
-        .expect("launch Brush through retained executable");
+    let launch = || {
+        Command::new(format!("/proc/self/fd/{}", executable.as_raw_fd()))
+            .env_clear()
+            .env("HOME", scratch.path())
+            .env("PATH", "/nonexistent")
+            .env("AXE_STORE_DIR", scratch.path().join("store"))
+            .env("AXE_STORE_URL", "http://127.0.0.1:9")
+            .env("AXE_STORE_ADDRESSES", "127.0.0.1")
+            .args([
+                "--no-config",
+                "--norc",
+                "--noprofile",
+                "-c",
+                "printf 'b\\na\\na\\n' | sort | uniq",
+            ])
+            .output()
+    };
+    // A test thread that forked while the copy was open for writing holds the
+    // descriptor until its child execs; exec fails with ETXTBSY meanwhile.
+    let mut output = launch();
+    for _ in 0..100 {
+        match &output {
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                output = launch();
+            }
+            _ => break,
+        }
+    }
+    let output = output.expect("launch Brush through retained executable");
 
     assert!(
         output.status.success(),
