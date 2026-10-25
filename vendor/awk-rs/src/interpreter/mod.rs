@@ -95,6 +95,8 @@ pub struct Interpreter<'a> {
     input_done: bool,
 }
 
+const MAX_FIELD_COUNT: usize = 10_000_000;
+
 impl<'a> Interpreter<'a> {
     pub fn new(program: &'a Program) -> Self {
         let functions = program
@@ -196,7 +198,7 @@ impl<'a> Interpreter<'a> {
     pub fn set_assignment(&mut self, assignment: &[u8]) -> Result<()> {
         let (name, value) = variable_assignment(assignment)
             .ok_or_else(|| Error::runtime("invalid variable assignment"))?;
-        self.set_variable_value(name, Value::from_string(unescape_assignment(value)));
+        self.set_variable_value(name, Value::from_string(unescape_assignment(value)))?;
         Ok(())
     }
 
@@ -256,11 +258,23 @@ impl<'a> Interpreter<'a> {
         Ok(())
     }
 
+    fn next_argv_index(&self) -> Option<usize> {
+        self.arrays.get("ARGV").and_then(|argv| {
+            argv.keys()
+                .filter_map(|key| {
+                    let index = std::str::from_utf8(key).ok()?.parse::<usize>().ok()?;
+                    (index.to_string().as_bytes() == key.as_slice()).then_some(index)
+                })
+                .filter(|&index| index >= self.argument_index && index < self.argc)
+                .min()
+        })
+    }
+
     fn open_next_file<W: Write>(&mut self, output: &mut W) -> Result<bool> {
         let filename = loop {
-            if self.argument_index < self.argc {
-                let key = self.argument_index.to_string();
-                self.argument_index += 1;
+            if let Some(index) = self.next_argv_index() {
+                let key = index.to_string();
+                self.argument_index = index + 1;
                 let operand = self
                     .get_array_element("ARGV", key.as_bytes())
                     .to_string_val();
@@ -268,7 +282,7 @@ impl<'a> Interpreter<'a> {
                     continue;
                 }
                 if let Some((name, value)) = variable_assignment(&operand) {
-                    self.set_variable_value(name, Value::from_string(unescape_assignment(value)));
+                    self.set_variable_value(name, Value::from_string(unescape_assignment(value)))?;
                     continue;
                 }
                 break operand;
@@ -440,6 +454,9 @@ impl<'a> Interpreter<'a> {
     }
 
     pub(crate) fn set_field(&mut self, index: usize, value: BString) -> Result<()> {
+        if index > MAX_FIELD_COUNT {
+            return Err(Error::runtime("field index is outside the supported range"));
+        }
         if index == 0 {
             self.set_record(value)?;
         } else {
@@ -550,10 +567,18 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    pub(crate) fn set_variable_value(&mut self, name: &str, value: Value) {
+    fn checked_field_index(value: &Value, name: &str) -> Result<usize> {
+        let number = value.to_number();
+        if !number.is_finite() || number < 0.0 || number > MAX_FIELD_COUNT as f64 {
+            return Err(Error::runtime(format!("{name} is outside the supported range")));
+        }
+        Ok(number as usize)
+    }
+
+    pub(crate) fn set_variable_value(&mut self, name: &str, value: Value) -> Result<()> {
         match name {
             "NF" => {
-                self.nf = value.to_number() as usize;
+                self.nf = Self::checked_field_index(&value, "NF")?;
                 self.fields.resize_with(self.nf, BString::default);
                 self.record = join(&self.fields, &self.ofs);
             }
@@ -584,6 +609,7 @@ impl<'a> Interpreter<'a> {
                 self.variables.insert(name.to_string(), value);
             }
         }
+        Ok(())
     }
 
     fn resolve_array_name<'b>(&'b self, array: &'b str) -> &'b str {

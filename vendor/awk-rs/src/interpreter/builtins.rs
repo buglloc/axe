@@ -719,7 +719,7 @@ impl<'a> Interpreter<'a> {
                 continue;
             }
             let value = args.get(i).cloned().unwrap_or(Value::Uninitialized);
-            self.set_variable_value(param, value);
+            self.set_variable_value(param, value)?;
         }
 
         // Execute function body, passing the actual output
@@ -730,7 +730,7 @@ impl<'a> Interpreter<'a> {
         // Restore saved variables and remove parameters that weren't saved
         for param in &func.params {
             if let Some(value) = saved_vars.get(param) {
-                self.set_variable_value(param, value.clone());
+                self.set_variable_value(param, value.clone())?;
             } else {
                 self.variables.remove(param);
             }

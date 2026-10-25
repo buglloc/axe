@@ -103,6 +103,10 @@ files and `getline` share the same input lifecycle. `strtonum` does not accept
 signed IEEE special-value strings such as `+inf` and `+nan`. Fatal input errors
 exit with status 2; stdout write or flush failures exit with status 1.
 
+Field counts and field indices are bounded at 10,000,000 to prevent unbounded
+allocation; negative, non-finite, or larger values are fatal runtime errors
+with status 2.
+
 `jq` keeps one execution state across input files. `input_filename` is the current
 input file, `<stdin>` for standard input, and `null` before input is consumed in
 null-input mode. Output uses JSON values and escaping, including ASCII-output

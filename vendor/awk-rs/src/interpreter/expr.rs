@@ -61,7 +61,8 @@ impl<'a> Interpreter<'a> {
             Expr::Var(name, _) => Ok(self.get_variable(name)),
 
             Expr::Field(expr, _) => {
-                let index = self.eval_expr_with_output(expr, output)?.to_number() as usize;
+                let value = self.eval_expr_with_output(expr, output)?;
+                let index = Self::checked_field_index(&value, "field")?;
                 Ok(Value::from_string(self.get_field(index)))
             }
 
@@ -337,7 +338,8 @@ impl<'a> Interpreter<'a> {
                 Ok(GetlineTarget::Array(array.clone(), key))
             }
             Some(Expr::Field(index_expr, _)) => {
-                let index = self.eval_expr(index_expr)?.to_number() as usize;
+                let value = self.eval_expr(index_expr)?;
+                let index = Self::checked_field_index(&value, "field")?;
                 Ok(GetlineTarget::Field(index))
             }
             // The parser only produces Var/ArrayAccess/Field targets; mirror
@@ -351,7 +353,9 @@ impl<'a> Interpreter<'a> {
     fn store_getline_target(&mut self, target: GetlineTarget, line: BString) -> Result<()> {
         match target {
             GetlineTarget::Record => self.set_record(line)?,
-            GetlineTarget::Var(name) => self.set_variable_value(&name, Value::from_string(line)),
+            GetlineTarget::Var(name) => {
+                self.set_variable_value(&name, Value::from_string(line))?
+            }
             GetlineTarget::Array(array, key) => {
                 self.set_array_element(&array, &key, Value::from_string(line))
             }
@@ -379,7 +383,7 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(None) => None,
                 Err(crate::error::Error::Io(error)) => {
-                    self.set_variable_value("ERRNO", Value::from_string(error.to_string()));
+                    self.set_variable_value("ERRNO", Value::from_string(error.to_string()))?;
                     return Ok(Value::Number(-1.0));
                 }
                 Err(error) => return Err(error),
@@ -397,7 +401,7 @@ impl<'a> Interpreter<'a> {
                             );
                         }
                         Err(error) => {
-                            self.set_variable_value("ERRNO", Value::from_string(error.to_string()));
+                            self.set_variable_value("ERRNO", Value::from_string(error.to_string()))?;
                             return Ok(Value::Number(-1.0));
                         }
                     }
@@ -410,7 +414,7 @@ impl<'a> Interpreter<'a> {
                 match reader.read_record(&self.rs[..separator_len], self.multibyte) {
                     Ok(record) => record,
                     Err(crate::error::Error::Io(error)) => {
-                        self.set_variable_value("ERRNO", Value::from_string(error.to_string()));
+                        self.set_variable_value("ERRNO", Value::from_string(error.to_string()))?;
                         return Ok(Value::Number(-1.0));
                     }
                     Err(error) => return Err(error),
@@ -440,7 +444,7 @@ impl<'a> Interpreter<'a> {
                             );
                         }
                         Err(error) => {
-                            self.set_variable_value("ERRNO", Value::from_string(error.to_string()));
+                            self.set_variable_value("ERRNO", Value::from_string(error.to_string()))?;
                             return Ok(Value::Number(-1.0));
                         }
                     }
@@ -453,7 +457,7 @@ impl<'a> Interpreter<'a> {
                 {
                     Ok(record) => record,
                     Err(crate::error::Error::Io(error)) => {
-                        self.set_variable_value("ERRNO", Value::from_string(error.to_string()));
+                        self.set_variable_value("ERRNO", Value::from_string(error.to_string()))?;
                         return Ok(Value::Number(-1.0));
                     }
                     Err(error) => return Err(error),
@@ -472,10 +476,11 @@ impl<'a> Interpreter<'a> {
     pub fn assign_to_lvalue(&mut self, target: &Expr, value: Value) -> Result<()> {
         match target {
             Expr::Var(name, _) => {
-                self.set_variable_value(name, value);
+                self.set_variable_value(name, value)?;
             }
             Expr::Field(expr, _) => {
-                let index = self.eval_expr(expr)?.to_number() as usize;
+                let index_value = self.eval_expr(expr)?;
+                let index = Self::checked_field_index(&index_value, "field")?;
                 self.set_field(index, value.to_string_val())?;
             }
             Expr::ArrayAccess { array, indices, .. } => {

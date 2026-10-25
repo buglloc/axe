@@ -205,6 +205,33 @@ fn begin_and_record_argv_edits_control_which_files_are_opened() {
 }
 
 #[test]
+fn extreme_argc_and_field_indices_terminate_with_gawk_statuses() {
+    let scratch = Scratch::new();
+    let mut child = OwnedChild::spawn(&scratch, "BEGIN { ARGC=1e300 } { print }", "C");
+    child
+        .stdin()
+        .write_all(b"stdin\n")
+        .expect("write huge ARGC input");
+    assert_output(child.output_bounded(), 0, b"stdin\n");
+
+    for program in [
+        "BEGIN { NF=-1 }",
+        "BEGIN { NF=1e300 }",
+        "BEGIN { $(-1)=\"x\" }",
+        "BEGIN { $1e300=\"x\" }",
+    ] {
+        let child = OwnedChild::spawn(&scratch, program, "C");
+        let output = child.output_bounded();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(!output.stderr.is_empty(), "{output:?}");
+    }
+
+    let child = OwnedChild::spawn(&scratch, "BEGIN { $1000000=\"x\"; print NF }", "C");
+    assert_output(child.output_bounded(), 0, b"1000000\n");
+}
+
+#[test]
 fn assignments_update_special_variables_when_their_operand_is_reached() {
     let scratch = Scratch::new();
     scratch.file("a", b"one:two\n");

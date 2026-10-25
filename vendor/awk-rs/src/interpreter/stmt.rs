@@ -176,7 +176,7 @@ impl<'a> Interpreter<'a> {
                     .unwrap_or_default();
 
                 for key in keys {
-                    self.set_variable_value(var, Value::from_string(key));
+                    self.set_variable_value(var, Value::from_string(key))?;
                     match self.execute_stmt(body, output)? {
                         StmtResult::Normal | StmtResult::Continue => continue,
                         StmtResult::Break => break,
