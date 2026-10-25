@@ -1,4 +1,4 @@
-use std::fs::{self, FileTimes};
+use std::fs::{self, File, FileTimes};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -8,12 +8,33 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(label: &str) -> Self {
+        Self::new_under(label, &std::env::temp_dir())
+    }
+
+    /// Scratch directory whose whole canonical path other users can traverse,
+    /// for tests that drop privileges: temp_dir, or /dev/shm when temp_dir
+    /// resolves under a private parent.
+    fn new_public(label: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let candidate = std::env::temp_dir();
+        let candidate = fs::canonicalize(&candidate).unwrap_or(candidate);
+        let traversable = candidate.ancestors().all(|directory| {
+            fs::metadata(directory).is_ok_and(|metadata| metadata.permissions().mode() & 0o001 != 0)
+        });
+        let parent = if traversable {
+            candidate
+        } else {
+            PathBuf::from("/dev/shm")
+        };
+        Self::new_under(label, &parent)
+    }
+
+    fn new_under(label: &str, parent: &Path) -> Self {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("axe-diff-{label}-{}-{nonce}", std::process::id()));
+        let path = parent.join(format!("axe-diff-{label}-{}-{nonce}", std::process::id()));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -613,12 +634,18 @@ fn cmp_zero_limit_still_reports_missing_input_as_trouble() {
 #[cfg(unix)]
 #[test]
 fn cmp_zero_limit_does_not_hide_an_unreadable_input() {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
 
-    let scratch = Scratch::new("cmp-zero-unreadable");
-    let owner = fs::metadata(&scratch.0).unwrap();
-    let drop_root = owner.uid() == 0;
+    // SAFETY: geteuid only reads the current identity.
+    let drop_root = unsafe { libc::geteuid() } == 0;
+    // As root the input is only unreadable to a dropped uid, which must be
+    // able to traverse to the scratch tree and the binary copy.
+    let scratch = if drop_root {
+        Scratch::new_public("cmp-zero-unreadable")
+    } else {
+        Scratch::new("cmp-zero-unreadable")
+    };
     scratch.write("readable", b"data");
     scratch.write("unreadable", b"private");
     fs::set_permissions(
@@ -634,12 +661,24 @@ fn cmp_zero_limit_does_not_hide_an_unreadable_input() {
     let executable = if drop_root {
         fs::set_permissions(&scratch.0, fs::Permissions::from_mode(0o755)).unwrap();
         let binary = scratch.0.join("axe");
-        let original = Path::new(env!("CARGO_BIN_EXE_axe"));
-        let linked = fs::metadata(original).unwrap().mode() & 0o005 == 0o005
-            && fs::hard_link(original, &binary).is_ok();
-        if !linked {
-            fs::copy(original, &binary).unwrap();
-            fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::copy(env!("CARGO_BIN_EXE_axe"), &binary).unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        let probe = Command::new(&binary)
+            .arg("--version")
+            .current_dir("/")
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .gid(65_534)
+            .uid(65_534)
+            .status();
+        match probe {
+            Ok(status) if status.success() => {}
+            other => {
+                eprintln!("SKIP: the dropped UID cannot execute this AXE build ({other:?})");
+                return;
+            }
         }
         binary
     } else {
@@ -673,5 +712,32 @@ fn cmp_zero_limit_does_not_hide_an_unreadable_input() {
                 );
             }
         }
+    }
+}
+#[cfg(unix)]
+#[test]
+fn cmp_reports_stdout_write_failures() {
+    let scratch = Scratch::new("cmp-dev-full");
+    scratch.write("a", b"a");
+    scratch.write("b", b"b");
+    for args in [
+        &["cmp", "--", "a", "b"][..],
+        &["cmp", "--", "-l", "a", "b"][..],
+    ] {
+        let stdout = File::create("/dev/full").unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_axe"))
+            .args(args)
+            .current_dir(&scratch.0)
+            .env_clear()
+            .env("HOME", &scratch.0)
+            .env("LC_ALL", "C")
+            .env("PATH", "/nonexistent")
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(!output.stderr.is_empty(), "{output:?}");
     }
 }

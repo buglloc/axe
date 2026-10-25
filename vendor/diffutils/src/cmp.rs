@@ -373,6 +373,12 @@ pub fn cmp(params: &Params) -> Result<Cmp, String> {
             };
 
             report_eof(at_byte, at_line, start_of_line, eof_on, params);
+            stdout.flush().map_err(|e| {
+                format!(
+                    "{}: error printing output: {e}",
+                    params.executable.to_string_lossy()
+                )
+            })?;
             return Ok(Cmp::Different);
         }
 
@@ -416,7 +422,20 @@ pub fn cmp(params: &Params) -> Result<Cmp, String> {
                     })?;
                     output.clear();
                 } else {
-                    report_difference(from_byte, to_byte, at_byte, at_line, params);
+                    report_difference(
+                        from_byte,
+                        to_byte,
+                        at_byte,
+                        at_line,
+                        params,
+                        &mut stdout,
+                    )?;
+                    stdout.flush().map_err(|e| {
+                        format!(
+                            "{}: error printing output: {e}",
+                            params.executable.to_string_lossy()
+                        )
+                    })?;
                     return Ok(Cmp::Different);
                 }
             }
@@ -433,7 +452,12 @@ pub fn cmp(params: &Params) -> Result<Cmp, String> {
         from.consume(consumed);
         to.consume(consumed);
     }
-
+    stdout.flush().map_err(|e| {
+        format!(
+            "{}: error printing output: {e}",
+            params.executable.to_string_lossy()
+        )
+    })?;
     Ok(compare)
 }
 
@@ -681,16 +705,16 @@ fn is_posix_locale() -> bool {
     locale == "C" || locale == "POSIX"
 }
 
-#[inline]
-fn report_difference(
+fn report_difference<W: Write>(
     from_byte: u8,
     to_byte: u8,
     at_byte: BytesLimitU64,
     at_line: u64,
     params: &Params,
-) {
+    output: &mut W,
+) -> Result<(), String> {
     if params.quiet {
-        return;
+        return Ok(());
     }
 
     let term = if is_posix_locale() && !params.print_bytes {
@@ -698,24 +722,38 @@ fn report_difference(
     } else {
         "byte"
     };
-    print!(
+    write!(
+        output,
         "{} {} differ: {term} {}, line {}",
         params.from.to_string_lossy(),
         params.to.to_string_lossy(),
         at_byte,
         at_line
-    );
+    )
+    .map_err(|error| format!("{}: error printing output: {error}", params.executable.to_string_lossy()))?;
     if params.print_bytes {
         let char_width = if to_byte >= 0x7F { 2 } else { 1 };
-        print!(
+        write!(
+            output,
             " is {:>3o} {:char_width$} {:>3o} {:char_width$}",
             from_byte,
             format_visible_byte(from_byte),
             to_byte,
             format_visible_byte(to_byte)
-        );
+        )
+        .map_err(|error| {
+            format!(
+                "{}: error printing output: {error}",
+                params.executable.to_string_lossy()
+            )
+        })?;
     }
-    println!();
+    writeln!(output).map_err(|error| {
+        format!(
+            "{}: error printing output: {error}",
+            params.executable.to_string_lossy()
+        )
+    })
 }
 
 #[cfg(test)]

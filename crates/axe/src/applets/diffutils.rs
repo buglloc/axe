@@ -1033,7 +1033,7 @@ pub fn cmp(args: Vec<OsString>) -> i32 {
         Ok(diffutilslib::cmp::Cmp::Equal) => 0,
         Ok(diffutilslib::cmp::Cmp::Different) => 1,
         Err(error) => {
-            eprintln!("cmp: {error}");
+            eprintln!("cmp: {}", error.strip_prefix("cmp: ").unwrap_or(&error));
             2
         }
     }
