@@ -9,13 +9,6 @@ pub(crate) fn continue_process(pid: sys::process::ProcessId) -> Result<(), error
         .map_err(|_errno| error::ErrorKind::FailedToSendSignal)?;
     Ok(())
 }
-/// Checks whether a process exists and can be signaled without sending a signal.
-pub fn check_process(pid: sys::process::ProcessId) -> Result<(), error::Error> {
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
-        .map_err(|_errno| error::ErrorKind::FailedToSendSignal)?;
-    Ok(())
-}
-
 
 /// Continues every process in a process group.
 ///

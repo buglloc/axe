@@ -1050,7 +1050,7 @@ dependencies = [
 [[package]]
 name = "brush-clap-adapter"
 version = "0.1.0"
-source = "git+https://github.com/reubeno/brush?rev=b562e0586b366d0558b27019276e591856253947#b562e0586b366d0558b27019276e591856253947"
+source = "git+https://github.com/reubeno/brush?rev=e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b#e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b"
 dependencies = [
  "brush-core",
  "clap",
@@ -1096,7 +1096,7 @@ dependencies = [
 [[package]]
 name = "brush-coreutils-builtins"
 version = "0.1.0"
-source = "git+https://github.com/reubeno/brush?rev=b562e0586b366d0558b27019276e591856253947#b562e0586b366d0558b27019276e591856253947"
+source = "git+https://github.com/reubeno/brush?rev=e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b#e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b"
 dependencies = [
  "uu_arch",
  "uu_b2sum",
@@ -1186,7 +1186,7 @@ dependencies = [
 [[package]]
 name = "brush-interactive"
 version = "0.4.0"
-source = "git+https://github.com/reubeno/brush?rev=b562e0586b366d0558b27019276e591856253947#b562e0586b366d0558b27019276e591856253947"
+source = "git+https://github.com/reubeno/brush?rev=e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b#e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b"
 dependencies = [
  "bon",
  "brush-core",
@@ -1203,7 +1203,7 @@ dependencies = [
 [[package]]
 name = "brush-parser"
 version = "0.4.0"
-source = "git+https://github.com/reubeno/brush?rev=b562e0586b366d0558b27019276e591856253947#b562e0586b366d0558b27019276e591856253947"
+source = "git+https://github.com/reubeno/brush?rev=e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b#e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b"
 dependencies = [
  "bon",
  "cached",
@@ -2133,7 +2133,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.4",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -7330,7 +7330,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

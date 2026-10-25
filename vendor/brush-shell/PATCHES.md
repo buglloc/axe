@@ -1,34 +1,37 @@
 # brush-shell patches
 
 Source: the `brush-shell` 0.4.0 package from the `reubeno/brush` git
-repository, revision `b562e0586b366d0558b27019276e591856253947` (path
+repository, revision `e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b` (path
 `brush-shell`; the same fork revision is recorded in the root
-`[workspace.metadata.brush-fork]`).
+`[workspace.metadata.brush-fork]`). Everything not listed below is upstream
+source at that revision.
 
-- Move the shell to the coordinated Brush git snapshot and its matching core,
-  builtins, parser, and interactive APIs. AXE pins all Brush crates to this
-  revision so shell dispatch and process interfaces cannot be mixed across
-  releases.
-- Add AXE's bundled command registry and dispatch bridge. Bundled applets can
-  run in-process through native callbacks, while commands requiring a process
-  boundary use descriptor-backed self-exec and the checked path fallback from
-  `brush-core`; external command lookup therefore follows the same shell
-  redirections and status rules as a standalone applet.
-- Keep the AXE default interactive prompt rooted in the current directory when
-  no inherited prompt is supplied, while preserving an inherited `PS1` and
-  non-interactive startup behavior.
-- Expose the core process-global child SIGPIPE policy to shell launches. A
-  shell inheriting `SIG_IGN` passes that policy to external and bundled
-  children instead of allowing Brush's unconditional child reset to change
-  pipeline status semantics. This is upstreamable.
-- Keep a standalone manifest and remove upstream workspace-only lockfiles,
-  CI/development metadata, and unrelated package scaffolding; AXE owns the
-  workspace lock and command registration.
+- `bundled.rs`: registry entries carry a shell execution policy. Spawn
+  entries re-exec through an executable provider consulted before every
+  launch (`install_with_executable`), using the descriptor-backed self-exec
+  and checked path fallback from `brush-core`; builtin entries run AXE
+  callbacks in the parent shell against a `ShellSnapshot` with the
+  redirected standard streams. Adds `invoke_installed` for AXE's own entry
+  routing, `executable_path` for path-only callers, launch-failure
+  observation for `doctor`, and `set_child_sigpipe_ignored`.
+- `entry::run(default_prompt)`: sets AXE's interactive `PS1` unless one is
+  inherited (an inherited empty `PS1` is kept).
+- Tokio runtime per input backend: Minimal and Vt use a current-thread runtime
+  so the non-interactive shell starts when thread creation is denied;
+  Basic and Reedline keep a two-worker multi-thread runtime because
+  Reedline uses `block_in_place`. Upstream always builds a multi-thread
+  runtime on Unix.
+- `human_panic` handler removed: panics print the standard Rust diagnostic to
+  stderr instead of writing a report file; terminal reset is kept.
+- Standalone manifest without upstream workspace lockfiles or CI metadata; AXE
+  owns the workspace lock and command registration.
 
-Upstreamability: the child-policy bridge is intended for Brush upstream. The
-bundled registry, native callbacks, descriptor launch integration, and AXE
-prompt are host integration and have no upstream issue or commit recorded here.
+Upstreamability: the runtime selection and SIGPIPE bridge are candidates for
+Brush upstream. The bundled registry, native callbacks, descriptor launch, and
+AXE prompt are host integration. No upstream issue or PR is recorded.
 
-AXE consumer regressions are in `crates/axe/tests/smoke.rs`,
-`crates/axe/tests/sigpipe_compat.rs`, `crates/axe/tests/compression_compat.rs`,
-and `crates/axe/tests/linux_network.rs`.
+AXE consumer regressions are in `crates/axe/tests/smoke.rs`
+(`unlinked_binary_launches_embedded_shell`,
+`inherited_runtime_root_stabilizes_child_selection`,
+`doctor_reports_readable_shell_state_and_selected_environment`) and
+`crates/axe/tests/sigpipe_compat.rs`.
