@@ -101,12 +101,25 @@ procutils-ps = { path = "vendor/procutils-ps" }
 uu_df = { path = "vendor/uu_df" }
 uu_base32 = { path = "vendor/uu_base32" }
 uu_csplit = { path = "vendor/uu_csplit" }
+uu_env = { path = "vendor/uu_env" }
 uu_expand = { path = "vendor/uu_expand" }
 uu_fmt = { path = "vendor/uu_fmt" }
 uu_fold = { path = "vendor/uu_fold" }
 uu_grep = { path = "vendor/uu_grep" }
+uu_install = { path = "vendor/uu_install" }
+uu_ls = { path = "vendor/uu_ls" }
+uu_mkdir = { path = "vendor/uu_mkdir" }
+uu_mkfifo = { path = "vendor/uu_mkfifo" }
+uu_mknod = { path = "vendor/uu_mknod" }
+uu_more = { path = "vendor/uu_more" }
 uu_pr = { path = "vendor/uu_pr" }
+uu_printf = { path = "vendor/uu_printf" }
+uu_printenv = { path = "vendor/uu_printenv" }
 uu_ptx = { path = "vendor/uu_ptx" }
+uu_shred = { path = "vendor/uu_shred" }
+uu_sort = { path = "vendor/uu_sort" }
+uu_stat = { path = "vendor/uu_stat" }
+uu_stty = { path = "vendor/uu_stty" }
 uu_unexpand = { path = "vendor/uu_unexpand" }
 # uucore embeds utility locales from the complete upstream source tree.
 uucore = { git = "https://github.com/uutils/coreutils", tag = "0.12.0" }

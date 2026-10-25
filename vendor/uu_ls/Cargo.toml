@@ -1,0 +1,102 @@
+# Vendored from uutils coreutils 0.12.0; upstream provenance is in .cargo_vcs_info.json.
+[package]
+edition = "2024"
+rust-version = "1.88.0"
+name = "uu_ls"
+version = "0.12.0"
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "ls ~ (uutils) display directory contents"
+homepage = "https://github.com/uutils/coreutils"
+readme = "README.package.md"
+keywords = [
+    "coreutils",
+    "uutils",
+    "cross-platform",
+    "cli",
+    "utility",
+]
+categories = ["command-line-utilities"]
+license = "MIT"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/ls"
+
+[features]
+diagnostics = ["uucore/diagnostics"]
+selinux = [
+    "dep:selinux",
+    "uucore/selinux",
+]
+smack = ["uucore/smack"]
+
+[lib]
+name = "uu_ls"
+path = "src/ls.rs"
+doctest = false
+
+[[bin]]
+name = "ls"
+path = "src/main.rs"
+
+[dependencies.ansi-width]
+version = "0.1.0"
+
+[dependencies.clap]
+version = "4.5"
+features = [
+    "wrap_help",
+    "cargo",
+    "color",
+    "env",
+]
+
+[dependencies.fluent]
+version = "0.17.0"
+
+[dependencies.glob]
+version = "0.3.1"
+
+[dependencies.lscolors]
+version = "0.21.0"
+features = ["gnu_legacy"]
+default-features = false
+
+[dependencies.rustc-hash]
+version = "2.1.1"
+
+[dependencies.terminal_size]
+version = "0.4.0"
+
+[dependencies.thiserror]
+version = "2.0.3"
+
+[dependencies.uucore]
+version = "0.12.0"
+features = [
+    "colors",
+    "entries",
+    "format",
+    "fs",
+    "fsext",
+    "fsxattr",
+    "i18n-collator",
+    "parser-size",
+    "parser-glob",
+    "quoting-style",
+    "time",
+    "version-cmp",
+]
+
+[dependencies.uutils_term_grid]
+version = "0.8"
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies.selinux]
+version = "0.6"
+optional = true
+
+[target.'cfg(not(target_os = "wasi"))'.dependencies.hostname]
+version = "0.4"
+

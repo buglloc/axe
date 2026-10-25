@@ -1,0 +1,62 @@
+# Vendored from uutils coreutils 0.12.0; upstream provenance is in .cargo_vcs_info.json.
+[package]
+edition = "2024"
+rust-version = "1.88.0"
+name = "uu_stty"
+version = "0.12.0"
+build = "build.rs"
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "stty ~ (uutils) print or change terminal characteristics"
+homepage = "https://github.com/uutils/coreutils"
+readme = "README.package.md"
+keywords = [
+    "coreutils",
+    "uutils",
+    "cross-platform",
+    "cli",
+    "utility",
+]
+categories = ["command-line-utilities"]
+license = "MIT"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/stty"
+
+[lib]
+name = "uu_stty"
+path = "src/stty.rs"
+doctest = false
+
+[[bin]]
+name = "stty"
+path = "src/main.rs"
+required-features = ["uucore/default"]
+
+[build-dependencies.cfg_aliases]
+version = "0.2.2"
+
+[target."cfg(unix)".dependencies.clap]
+version = "4.5"
+features = [
+    "wrap_help",
+    "cargo",
+    "color",
+]
+
+[target."cfg(unix)".dependencies.fluent]
+version = "0.17.0"
+
+[target."cfg(unix)".dependencies.nix]
+version = "0.31.3"
+features = [
+    "ioctl",
+    "term",
+]
+default-features = false
+
+[target."cfg(unix)".dependencies.uucore]
+version = "0.12.0"
+features = ["parser"]
+

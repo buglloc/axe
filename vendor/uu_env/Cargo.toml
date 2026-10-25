@@ -1,0 +1,67 @@
+# Vendored from uutils coreutils 0.12.0; upstream provenance is in .cargo_vcs_info.json.
+[package]
+edition = "2024"
+rust-version = "1.88.0"
+name = "uu_env"
+version = "0.12.0"
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "env ~ (uutils) set each NAME to VALUE in the environment and run COMMAND"
+homepage = "https://github.com/uutils/coreutils"
+readme = "README.package.md"
+keywords = [
+    "coreutils",
+    "uutils",
+    "cross-platform",
+    "cli",
+    "utility",
+]
+categories = ["command-line-utilities"]
+license = "MIT"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/env"
+
+[features]
+diagnostics = ["uucore/diagnostics"]
+
+[lib]
+name = "uu_env"
+path = "src/env.rs"
+doctest = false
+
+[[bin]]
+name = "env"
+path = "src/main.rs"
+
+[dependencies.clap]
+version = "4.5"
+features = [
+    "wrap_help",
+    "cargo",
+    "color",
+]
+
+[dependencies.fluent]
+version = "0.17.0"
+
+[dependencies.rust-ini]
+version = "0.21.0"
+
+[dependencies.thiserror]
+version = "2.0.3"
+
+[dependencies.uucore]
+version = "0.12.0"
+features = ["signals"]
+
+[target."cfg(unix)".dependencies.nix]
+version = "0.31.3"
+features = [
+    "process",
+    "signal",
+]
+default-features = false
+

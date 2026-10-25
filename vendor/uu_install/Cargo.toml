@@ -1,0 +1,86 @@
+# Vendored from uutils coreutils 0.12.0; upstream provenance is in .cargo_vcs_info.json.
+[package]
+edition = "2024"
+rust-version = "1.88.0"
+name = "uu_install"
+version = "0.12.0"
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "install ~ (uutils) copy files from SOURCE to DESTINATION (with specified attributes)"
+homepage = "https://github.com/uutils/coreutils"
+readme = "README.package.md"
+keywords = [
+    "coreutils",
+    "uutils",
+    "cross-platform",
+    "cli",
+    "utility",
+]
+categories = ["command-line-utilities"]
+license = "MIT"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/install"
+
+[features]
+diagnostics = ["uucore/diagnostics"]
+selinux = [
+    "dep:selinux",
+    "uucore/selinux",
+]
+
+[lib]
+name = "uu_install"
+path = "src/install.rs"
+
+[[bin]]
+name = "install"
+path = "src/main.rs"
+
+[dependencies.clap]
+version = "4.5"
+features = [
+    "wrap_help",
+    "cargo",
+    "color",
+]
+
+[dependencies.fluent]
+version = "0.17.0"
+
+[dependencies.thiserror]
+version = "2.0.3"
+
+[dependencies.uucore]
+version = "0.12.0"
+features = [
+    "backup-control",
+    "buf-copy",
+    "entries",
+    "fs",
+    "libc",
+    "mode",
+    "perms",
+    "process",
+]
+
+[target.'cfg(all(unix, not(any(target_os = "aix", target_os = "hurd", target_os = "redox"))))'.dependencies.uucore]
+version = "0.12.0"
+features = ["safe-traversal"]
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies.rustix]
+version = "1.1.4"
+features = ["fs"]
+default-features = false
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies.selinux]
+version = "0.6"
+optional = true
+
+[target."cfg(unix)".dependencies.rustix]
+version = "1.1.4"
+features = ["process", "fs"]
+default-features = false
+

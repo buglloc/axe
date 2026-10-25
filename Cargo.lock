@@ -8462,8 +8462,6 @@ dependencies = [
 [[package]]
 name = "uu_env"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab63d245c1d0f7c48c076bc820491a32020e4a8bcd31e3dcbc35513be279b7ea"
 dependencies = [
  "clap",
  "fluent",
@@ -8631,8 +8629,6 @@ dependencies = [
 [[package]]
 name = "uu_install"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b48ab5fa3a7a9d7f1f05d7b718dc8d55f2f5261a1192edd4be3a941af0d62560"
 dependencies = [
  "clap",
  "fluent",
@@ -8718,8 +8714,6 @@ dependencies = [
 [[package]]
 name = "uu_ls"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd8f956231b30edd22f1c0ef803d6928da0d7cb5f07add01a4d15e5b2d4a2540"
 dependencies = [
  "ansi-width",
  "clap",
@@ -8749,8 +8743,6 @@ dependencies = [
 [[package]]
 name = "uu_mkdir"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "665e031110e8de62ebe483eb50b21c19f57c6f02c571e3c57cfb6cf344209370"
 dependencies = [
  "clap",
  "fluent",
@@ -8761,8 +8753,6 @@ dependencies = [
 [[package]]
 name = "uu_mkfifo"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "167e064d8a4b20ef56d66ab231a9d2200d139cee1dfd3d7bd5f800d5cad2e978"
 dependencies = [
  "clap",
  "fluent",
@@ -8774,8 +8764,6 @@ dependencies = [
 [[package]]
 name = "uu_mknod"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fec2f461e1199b9b0a20208370e5b1348f39d182b55fd263191ceb362ed958a8"
 dependencies = [
  "clap",
  "fluent",
@@ -8800,8 +8788,6 @@ dependencies = [
 [[package]]
 name = "uu_more"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf56076f34c0d91d2821986c5393d31d57542f944f93c466530b62dd8909c134"
 dependencies = [
  "clap",
  "crossterm",
@@ -9003,8 +8989,6 @@ dependencies = [
 [[package]]
 name = "uu_printenv"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff7f1090fe0d0ac3e8b7a79cd48830f2f93577329d2ee739d84bb0d893889ccc"
 dependencies = [
  "clap",
  "fluent",
@@ -9014,9 +8998,8 @@ dependencies = [
 [[package]]
 name = "uu_printf"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ad2cacf36fe7936f5bda5a4c259f6961e3e5f77cf04db26e1922ea7dffad195"
 dependencies = [
+ "cc",
  "clap",
  "fluent",
  "uucore 0.12.0",
@@ -9171,8 +9154,6 @@ dependencies = [
 [[package]]
 name = "uu_shred"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c9a6aa2c9854085579e44f5c5955f23c2d2a0630b8b633585ca61248ed68a6c"
 dependencies = [
  "clap",
  "fluent",
@@ -9211,8 +9192,6 @@ dependencies = [
 [[package]]
 name = "uu_sort"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45084032c01910cb5d0515acbcea8ee6377d07e46e6fc84afde79fbd9dc6c6f8"
 dependencies = [
  "bigdecimal",
  "clap",
@@ -9248,8 +9227,6 @@ dependencies = [
 [[package]]
 name = "uu_stat"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f48914b4b5c0174e2688e66cf46bf61416db1c57d6918ba6519d1f13561dc13b"
 dependencies = [
  "clap",
  "fluent",
@@ -9261,8 +9238,6 @@ dependencies = [
 [[package]]
 name = "uu_stty"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d809f81fbc6bc416761cc27518b49448ea68640feb953a6c7231f727652b75e"
 dependencies = [
  "cfg_aliases",
  "clap",

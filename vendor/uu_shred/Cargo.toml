@@ -1,0 +1,57 @@
+# Vendored from uutils coreutils 0.12.0; upstream provenance is in .cargo_vcs_info.json.
+[package]
+edition = "2024"
+rust-version = "1.88.0"
+name = "uu_shred"
+version = "0.12.0"
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "shred ~ (uutils) hide former FILE contents with repeated overwrites"
+homepage = "https://github.com/uutils/coreutils"
+readme = "README.package.md"
+keywords = [
+    "coreutils",
+    "uutils",
+    "cross-platform",
+    "cli",
+    "utility",
+]
+categories = ["command-line-utilities"]
+license = "MIT"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/shred"
+
+[lib]
+name = "uu_shred"
+path = "src/shred.rs"
+doctest = false
+
+[[bin]]
+name = "shred"
+path = "src/main.rs"
+
+[dependencies.clap]
+version = "4.5"
+features = [
+    "wrap_help",
+    "cargo",
+    "color",
+]
+
+[dependencies.fluent]
+version = "0.17.0"
+
+[dependencies.libc]
+version = "0.2.186"
+
+[dependencies.rand]
+version = "0.10.1"
+features = ["std_rng"]
+
+[dependencies.uucore]
+version = "0.12.0"
+features = ["parser-size"]
+

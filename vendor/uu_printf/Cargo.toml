@@ -1,0 +1,59 @@
+# Vendored from uutils coreutils 0.12.0; upstream provenance is in .cargo_vcs_info.json.
+[package]
+edition = "2024"
+rust-version = "1.88.0"
+name = "uu_printf"
+version = "0.12.0"
+build = "build.rs"
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "printf ~ (uutils) FORMAT and display ARGUMENTS"
+homepage = "https://github.com/uutils/coreutils"
+readme = "README.package.md"
+keywords = [
+    "coreutils",
+    "uutils",
+    "cross-platform",
+    "cli",
+    "utility",
+]
+categories = ["command-line-utilities"]
+license = "MIT"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/printf"
+
+[features]
+diagnostics = ["uucore/diagnostics"]
+
+[lib]
+name = "uu_printf"
+path = "src/printf.rs"
+test = false
+doctest = false
+
+[[bin]]
+name = "printf"
+path = "src/main.rs"
+
+[dependencies.clap]
+version = "4.5"
+features = [
+    "wrap_help",
+    "cargo",
+    "color",
+]
+
+[dependencies.fluent]
+version = "0.17.0"
+
+[dependencies.uucore]
+version = "0.12.0"
+features = [
+    "format",
+    "quoting-style",
+]
+
+[build-dependencies.cc]
+version = "1"
