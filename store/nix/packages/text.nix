@@ -23,7 +23,15 @@
     name = "difft";
     synopsis = "Compare files with syntax-aware structural diffs";
     systems = portableSystems;
-    packageFor = target: targetPkgs: (packageSetFor target targetPkgs).difftastic;
+    rewriteBuildConfigurationPaths = true;
+    darwinSystemLibraries = ["libiconv.2.dylib"];
+    packageFor = target: targetPkgs:
+      if target == "aarch64-darwin"
+      then
+        (packageSetFor target targetPkgs).difftastic.overrideAttrs (old: {
+          patches = (old.patches or []) ++ [../patches/difftastic-no-jemalloc-darwin.patch];
+        })
+      else (packageSetFor target targetPkgs).difftastic;
   };
 
   jq = mkNixpkgsBinary {

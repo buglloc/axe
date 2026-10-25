@@ -9,6 +9,8 @@ mkNixpkgsBinary {
   name = "ox";
   synopsis = "Edit text in the terminal with Lua configuration and plugins";
   systems = portableSystems;
+  rewriteBuildConfigurationPaths = true;
+  darwinSystemLibraries = ["libiconv.2.dylib"];
   packageFor = system: pkgs: let
     packageSet = packageSetFor system pkgs;
   in

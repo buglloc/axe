@@ -1,0 +1,12 @@
+diff --git a/src/main.rs b/src/main.rs
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -120,2 +120,2 @@
+-#[cfg(not(any(windows, target_os = "illumos", target_os = "freebsd")))]
++#[cfg(not(any(windows, target_os = "illumos", target_os = "freebsd", target_os = "macos")))]
+ use tikv_jemallocator::Jemalloc;
+@@ -123,3 +123,3 @@
+-#[cfg(not(any(windows, target_os = "illumos", target_os = "freebsd")))]
++#[cfg(not(any(windows, target_os = "illumos", target_os = "freebsd", target_os = "macos")))]
+ #[global_allocator]
+ static GLOBAL: Jemalloc = Jemalloc;
