@@ -1180,6 +1180,11 @@ fn detect_luks(bytes: &[u8], length: u64) -> Option<Signature> {
     let version = be_u16(bytes, 6)?;
     let label = match version {
         1 => {
+            // util-linux reads the complete LUKS1 superblock and does not
+            // probe regular files no larger than one 1 KiB block.
+            if length <= 1024 {
+                return None;
+            }
             bytes.get(..592)?;
             None
         }
