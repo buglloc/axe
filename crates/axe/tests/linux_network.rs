@@ -1,7 +1,9 @@
 #![cfg(target_os = "linux")]
 
 use std::fs::File;
-use std::os::fd::OwnedFd;
+use std::net::Ipv6Addr;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -113,6 +115,142 @@ fn actual_ip_output_handles_full_devices_and_closed_consumers() {
     assert!(output.stderr.is_empty());
 }
 
+#[test]
+fn bare_ip_and_rejected_selectors_keep_reference_exit_classes() {
+    let output = axe("ip", &[]).output().unwrap();
+    assert_eq!(output.status.code(), Some(255), "{}", describe(&output));
+    assert!(output.stdout.is_empty());
+    assert!(
+        output
+            .stderr
+            .starts_with(b"Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }\n")
+    );
+    for (applet, args, code, message) in [
+        (
+            "ip",
+            vec!["audit-no-object"],
+            1,
+            "Object \"audit-no-object\" is unknown, try \"ip help\".\n",
+        ),
+        (
+            "iprule",
+            vec!["show", "audit-no-selector"],
+            1,
+            "Error: inet prefix is expected rather than \"audit-no-selector\".\n",
+        ),
+        (
+            "ipaddr",
+            vec!["show", "dev"],
+            255,
+            "Command line is not complete. Try option \"help\"\n",
+        ),
+        (
+            "iproute",
+            vec!["show", "table", "audit-no-table"],
+            255,
+            "Error: argument \"audit-no-table\" is wrong: table id value is invalid\n\n",
+        ),
+    ] {
+        let output = axe(applet, &args).output().unwrap();
+        assert_eq!(output.status.code(), Some(code), "{}", describe(&output));
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr, message.as_bytes());
+    }
+}
+
+#[test]
+fn ipcalc_selected_fields_and_json_use_modern_ipcalc_contract() {
+    let output = axe("ipcalc", &["-nmp", "192.168.7.42/24"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", describe(&output));
+    assert_eq!(
+        output.stdout,
+        b"NETMASK=255.255.255.0\nPREFIX=24\nNETWORK=192.168.7.0\n"
+    );
+    assert!(output.stderr.is_empty());
+    let output = axe("ipcalc", &["-j", "192.168.7.42/24"]).output().unwrap();
+    assert!(output.status.success(), "{}", describe(&output));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!({
+            "ADDRESS": "192.168.7.42", "NETWORK": "192.168.7.0",
+            "NETMASK": "255.255.255.0", "PREFIX": "24", "BROADCAST": "192.168.7.255",
+            "ADDRSPACE": "Private Use", "MINADDR": "192.168.7.1",
+            "MAXADDR": "192.168.7.254", "ADDRESSES": "254"
+        })
+    );
+    for (address, endpoint) in [
+        ("192.0.2.1", "192.0.2.1"),
+        ("192.0.2.1/32", "192.0.2.1"),
+        ("2001:db8::1", "2001:db8::1"),
+        ("2001:db8::1/128", "2001:db8::1"),
+    ] {
+        let output = axe("ipcalc", &["--minaddr", "--maxaddr", address])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", describe(&output));
+        assert_eq!(
+            output.stdout,
+            format!("MINADDR={endpoint}\nMAXADDR={endpoint}\n").as_bytes()
+        );
+        assert!(output.stderr.is_empty());
+    }
+    for (args, diagnostic) in [
+        (
+            vec!["192.0.2.1/24", "255.255.0.0", "garbage"],
+            "ipcalc: bad IPv4 address: 192.0.2.1/24\n",
+        ),
+        (vec!["192.0.2.1/33"], "ipcalc: bad IPv4 prefix: 33\n"),
+        (
+            vec!["192.0.2.1", "255.0.255.0"],
+            "ipcalc: bad IPv4 prefix: 255.0.255.0\n",
+        ),
+        (
+            vec!["-46", "192.0.2.1"],
+            "ipcalc: you cannot specify both IPv4 and IPv6\n",
+        ),
+    ] {
+        let output = axe("ipcalc", &args).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{}", describe(&output));
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr, diagnostic.as_bytes());
+    }
+}
+
+fn assert_owned_network_namespace() {
+    let network = File::open("/proc/self/ns/net").unwrap();
+    let user = std::fs::metadata("/proc/self/ns/user").unwrap();
+    for (kind, inode) in [
+        ("NET", network.metadata().unwrap().ino()),
+        ("USER", user.ino()),
+    ] {
+        let parent = std::env::var(format!("AXE_NETWORK_NAMESPACE_PARENT_{kind}"))
+            .expect("namespace child must have a recorded parent namespace")
+            .parse::<u64>()
+            .unwrap();
+        assert_ne!(
+            inode, parent,
+            "refusing writes in the parent's {kind} namespace"
+        );
+    }
+    // SAFETY: NS_GET_USERNS takes no pointer and returns a new owned descriptor.
+    let owner = unsafe { libc::ioctl(network.as_raw_fd(), 0xb701) };
+    assert!(
+        owner >= 0,
+        "query network namespace owner: {}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: a successful NS_GET_USERNS returned this fresh descriptor.
+    let owner = File::from(unsafe { OwnedFd::from_raw_fd(owner) });
+    let owner = owner.metadata().unwrap();
+    assert_eq!(
+        (owner.dev(), owner.ino()),
+        (user.dev(), user.ino()),
+        "network namespace must belong to the isolated user namespace"
+    );
+}
+
 fn setup(args: &[&str]) {
     let output = reference("ip", args);
     assert!(
@@ -139,6 +277,33 @@ fn parity(applet: &str, args: &[&str], json: bool) {
         // iproute2 can leave empty link/address objects after filtering.
         if let Some(records) = expected.as_array_mut() {
             records.retain(|record| !record.as_object().is_some_and(|object| object.is_empty()));
+            if applet == "ip"
+                && records.iter().any(|record| {
+                    record.get("addr_info").is_some() && record.get("ifindex").is_some()
+                })
+            {
+                // Family-filtered link dumps can omit attributes retained by the full address view.
+                let links = reference("ip", &["-j", "link", "show"]);
+                assert!(links.status.success(), "{}", describe(&links));
+                let links: Vec<serde_json::Value> = serde_json::from_slice(&links.stdout).unwrap();
+                for record in records.iter_mut() {
+                    if record.get("addr_info").is_none() || record.get("ifindex").is_none() {
+                        continue;
+                    }
+                    let link = links
+                        .iter()
+                        .find(|link| link["ifindex"] == record["ifindex"])
+                        .expect("reference link metadata for address object");
+                    let record = record.as_object_mut().unwrap();
+                    for key in ["qdisc", "master", "group", "txqlen"] {
+                        if !record.contains_key(key)
+                            && let Some(value) = link.get(key)
+                        {
+                            record.insert(key.to_owned(), value.clone());
+                        }
+                    }
+                }
+            }
             for record in records {
                 if let Some(addresses) = record
                     .get_mut("addr_info")
@@ -171,6 +336,20 @@ fn namespace_readonly_reference_parity() {
                 "--nocapture",
             ])
             .env("AXE_NETWORK_NAMESPACE_CHILD", "1")
+            .env(
+                "AXE_NETWORK_NAMESPACE_PARENT_NET",
+                std::fs::metadata("/proc/self/ns/net")
+                    .unwrap()
+                    .ino()
+                    .to_string(),
+            )
+            .env(
+                "AXE_NETWORK_NAMESPACE_PARENT_USER",
+                std::fs::metadata("/proc/self/ns/user")
+                    .unwrap()
+                    .ino()
+                    .to_string(),
+            )
             .output()
             .unwrap();
         assert!(
@@ -180,6 +359,7 @@ fn namespace_readonly_reference_parity() {
         );
         return;
     }
+    assert_owned_network_namespace();
     setup(&["link", "set", "lo", "up"]);
     for name in ["d0", "d1"] {
         setup(&["link", "add", name, "type", "dummy"]);
@@ -307,6 +487,7 @@ fn namespace_readonly_reference_parity() {
         "d1",
     ]);
     setup(&["link", "set", "d1", "down"]);
+    setup(&["rule", "add", "priority", "1000", "table", "100"]);
 
     for scope in ["global", "0"] {
         parity("ip", &["address", "show", "scope", scope], false);
@@ -351,6 +532,9 @@ fn namespace_readonly_reference_parity() {
         vec!["route", "get", "10.1.0.5", "dev", "d0"],
         vec!["route", "get", "10.1.0.5", "mark", "0x6", "dev", "d0"],
         vec!["route", "get", "127.0.0.1"],
+        vec!["route", "get", "127.0.0.1", "uid", "1000"],
+        vec!["rule", "show", "table", "local"],
+        vec!["rule", "show", "table", "100"],
         vec!["-6", "route", "show", "table", "100"],
         vec!["route", "get", "203.0.113.1"],
         vec!["route", "get", "10.1.0.5", "dev", "axe-no-device"],
@@ -414,5 +598,126 @@ fn namespace_readonly_reference_parity() {
     ] {
         parity("arp", &args, false);
     }
+    setup(&["address", "delete", "10.1.0.9/24", "dev", "d0"]);
     parity("ifconfig", &["-s", "axe-no-device"], false);
+    for args in [vec!["-v", "lo"], vec!["lo"]] {
+        parity("ifconfig", &args, false);
+    }
+    for args in [vec!["-s"], vec!["-a", "-s"]] {
+        let expected = reference("ifconfig", &args);
+        let actual = axe("ifconfig", &args).output().unwrap();
+        assert!(expected.status.success(), "{}", describe(&expected));
+        assert!(actual.status.success(), "{}", describe(&actual));
+        assert_eq!(actual.stderr, expected.stderr);
+        let summary = |bytes: &[u8]| {
+            String::from_utf8_lossy(bytes)
+                .lines()
+                .skip(1)
+                .map(|line| {
+                    let fields = line.split_whitespace().collect::<Vec<_>>();
+                    (
+                        fields[0].to_owned(),
+                        fields[1].to_owned(),
+                        fields.last().unwrap().to_string(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            summary(&actual.stdout),
+            summary(&expected.stdout),
+            "{args:?}"
+        );
+    }
+    for (wrapper, object, args) in [
+        ("iprule", "rule", vec!["show", "table", "local"]),
+        ("iproute", "route", vec!["get", "127.0.0.1", "uid", "1000"]),
+    ] {
+        let mut reference_args = vec![object];
+        reference_args.extend_from_slice(&args);
+        let expected = reference("ip", &reference_args);
+        let actual = axe(wrapper, &args).output().unwrap();
+        assert_eq!(
+            actual.status.code(),
+            expected.status.code(),
+            "{wrapper}: {}",
+            describe(&actual)
+        );
+        assert_eq!(actual.stdout, expected.stdout, "{wrapper}");
+        assert_eq!(actual.stderr, expected.stderr, "{wrapper}");
+    }
+}
+
+#[test]
+#[ignore = "requires modern ipcalc-ng 1.0.3 in AXE_REFERENCE_PATH, not the Perl ipcalc"]
+fn modern_ipcalc_reference_parity() {
+    for args in [
+        vec!["192.168.7.42/24"],
+        vec!["192.168.7.0/24"],
+        vec!["192.168.7.42", "255.255.255.0"],
+        vec!["10.1.2.3"],
+        vec!["192.0.2.1/31"],
+        vec!["192.0.2.1/32"],
+        vec!["2001:db8::42/64"],
+        vec!["2001:db8::1/128"],
+        vec!["-n", "-m", "-p", "192.168.7.42/24"],
+        vec!["-nm", "192.168.7.42/24"],
+        vec!["-nbmp", "2001:db8::42/64"],
+        vec!["192.0.2.1/33"],
+        vec!["192.0.2.1", "255.0.255.0"],
+        vec!["192.0.2.1/24", "255.255.0.0", "garbage"],
+        vec!["-46", "192.0.2.1"],
+        vec!["-cn", "192.0.2.1"],
+        vec!["-vn", "192.0.2.1"],
+    ] {
+        parity("ipcalc", &args, false);
+    }
+    // The reference leaves 2^128 blank; derive that boundary without overflowing u128.
+    let expected_count = format!("{}{}", u128::MAX / 10, u128::MAX % 10 + 1);
+    let output = axe("ipcalc", &["::/0"]).output().unwrap();
+    assert!(output.status.success(), "{}", describe(&output));
+    assert!(output.stderr.is_empty());
+    let text = std::str::from_utf8(&output.stdout).unwrap();
+    let fields = text
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(
+        u128::from(fields["HostMin:"].parse::<Ipv6Addr>().unwrap()),
+        0
+    );
+    assert_eq!(
+        u128::from(fields["HostMax:"].parse::<Ipv6Addr>().unwrap()),
+        u128::MAX
+    );
+    let (power, count) = fields["Hosts/Net:"].split_once(" = ").unwrap();
+    assert_eq!(power, "2^(128)");
+    assert_eq!(count, expected_count);
+    let output = axe("ipcalc", &["--addresses", "::/0"]).output().unwrap();
+    assert!(output.status.success(), "{}", describe(&output));
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        output.stdout,
+        format!("ADDRESSES={expected_count}\n").as_bytes()
+    );
+    let output = axe("ipcalc", &["-j", "::/0"]).output().unwrap();
+    assert!(output.status.success(), "{}", describe(&output));
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!({
+            "FULLNETWORK":"0000:0000:0000:0000:0000:0000:0000:0000",
+            "NETWORK":"::", "NETMASK":"::", "PREFIX":"0", "ADDRSPACE":"Reserved",
+            "MINADDR":"::", "MAXADDR":"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "ADDRESSES":expected_count
+        })
+    );
+    for address in [
+        "192.168.7.42/24",
+        "192.0.2.1/31",
+        "10.1.2.3",
+        "2001:db8::42/64",
+    ] {
+        parity("ipcalc", &["-j", address], true);
+    }
 }

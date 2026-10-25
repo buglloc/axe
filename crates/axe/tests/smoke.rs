@@ -3232,21 +3232,6 @@ fn blkid_probes_ext4_metadata_from_a_regular_file() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn ipcalc_reports_ipv4_network_boundaries() {
-    let output = Command::new(env!("CARGO_BIN_EXE_axe"))
-        .args(["--applet", "ipcalc", "--", "192.168.7.42/24"])
-        .output()
-        .expect("run ipcalc");
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).expect("ipcalc output is UTF-8");
-    assert!(stdout.contains("Network:   192.168.7.0/24\n"));
-    assert!(stdout.contains("HostMin:   192.168.7.1\n"));
-    assert!(stdout.contains("HostMax:   192.168.7.254\n"));
-    assert!(stdout.contains("Broadcast: 192.168.7.255\n"));
-}
-
-#[cfg(target_os = "linux")]
-#[test]
 fn inotifywait_reports_created_file() {
     let scratch = Scratch::new("inotifywait-create");
     let child = Command::new(env!("CARGO_BIN_EXE_axe"))

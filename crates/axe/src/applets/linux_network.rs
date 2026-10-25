@@ -68,16 +68,6 @@ pub fn iprule(args: Vec<OsString>) -> i32 {
     run_output("iprule", |out| run_ip(args, Some(Object::Rule), out))
 }
 
-fn run(name: &str, operation: impl FnOnce() -> Result<(), String>) -> i32 {
-    match operation() {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!("{name}: {error}");
-            1
-        }
-    }
-}
-
 #[derive(Debug)]
 struct CommandError {
     message: String,
@@ -182,6 +172,14 @@ enum Object {
     Rule,
 }
 
+const IP_USAGE: &str = concat!(
+    "Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }\n",
+    "       ip route get ADDRESS [from ADDRESS] [mark MARK] [uid UID] [dev IFACE | oif IFACE]\n",
+    "       OBJECT := { address | link | neighbour | route | rule }\n",
+    "       COMMAND := { show | list } (read-only; route also supports get)\n",
+    "       OPTIONS := { -4 | -6 | -f { inet | inet6 | link } | -o | -br | -s | -j | -p | -N }",
+);
+
 #[derive(Default)]
 struct IpOptions {
     family: Option<AddressFamily>,
@@ -205,7 +203,7 @@ struct IpOptions {
     address_protocol: Option<u8>,
     address_flags: Vec<(AddressFlags, bool)>,
     label: Option<std::ffi::CString>,
-    /// None selects main; zero selects all tables and both IP families.
+    /// Routes default to main; rules default to all tables. Zero selects all.
     route_table: Option<u32>,
     route_protocol: Option<u8>,
     route_prefix: RoutePrefixes,
@@ -219,6 +217,7 @@ struct RouteGet {
     destination: IpAddr,
     source: Option<IpAddr>,
     mark: Option<u32>,
+    uid: Option<u32>,
 }
 
 struct IpRequest {
@@ -253,16 +252,7 @@ fn run_ip(
     let args = utf8_args(args)?;
     let request = parse_ip(&args[1..], forced)?;
     match request.output {
-        Some(IpOutput::Help) => {
-            writeln!(
-                out,
-                "Usage: ip [ OPTIONS ] OBJECT {{ show | list }}\n       \
-                ip route get ADDRESS [from ADDRESS] [mark MARK] [dev IFACE]\n       \
-                OBJECT := {{ address | link | neighbour | route | rule }}\n       \
-                OPTIONS := {{ -4 | -6 | -f {{ inet | inet6 | link }} | -o | -br | -s | -j | -p | -N }}"
-            )?;
-            return Ok(());
-        }
+        Some(IpOutput::Help) => return Err(CommandError::new(0, IP_USAGE)),
         Some(IpOutput::Version) => {
             writeln!(out, "ip (axe) {}", env!("CARGO_PKG_VERSION"))?;
             return Ok(());
@@ -360,7 +350,7 @@ fn parse_ip(args: &[String], forced: Option<Object>) -> Result<IpRequest, Comman
     } else if let Some(value) = first.take() {
         parse_object(value)?
     } else {
-        Object::Address
+        return Err(CommandError::new(255, IP_USAGE));
     };
     if !matches!(object, Object::Link | Object::Address)
         && options.family == Some(AddressFamily::Packet)
@@ -411,6 +401,7 @@ fn parse_ip(args: &[String], forced: Option<Object>) -> Result<IpRequest, Comman
             destination,
             source: None,
             mark: None,
+            uid: None,
         };
         while let Some(selector) = selectors.next() {
             let value = argument(&mut selectors, selector)?;
@@ -425,6 +416,9 @@ fn parse_ip(args: &[String], forced: Option<Object>) -> Result<IpRequest, Comman
                 }
                 "mark" => {
                     query.mark = Some(parse_number(value).ok_or_else(|| invalid("mark", value))?)
+                }
+                "uid" => {
+                    query.uid = Some(parse_number(value).ok_or_else(|| invalid("UID", value))?)
                 }
                 "dev" | "oif" => options.device = Some(value.into()),
                 _ => return Err(invalid("route get selector", selector)),
@@ -472,14 +466,11 @@ fn verb_name(object: Object, value: &str) -> Option<&'static str> {
 
 fn argument<'a>(
     values: &mut impl Iterator<Item = &'a str>,
-    keyword: &str,
+    _keyword: &str,
 ) -> Result<&'a str, CommandError> {
-    values.next().ok_or_else(|| {
-        CommandError::new(
-            255,
-            format!("Command line is not complete. Try option \"{keyword} help\""),
-        )
-    })
+    values
+        .next()
+        .ok_or_else(|| CommandError::new(255, "Command line is not complete. Try option \"help\""))
 }
 
 fn invalid(kind: &str, value: &str) -> CommandError {
@@ -573,12 +564,19 @@ fn parse_show_selectors<'a>(
                     .address_flags
                     .push((address_flag(name).expect("matched address flag"), true));
             }
-            (Object::Route, "table") => {
+            (Object::Route | Object::Rule, "table") | (Object::Rule, "lookup") => {
                 let value = argument(values, selector)?;
                 options.route_table = Some(if value == "all" {
                     0
                 } else {
-                    parse_name(value, TABLES).ok_or_else(|| invalid("table id", value))?
+                    parse_name(value, TABLES).ok_or_else(|| {
+                        CommandError::new(
+                            255,
+                            format!(
+                                "Error: argument \"{value}\" is wrong: table id value is invalid\n"
+                            ),
+                        )
+                    })?
                 });
             }
             (Object::Route, "proto" | "protocol") => {
@@ -643,6 +641,13 @@ fn parse_show_selectors<'a>(
             (Object::Link | Object::Address, value) if options.device.is_none() => {
                 options.device = Some(value.into())
             }
+            (Object::Rule, value) => {
+                parse_prefix(value, Some(options.family.unwrap_or(AddressFamily::Inet)))?;
+                return Err(CommandError::new(
+                    255,
+                    format!("Error: unsupported rule selector \"{value}\""),
+                ));
+            }
             _ => return Err(invalid("selector", selector)),
         }
     }
@@ -662,7 +667,7 @@ fn parse_object(value: &str) -> Result<Object, CommandError> {
     .find_map(|(name, object)| (!value.is_empty() && name.starts_with(value)).then_some(object))
     .ok_or_else(|| {
         CommandError::new(
-            255,
+            1,
             format!("Object \"{value}\" is unknown, try \"ip help\"."),
         )
     })
@@ -1839,6 +1844,9 @@ fn route_get_request(options: &IpOptions, query: &RouteGet) -> RouteMessage {
     if let Some(mark) = query.mark {
         message.attributes.push(RouteAttribute::Mark(mark));
     }
+    if let Some(uid) = query.uid {
+        message.attributes.push(RouteAttribute::Uid(uid));
+    }
     if let Some(index) = options.device_index {
         message.attributes.push(RouteAttribute::Oif(index));
     }
@@ -1958,32 +1966,49 @@ fn show_rules(
     options: &IpOptions,
     out: &mut dyn Write,
 ) -> Result<(), CommandError> {
-    let rules = snapshot.rules.iter().map(|rule| {
-        let mut priority = 0;
-        let mut source = "all".to_string();
-        let mut destination = None;
-        let mut table = u32::from(rule.header.table);
-        let mut iif = None;
-        let mut oif = None;
-        let mut fwmark = None;
-        for attribute in &rule.attributes {
-            match attribute {
-                RuleAttribute::Priority(value) => priority = *value,
-                RuleAttribute::Source(value) => {
-                    source = network_text(IpNet(*value, rule.header.src_len))
+    let rules = snapshot
+        .rules
+        .iter()
+        .map(|rule| {
+            let table = rule
+                .attributes
+                .iter()
+                .find_map(|attribute| match attribute {
+                    RuleAttribute::Table(value) => Some(*value),
+                    _ => None,
+                })
+                .unwrap_or(u32::from(rule.header.table));
+            (rule, table)
+        })
+        .filter(|(_, table)| {
+            options
+                .route_table
+                .is_none_or(|selected| selected == 0 || selected == *table)
+        })
+        .map(|(rule, table)| {
+            let mut priority = 0;
+            let mut source = "all".to_string();
+            let mut destination = None;
+            let mut iif = None;
+            let mut oif = None;
+            let mut fwmark = None;
+            for attribute in &rule.attributes {
+                match attribute {
+                    RuleAttribute::Priority(value) => priority = *value,
+                    RuleAttribute::Source(value) => {
+                        source = network_text(IpNet(*value, rule.header.src_len))
+                    }
+                    RuleAttribute::Destination(value) => {
+                        destination = Some(network_text(IpNet(*value, rule.header.dst_len)))
+                    }
+                    RuleAttribute::Iifname(value) => iif = Some(value.as_str()),
+                    RuleAttribute::Oifname(value) => oif = Some(value.as_str()),
+                    RuleAttribute::FwMark(value) => fwmark = Some(*value),
+                    _ => {}
                 }
-                RuleAttribute::Destination(value) => {
-                    destination = Some(network_text(IpNet(*value, rule.header.dst_len)))
-                }
-                RuleAttribute::Table(value) => table = *value,
-                RuleAttribute::Iifname(value) => iif = Some(value.as_str()),
-                RuleAttribute::Oifname(value) => oif = Some(value.as_str()),
-                RuleAttribute::FwMark(value) => fwmark = Some(*value),
-                _ => {}
             }
-        }
-        (priority, source, destination, table, iif, oif, fwmark)
-    });
+            (priority, source, destination, table, iif, oif, fwmark)
+        });
     if options.json {
         write_json(
             out,
@@ -2423,22 +2448,29 @@ fn run_ifconfig(args: Vec<OsString>, out: &mut dyn Write) -> Result<(), CommandE
     for value in &values[1..] {
         match value.as_str() {
             "-a" | "--all" => all = true,
-            "-s" | "--short" => {
-                short = true;
-                all = true;
-            }
+            "-s" | "--short" => short = true,
+            "-v" | "--verbose" => {}
             "-h" | "--help" => {
                 writeln!(
                     out,
-                    "Usage: ifconfig [-a] [-s] [interface]\nDisplay network interface configuration (read-only)."
+                    "Usage: ifconfig [-a] [-s] [-v] [interface]\nDisplay network interface configuration (read-only)."
                 )?;
                 return Ok(());
             }
             value if value.starts_with('-') => {
-                return Err(CommandError::new(
-                    1,
-                    format!("ifconfig: unsupported option '{value}'"),
-                ));
+                for flag in value[1..].chars() {
+                    match flag {
+                        'a' => all = true,
+                        's' => short = true,
+                        'v' => {}
+                        _ => {
+                            return Err(CommandError::new(
+                                1,
+                                format!("ifconfig: invalid option -- '{flag}'"),
+                            ));
+                        }
+                    }
+                }
             }
             _ if device.is_none() => device = Some(value.as_str()),
             _ => {
@@ -2462,6 +2494,9 @@ fn run_ifconfig(args: Vec<OsString>, out: &mut dyn Write) -> Result<(), CommandE
                 snapshot
                     .load_object(&handle, Object::Address, &IpOptions::default())
                     .await?;
+                if let Ok(input) = std::fs::File::open("/proc/net/if_inet6") {
+                    order_ifconfig_ipv6(BufReader::new(input), &mut snapshot.addresses)?;
+                }
             }
             render_ifconfig(&snapshot, all, short, index, out)
         }
@@ -2505,43 +2540,67 @@ fn render_ifconfig(
     device: Option<u32>,
     out: &mut dyn Write,
 ) -> Result<(), CommandError> {
-    for link in snapshot.links.iter().filter(|link| {
-        device.map_or(all || link.flags.contains(LinkFlags::Up), |index| {
-            link.index == index
+    let mut links = snapshot
+        .links
+        .iter()
+        .filter(|link| {
+            device.map_or(all || link.flags.contains(LinkFlags::Up), |index| {
+                link.index == index
+            })
         })
-    }) {
-        let flags = link.flags.bits();
+        .collect::<Vec<_>>();
+    links.sort_unstable_by(|left, right| ifconfig_name_cmp(&left.name, &right.name));
+    for link in links {
+        let flags = link.flags.bits() & 0xffff;
         if short {
-            let stats = link.stats;
             let compact_flags = [
                 (libc::IFF_ALLMULTI, 'A'),
                 (libc::IFF_BROADCAST, 'B'),
                 (libc::IFF_DEBUG, 'D'),
                 (libc::IFF_LOOPBACK, 'L'),
                 (libc::IFF_MULTICAST, 'M'),
-                (libc::IFF_NOARP, 'N'),
+                (libc::IFF_DYNAMIC, 'd'),
                 (libc::IFF_PROMISC, 'P'),
+                (libc::IFF_NOTRAILERS, 'N'),
+                (libc::IFF_NOARP, 'O'),
+                (libc::IFF_POINTOPOINT, 'P'),
+                (libc::IFF_SLAVE, 's'),
+                (libc::IFF_MASTER, 'm'),
                 (libc::IFF_RUNNING, 'R'),
                 (libc::IFF_UP, 'U'),
             ]
             .into_iter()
-            .filter_map(|(mask, flag)| (flags & mask as u32 != 0).then_some(flag))
-            .collect::<String>();
-            writeln!(
+            .filter_map(|(mask, flag)| (flags & mask as u32 != 0).then_some(flag));
+            write!(
                 out,
-                "{:<16} {:>6} {:>8} {:>6} {:>6} {:>6} {:>8} {:>6} {:>6} {:>6} {}",
+                "{:<15.15} {:>5} ",
                 link.name,
-                link.mtu.unwrap_or_default(),
-                stats.map_or(0, |stats| stats.rx_packets),
-                stats.map_or(0, |stats| stats.rx_errors),
-                stats.map_or(0, |stats| stats.rx_dropped),
-                stats.map_or(0, |stats| stats.rx_over_errors),
-                stats.map_or(0, |stats| stats.tx_packets),
-                stats.map_or(0, |stats| stats.tx_errors),
-                stats.map_or(0, |stats| stats.tx_dropped),
-                stats.map_or(0, |stats| stats.tx_fifo_errors),
-                compact_flags
+                link.mtu.unwrap_or_default()
             )?;
+            if let Some(stats) = link.stats {
+                write!(
+                    out,
+                    "{:>8} {:>6} {:>6} {:<6} {:>8} {:>6} {:>6} {:>6} ",
+                    stats.rx_packets,
+                    stats.rx_errors,
+                    stats.rx_dropped.wrapping_add(stats.rx_missed_errors),
+                    stats.rx_fifo_errors,
+                    stats.tx_packets,
+                    stats.tx_errors,
+                    stats.tx_dropped,
+                    stats.tx_fifo_errors
+                )?;
+            } else {
+                write!(out, "{:<56}", "     - no statistics available -")?;
+            }
+            if flags == 0 {
+                out.write_all(b"[NO FLAGS]")?;
+            } else {
+                for flag in compact_flags {
+                    write!(out, "{flag}")?;
+                }
+            }
+            writeln!(out)?;
             continue;
         }
         writeln!(
@@ -2564,229 +2623,664 @@ fn render_ifconfig(
                     address.address,
                     prefix_mask_v4(address.prefix)
                 )?;
-                if let Some(broadcast) = address.broadcast {
-                    write!(out, "  broadcast {broadcast}")?;
+                if flags & libc::IFF_BROADCAST as u32 != 0 {
+                    write!(
+                        out,
+                        "  broadcast {}",
+                        address.broadcast.unwrap_or(Ipv4Addr::UNSPECIFIED)
+                    )?;
                 }
-                if let Some(peer) = address.peer {
-                    write!(out, "  destination {peer}")?;
+                if flags & libc::IFF_POINTOPOINT as u32 != 0 {
+                    write!(
+                        out,
+                        "  destination {}",
+                        address.peer.unwrap_or(address.address)
+                    )?;
                 }
                 writeln!(out)?;
             } else {
-                let scope = match address.scope {
-                    0 => 0,
-                    253 => 0x20,
-                    254 => 0x10,
-                    _ => 0x40,
+                let (scope, name) = match address.scope {
+                    0 => (0, "global"),
+                    200 => (0x40, "site"),
+                    253 => (0x20, "link"),
+                    254 => (0x10, "host"),
+                    _ => (0, "global"),
                 };
                 writeln!(
                     out,
-                    "        inet6 {}  prefixlen {}  scopeid 0x{scope:x}<{}>",
-                    address.address,
-                    address.prefix,
-                    name_of(u32::from(address.scope), SCOPES, false)
+                    "        inet6 {}  prefixlen {}  scopeid 0x{scope:x}<{name}>",
+                    address.address, address.prefix
                 )?;
             }
         }
-        if let Some(address) = &link.address {
+        write_ifconfig_hardware(link, out)?;
+        if let Some(stats) = link.stats {
+            write_ifconfig_traffic(out, "RX", stats.rx_packets, stats.rx_bytes)?;
             writeln!(
                 out,
-                "        {} {address}  txqueuelen {}  ({})",
-                if link.link_type == 772 {
-                    "loop"
-                } else {
-                    "ether"
-                },
-                link.tx_queue_len.unwrap_or_default(),
-                if link.link_type == 772 {
-                    Cow::Borrowed("Local Loopback")
-                } else {
-                    link_type_name(link.link_type, false)
-                }
+                "        RX errors {}  dropped {}  overruns {}  frame {}",
+                stats.rx_errors,
+                stats.rx_dropped.wrapping_add(stats.rx_missed_errors),
+                stats.rx_fifo_errors,
+                stats.rx_frame_total
+            )?;
+            write_ifconfig_traffic(out, "TX", stats.tx_packets, stats.tx_bytes)?;
+            writeln!(
+                out,
+                "        TX errors {}  dropped {} overruns {}  carrier {}  collisions {}",
+                stats.tx_errors,
+                stats.tx_dropped,
+                stats.tx_fifo_errors,
+                stats.tx_carrier_total,
+                stats.collisions
             )?;
         }
-        if let Some(stats) = link.stats {
-            writeln!(
-                out,
-                "        RX packets {}  bytes {}",
-                stats.rx_packets, stats.rx_bytes
-            )?;
-            writeln!(
-                out,
-                "        RX errors {}  dropped {}",
-                stats.rx_errors, stats.rx_dropped
-            )?;
-            writeln!(
-                out,
-                "        TX packets {}  bytes {}",
-                stats.tx_packets, stats.tx_bytes
-            )?;
-            writeln!(
-                out,
-                "        TX errors {}  dropped {}",
-                stats.tx_errors, stats.tx_dropped
-            )?;
+        if let Some(map) = link.map
+            && (map.irq != 0 || map.memory_start != 0 || map.dma != 0 || map.base_address >= 0x100)
+        {
+            write!(out, "        device ")?;
+            if map.irq != 0 {
+                write!(out, "interrupt {}  ", map.irq)?;
+            }
+            if map.base_address >= 0x100 {
+                write!(out, "base 0x{:x}  ", map.base_address)?;
+            }
+            if map.memory_start != 0 {
+                write!(
+                    out,
+                    "memory 0x{:x}-{:x}  ",
+                    map.memory_start, map.memory_end
+                )?;
+            }
+            if map.dma != 0 {
+                write!(out, "dma 0x{:x}  ", map.dma)?;
+            }
+            writeln!(out)?;
         }
         writeln!(out)?;
     }
     Ok(())
 }
 
-pub fn ipcalc(args: Vec<OsString>) -> i32 {
-    run("ipcalc", || run_ipcalc(args))
+fn order_ifconfig_ipv6(mut input: impl BufRead, addresses: &mut [AddressView]) -> io::Result<()> {
+    // net-tools uses procfs order, which differs from the IPv6 netlink dump order.
+    let mut positions = HashMap::new();
+    let mut line = String::new();
+    while input.read_line(&mut line)? != 0 {
+        let mut fields = line.split_whitespace();
+        if let (Some(address), Some(index)) = (fields.next(), fields.next())
+            && let (Ok(address), Ok(index)) = (
+                u128::from_str_radix(address, 16),
+                u32::from_str_radix(index, 16),
+            )
+        {
+            let position = positions.len() + 1;
+            positions.insert((index, IpAddr::V6(Ipv6Addr::from(address))), position);
+        }
+        line.clear();
+    }
+    addresses.sort_by_key(|address| {
+        if address.address.is_ipv4() {
+            0
+        } else {
+            positions
+                .get(&(address.index, address.address))
+                .copied()
+                .unwrap_or(usize::MAX)
+        }
+    });
+    Ok(())
 }
 
-fn run_ipcalc(args: Vec<OsString>) -> Result<(), String> {
-    let values = utf8_args(args)?;
-    let mut network_only = false;
-    let mut broadcast_only = false;
-    let mut netmask_only = false;
-    let mut prefix_only = false;
-    let mut positional = Vec::new();
-    for value in values.into_iter().skip(1) {
-        match value.as_str() {
-            "-n" | "--network" => network_only = true,
-            "-b" | "--broadcast" => broadcast_only = true,
-            "-m" | "--netmask" => netmask_only = true,
-            "-p" | "--prefix" => prefix_only = true,
-            "-h" | "--help" => {
-                println!("Usage: ipcalc [-nmbp] ADDRESS[/PREFIX] [NETMASK]");
-                return Ok(());
+fn ifconfig_name_cmp(left: &str, right: &str) -> std::cmp::Ordering {
+    let split = |name: &str| {
+        name.as_bytes()
+            .iter()
+            .rposition(|byte| !byte.is_ascii_digit())
+            .map_or(0, |index| index + 1)
+    };
+    let left_index = split(left);
+    let right_index = split(right);
+    left[..left_index]
+        .cmp(&right[..right_index])
+        .then_with(|| {
+            let left_number = left[left_index..].parse::<u64>().unwrap_or(0);
+            let right_number = right[right_index..].parse::<u64>().unwrap_or(0);
+            left_number.cmp(&right_number)
+        })
+        .then_with(|| left.cmp(right))
+}
+
+fn write_ifconfig_hardware(link: &LinkView, out: &mut dyn Write) -> io::Result<()> {
+    let (name, title) = match link.link_type {
+        1 => ("ether", "Ethernet"),
+        512 => ("ppp", "Point-to-Point Protocol"),
+        768 => ("tunnel", "IPIP Tunnel"),
+        772 => ("loop", "Local Loopback"),
+        776 => ("sit", "IPv6-in-IPv4"),
+        _ => ("unspec", "UNSPEC"),
+    };
+    write!(out, "        {name}")?;
+    match link.link_type {
+        1 => {
+            if let Some(address) = &link.address
+                && link.raw_address.iter().any(|byte| *byte != 0)
+            {
+                write!(out, " {address}")?;
             }
-            value if value.starts_with('-') => return Err(format!("unknown option '{value}'")),
-            _ => positional.push(value),
+        }
+        768 => write!(out, " ")?,
+        512 | 772 | 776 => {}
+        _ => {
+            // net-tools uses the fixed sockaddr-sized UNSPEC representation.
+            write!(out, " ")?;
+            for index in 0..16 {
+                if index != 0 {
+                    write!(out, "-")?;
+                }
+                write!(
+                    out,
+                    "{:02X}",
+                    link.raw_address.get(index).copied().unwrap_or(0)
+                )?;
+            }
         }
     }
-    let address_spec = positional.first().ok_or("missing IP address")?;
-    let (address_text, inline_prefix) = address_spec
-        .split_once('/')
-        .map_or((address_spec.as_str(), None), |(address, prefix)| {
-            (address, Some(prefix))
-        });
+    if let Some(length) = link.tx_queue_len {
+        write!(out, "  txqueuelen {length}")?;
+    }
+    writeln!(out, "  ({title})")
+}
+
+fn write_ifconfig_traffic(
+    out: &mut dyn Write,
+    direction: &str,
+    packets: u64,
+    bytes: u64,
+) -> io::Result<()> {
+    let (divisor, unit) = [
+        (1u64 << 60, "EiB"),
+        (1u64 << 50, "PiB"),
+        (1u64 << 40, "TiB"),
+        (1u64 << 30, "GiB"),
+        (1u64 << 20, "MiB"),
+        (1u64 << 10, "KiB"),
+    ]
+    .into_iter()
+    .find(|(divisor, _)| bytes > *divisor)
+    .unwrap_or((1, "B"));
+    let tenths = u128::from(bytes) * 10 / u128::from(divisor);
+    writeln!(
+        out,
+        "        {direction} packets {packets}  bytes {bytes} ({}.{} {unit})",
+        tenths / 10,
+        tenths % 10
+    )
+}
+
+pub fn ipcalc(args: Vec<OsString>) -> i32 {
+    run_output("ipcalc", |out| run_ipcalc(args, out))
+}
+
+const IPCALC_USAGE: &str = concat!(
+    "Usage: ipcalc [OPTION...]\n",
+    "  -c, --check                     Validate IP address\n",
+    "  -i, --info                      Print information (default)\n",
+    "  -a, --address                   Display IP address\n",
+    "  -b, --broadcast                 Display calculated IPv4 broadcast address\n",
+    "  -m, --netmask                   Display netmask\n",
+    "  -n, --network                   Display network address\n",
+    "  -p, --prefix                    Display network prefix\n",
+    "      --minaddr, --maxaddr        Display usable address range\n",
+    "      --addresses, --addrspace    Display address count or address space\n",
+    "  -4, --ipv4                      Require IPv4\n",
+    "  -6, --ipv6                      Require IPv6\n",
+    "  -j, --json                      JSON output\n",
+    "      --no-decorate               Omit variable names\n",
+    "  -v, --version                   Display AXE version\n",
+    "  -?, --help                      Show this help message\n",
+    "Numeric ADDRESS[/PREFIX] and an optional IPv4 NETMASK are supported.",
+);
+
+const CALC_ADDRESS: u16 = 1 << 0;
+const CALC_NETMASK: u16 = 1 << 1;
+const CALC_PREFIX: u16 = 1 << 2;
+const CALC_BROADCAST: u16 = 1 << 3;
+const CALC_NETWORK: u16 = 1 << 4;
+const CALC_MIN: u16 = 1 << 5;
+const CALC_MAX: u16 = 1 << 6;
+const CALC_SPACE: u16 = 1 << 7;
+const CALC_COUNT: u16 = 1 << 8;
+
+fn ipcalc_error(message: impl std::fmt::Display) -> CommandError {
+    CommandError::new(1, format!("ipcalc: {message}"))
+}
+
+fn run_ipcalc(args: Vec<OsString>, out: &mut dyn Write) -> Result<(), CommandError> {
+    let values = utf8_args(args)?;
+    let mut selected = 0;
+    let mut info = false;
+    let mut check = false;
+    let mut version = false;
+    let mut json = false;
+    let mut no_decorate = false;
+    let mut ipv4 = false;
+    let mut ipv6 = false;
+    let mut positional = [None; 3];
+    let mut count = 0;
+    let mut operands = false;
+    for value in &values[1..] {
+        let value = value.as_str();
+        if !operands && value == "--" {
+            operands = true;
+            continue;
+        }
+        if !operands && value.starts_with("--") {
+            match value {
+                "--address" => selected |= CALC_ADDRESS,
+                "--netmask" => selected |= CALC_NETMASK,
+                "--prefix" => selected |= CALC_PREFIX,
+                "--broadcast" => selected |= CALC_BROADCAST,
+                "--network" => selected |= CALC_NETWORK,
+                "--minaddr" => selected |= CALC_MIN,
+                "--maxaddr" => selected |= CALC_MAX,
+                "--addrspace" => selected |= CALC_SPACE,
+                "--addresses" => selected |= CALC_COUNT,
+                "--info" => info = true,
+                "--check" => check = true,
+                "--json" => json = true,
+                "--no-decorate" => no_decorate = true,
+                "--ipv4" => ipv4 = true,
+                "--ipv6" => ipv6 = true,
+                "--help" | "--usage" => return Err(CommandError::new(0, IPCALC_USAGE)),
+                "--version" => version = true,
+                _ => return Err(ipcalc_error(format_args!("unrecognized option '{value}'"))),
+            }
+        } else if !operands && value.starts_with('-') && value != "-" {
+            for flag in value[1..].chars() {
+                match flag {
+                    'a' => selected |= CALC_ADDRESS,
+                    'm' => selected |= CALC_NETMASK,
+                    'p' => selected |= CALC_PREFIX,
+                    'b' => selected |= CALC_BROADCAST,
+                    'n' => selected |= CALC_NETWORK,
+                    'i' => info = true,
+                    'c' => check = true,
+                    'j' => json = true,
+                    '4' => ipv4 = true,
+                    '6' => ipv6 = true,
+                    '?' => return Err(CommandError::new(0, IPCALC_USAGE)),
+                    'v' => version = true,
+                    _ => return Err(ipcalc_error(format_args!("invalid option -- '{flag}'"))),
+                }
+            }
+        } else {
+            if let Some(slot) = positional.get_mut(count) {
+                *slot = Some(value);
+            }
+            count += 1;
+        }
+    }
+    if ipv4 && ipv6 {
+        return Err(ipcalc_error("you cannot specify both IPv4 and IPv6"));
+    }
+    if (check && (info || selected != 0)) || (version && (check || info || selected != 0)) {
+        return Err(ipcalc_error("you cannot mix these options"));
+    }
+    if version {
+        writeln!(out, "ipcalc (axe) {}", env!("CARGO_PKG_VERSION"))?;
+        return Ok(());
+    }
+    let address_spec = positional[0]
+        .ok_or_else(|| ipcalc_error(format_args!("ip address expected\n{IPCALC_USAGE}")))?;
+    let ipv6 = ipv6 || (!ipv4 && address_spec.contains(':'));
+    let family = if ipv6 { "IPv6" } else { "IPv4" };
+    if ipv6 && let Some(value) = positional[1] {
+        return Err(ipcalc_error(format_args!(
+            "unexpected argument: {value}\n{IPCALC_USAGE}"
+        )));
+    }
+    let (address_text, inline_prefix) = if positional[1].is_none() {
+        address_spec
+            .split_once('/')
+            .map_or((address_spec, None), |(address, prefix)| {
+                (address, Some(prefix))
+            })
+    } else {
+        (address_spec, None)
+    };
+    let width = if ipv6 { 128 } else { 32 };
+    let prefix = if let Some(value) = inline_prefix.or(positional[1]) {
+        parse_ipcalc_prefix(value, ipv6)
+            .ok_or_else(|| ipcalc_error(format_args!("bad {family} prefix: {value}")))?
+    } else {
+        width
+    };
     let address: IpAddr = address_text
         .parse()
-        .map_err(|_| format!("invalid address '{address_text}'"))?;
-    let prefix = if let Some(value) = inline_prefix {
-        value
-            .parse::<u8>()
-            .map_err(|_| format!("invalid prefix '{value}'"))?
-    } else if let Some(value) = positional.get(1) {
-        parse_netmask(value, address.is_ipv6())?
-    } else if address.is_ipv4() {
-        24
-    } else {
-        64
-    };
-    let max = if address.is_ipv4() { 32 } else { 128 };
-    if prefix > max {
-        return Err(format!("prefix must be between 0 and {max}"));
+        .ok()
+        .filter(|address: &IpAddr| address.is_ipv6() == ipv6)
+        .ok_or_else(|| ipcalc_error(format_args!("bad {family} address: {address_text}")))?;
+    if let Some(value) = positional[2] {
+        return Err(ipcalc_error(format_args!("unexpected argument: {value}")));
     }
-
-    match address {
+    if check {
+        return Ok(());
+    }
+    let (network, netmask, broadcast, range, hosts) = match address {
         IpAddr::V4(address) => {
-            let raw = u32::from(address);
-            let mask = if prefix == 0 {
-                0
+            let mask = u32::from(prefix_mask_v4(prefix));
+            let network = u32::from(address) & mask;
+            let last = network | !mask;
+            let broadcast = if prefix == 31 { u32::MAX } else { last };
+            let (first, last) = if prefix < 31 {
+                (network + 1, last - 1)
             } else {
-                u32::MAX << (32 - prefix)
+                (network, last)
             };
-            let network = raw & mask;
-            let broadcast = network | !mask;
-            if network_only {
-                println!("NETWORK={}", Ipv4Addr::from(network));
-            } else if broadcast_only {
-                println!("BROADCAST={}", Ipv4Addr::from(broadcast));
-            } else if netmask_only {
-                println!("NETMASK={}", Ipv4Addr::from(mask));
-            } else if prefix_only {
-                println!("PREFIX={prefix}");
-            } else {
-                println!("Address:   {address}");
-                println!("Netmask:   {} = {prefix}", Ipv4Addr::from(mask));
-                println!("Wildcard:  {}", Ipv4Addr::from(!mask));
-                println!("Network:   {}/{}", Ipv4Addr::from(network), prefix);
-                if prefix <= 30 {
-                    println!("HostMin:   {}", Ipv4Addr::from(network + 1));
-                    println!("HostMax:   {}", Ipv4Addr::from(broadcast - 1));
-                }
-                println!("Broadcast: {}", Ipv4Addr::from(broadcast));
-                let hosts = if prefix <= 30 {
-                    (1u128 << (32 - prefix)) - 2
-                } else {
-                    1u128 << (32 - prefix)
-                };
-                println!("Hosts/Net: {hosts}");
-            }
+            let range = (
+                IpAddr::V4(Ipv4Addr::from(first)),
+                IpAddr::V4(Ipv4Addr::from(last)),
+            );
+            let count = (1u128 << (32 - prefix)) - if prefix < 31 { 2 } else { 0 };
+            (
+                IpAddr::V4(Ipv4Addr::from(network)),
+                IpAddr::V4(Ipv4Addr::from(mask)),
+                Some(Ipv4Addr::from(broadcast)),
+                range,
+                IpCalcHosts(Some(count)),
+            )
         }
         IpAddr::V6(address) => {
-            let raw = u128::from(address);
             let mask = if prefix == 0 {
                 0
             } else {
                 u128::MAX << (128 - prefix)
             };
-            let network = Ipv6Addr::from(raw & mask);
-            if network_only {
-                println!("NETWORK={network}");
-            } else if netmask_only {
-                println!("NETMASK={}", Ipv6Addr::from(mask));
-            } else if prefix_only {
-                println!("PREFIX={prefix}");
-            } else if broadcast_only {
-                return Err("IPv6 has no broadcast address".into());
+            let network = u128::from(address) & mask;
+            let range = (
+                IpAddr::V6(Ipv6Addr::from(network)),
+                IpAddr::V6(Ipv6Addr::from(network | !mask)),
+            );
+            (
+                IpAddr::V6(Ipv6Addr::from(network)),
+                IpAddr::V6(Ipv6Addr::from(mask)),
+                None,
+                range,
+                IpCalcHosts(if prefix == 0 {
+                    None
+                } else {
+                    Some(1u128 << (128 - prefix))
+                }),
+            )
+        }
+    };
+    let space = ipcalc_address_space(network, prefix);
+    let modern = info || selected == 0 || json;
+    let mut output = IpCalcOutput {
+        out,
+        json,
+        variables: !modern,
+        no_decorate,
+        first: true,
+    };
+    if json {
+        output.out.write_all(b"{\n")?;
+    }
+    if modern {
+        let single = prefix == width;
+        if single || address != network {
+            if let IpAddr::V6(address) = address {
+                output.field("FULLADDRESS", "Full Address:\t", ExpandedIpv6(address))?;
+            }
+            output.field("ADDRESS", "Address:\t", address)?;
+        }
+        if !single || json {
+            if let IpAddr::V6(network) = network {
+                if json {
+                    output.field("FULLNETWORK", "Full Network:\t", ExpandedIpv6(network))?;
+                } else {
+                    output.field(
+                        "FULLNETWORK",
+                        "Full Network:\t",
+                        format_args!("{}/{prefix}", ExpandedIpv6(network)),
+                    )?;
+                }
+            }
+            if json {
+                output.field("NETWORK", "Network:\t", network)?;
+                output.field("NETMASK", "Netmask:\t", netmask)?;
+                output.field("PREFIX", "Prefix:\t", prefix)?;
             } else {
-                println!("Address:   {address}");
-                println!("Netmask:   {} = {prefix}", Ipv6Addr::from(mask));
-                println!("Network:   {network}/{prefix}");
-                println!(
-                    "Hosts/Net: {}",
-                    if prefix == 0 {
-                        "2^128".into()
-                    } else {
-                        (1u128 << (128 - prefix).min(127)).to_string()
-                    }
-                );
+                output.field("NETWORK", "Network:\t", format_args!("{network}/{prefix}"))?;
+                output.field(
+                    "NETMASK",
+                    "Netmask:\t",
+                    format_args!("{netmask} = {prefix}"),
+                )?;
+            }
+            if let Some(broadcast) = broadcast {
+                output.field("BROADCAST", "Broadcast:\t", broadcast)?;
+            }
+            if !json {
+                writeln!(output.out)?;
             }
         }
+        output.field("ADDRSPACE", "Address space:\t", space)?;
+        if !single || json {
+            output.field("MINADDR", "HostMin:\t", range.0)?;
+            output.field("MAXADDR", "HostMax:\t", range.1)?;
+            if ipv6 && prefix < 112 && !json {
+                output.field(
+                    "ADDRESSES",
+                    "Hosts/Net:\t",
+                    format_args!("2^({}) = {hosts}", 128 - prefix),
+                )?;
+            } else {
+                output.field("ADDRESSES", "Hosts/Net:\t", hosts)?;
+            }
+        }
+    } else {
+        if selected & CALC_ADDRESS != 0 {
+            output.field("ADDRESS", "", address)?;
+        }
+        if selected & CALC_NETMASK != 0 {
+            output.field("NETMASK", "", netmask)?;
+        }
+        if selected & CALC_PREFIX != 0 {
+            output.field("PREFIX", "", prefix)?;
+        }
+        if selected & CALC_BROADCAST != 0
+            && let Some(broadcast) = broadcast
+        {
+            output.field("BROADCAST", "", broadcast)?;
+        }
+        if selected & CALC_NETWORK != 0 {
+            output.field("NETWORK", "", network)?;
+        }
+        if selected & CALC_MIN != 0 {
+            output.field("MINADDR", "", range.0)?;
+        }
+        if selected & CALC_MAX != 0 {
+            output.field("MAXADDR", "", range.1)?;
+        }
+        if selected & CALC_SPACE != 0 {
+            if space.contains(' ') {
+                output.field("ADDRSPACE", "", format_args!("\"{space}\""))?;
+            } else {
+                output.field("ADDRSPACE", "", space)?;
+            }
+        }
+        if selected & CALC_COUNT != 0 {
+            output.field("ADDRESSES", "", hosts)?;
+        }
+    }
+    if json {
+        output.out.write_all(b"\n}\n")?;
     }
     Ok(())
 }
 
-fn parse_netmask(value: &str, ipv6: bool) -> Result<u8, String> {
-    if let Ok(prefix) = value.parse() {
-        return Ok(prefix);
+fn parse_ipcalc_prefix(value: &str, ipv6: bool) -> Option<u8> {
+    if let Ok(prefix) = value.parse::<u8>() {
+        return (prefix <= if ipv6 { 128 } else { 32 }).then_some(prefix);
     }
     if ipv6 {
-        let mask: Ipv6Addr = value
-            .parse()
-            .map_err(|_| format!("invalid netmask '{value}'"))?;
-        let raw = u128::from(mask);
-        let prefix = raw.leading_ones() as u8;
-        if raw
-            != if prefix == 0 {
-                0
-            } else {
-                u128::MAX << (128 - prefix)
+        return None;
+    }
+    let mask = u32::from(value.parse::<Ipv4Addr>().ok()?);
+    let prefix = mask.leading_ones() as u8;
+    (mask == u32::from(prefix_mask_v4(prefix))).then_some(prefix)
+}
+
+struct IpCalcOutput<'a> {
+    out: &'a mut dyn Write,
+    json: bool,
+    variables: bool,
+    no_decorate: bool,
+    first: bool,
+}
+
+impl IpCalcOutput<'_> {
+    fn field(
+        &mut self,
+        key: &str,
+        label: &str,
+        value: impl std::fmt::Display,
+    ) -> Result<(), CommandError> {
+        if self.json {
+            if !self.first {
+                self.out.write_all(b",\n")?;
             }
-        {
-            return Err("non-contiguous netmask".into());
-        }
-        Ok(prefix)
-    } else {
-        let mask: Ipv4Addr = value
-            .parse()
-            .map_err(|_| format!("invalid netmask '{value}'"))?;
-        let raw = u32::from(mask);
-        let prefix = raw.leading_ones() as u8;
-        if raw
-            != if prefix == 0 {
-                0
+            write!(self.out, "  \"{key}\":")?;
+            serde_json::to_writer(&mut *self.out, &value.to_string()).map_err(|error| {
+                CommandError {
+                    io_kind: error.io_error_kind(),
+                    message: error.to_string(),
+                    code: 1,
+                }
+            })?;
+            self.first = false;
+        } else {
+            if self.variables {
+                if !self.no_decorate {
+                    write!(self.out, "{key}=")?;
+                }
             } else {
-                u32::MAX << (32 - prefix)
+                self.out.write_all(label.as_bytes())?;
             }
-        {
-            return Err("non-contiguous netmask".into());
+            writeln!(self.out, "{value}")?;
         }
-        Ok(prefix)
+        Ok(())
+    }
+}
+
+struct ExpandedIpv6(Ipv6Addr);
+
+impl std::fmt::Display for ExpandedIpv6 {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, segment) in self.0.segments().iter().enumerate() {
+            if index != 0 {
+                out.write_str(":")?;
+            }
+            write!(out, "{segment:04x}")?;
+        }
+        Ok(())
+    }
+}
+
+struct IpCalcHosts(Option<u128>);
+
+impl std::fmt::Display for IpCalcHosts {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(count) = self.0 {
+            write!(out, "{count}")
+        } else {
+            out.write_str("340282366920938463463374607431768211456")
+        }
+    }
+}
+
+fn ipcalc_address_space(network: IpAddr, prefix: u8) -> &'static str {
+    match network {
+        IpAddr::V4(address) => match address.octets() {
+            [0, ..] => "This host on this network",
+            [10, ..] | [172, 16..=31, ..] | [192, 168, ..] => "Private Use",
+            [100, 64..=127, ..] => "Shared Address Space",
+            [127, ..] => "Loopback",
+            [169, 254, ..] => "Link Local",
+            [192, 0, 0, 0..=7] => "IPv4 Service Continuity Prefix",
+            [192, 0, 0, 8] => "IPv4 dummy address",
+            [192, 0, 0, 9] => "Port Control Protocol Anycast",
+            [192, 0, 0, 10] => "Traversal Using Relays around NAT Anycast",
+            [192, 0, 0, 170 | 171] => "NAT64/DNS64 Discovery",
+            [192, 0, 0, _] => "IETF Protocol Assignments",
+            [192, 0, 2, _] => "Documentation (TEST-NET-1)",
+            [198, 51, 100, _] => "Documentation (TEST-NET-2)",
+            [203, 0, 113, _] => "Documentation (TEST-NET-3)",
+            [192, 88, 99, _] => "6 to 4 Relay Anycast (Deprecated)",
+            [192, 31, 196, _] => "AS112-v4",
+            [192, 52, 193, _] => "AMT",
+            [192, 175, 48, _] => "Direct Delegation AS112 Service",
+            [255, 255, 255, 255] => "Limited Broadcast",
+            [198, 18..=19, ..] => "Benchmarking",
+            [224..=239, ..] => "Multicast",
+            [240..=255, ..] => "Reserved",
+            _ => "Internet",
+        },
+        IpAddr::V6(address) => {
+            let segments = address.segments();
+            let raw = u128::from(address);
+            let first = segments[0];
+            let second = segments[1];
+            if prefix == 128 && address.is_loopback() {
+                "Loopback Address"
+            } else if prefix == 128 && address.is_unspecified() {
+                "Unspecified Address"
+            } else if prefix >= 96 && raw >> 32 == 0xffff {
+                "IPv4-mapped Address"
+            } else if (prefix >= 96 && raw >> 32 == 0x0064ff9b0000000000000000)
+                || (prefix >= 48 && raw >> 80 == 0x0064ff9b0001)
+            {
+                "IPv4-IPv6 Translat."
+            } else if prefix >= 96 && raw >> 32 == 0x100000000000000000000000 {
+                "Discard-Only Address Block"
+            } else if prefix >= 32 && first == 0x2001 && second == 0 {
+                "TEREDO"
+            } else if prefix == 128 && raw == 0x20010001000000000000000000000001 {
+                "Port Control Protocol Anycast"
+            } else if prefix == 128 && raw == 0x20010001000000000000000000000002 {
+                "Traversal Using Relays around NAT Anycast"
+            } else if prefix >= 48 && raw >> 80 == 0x200100020000 {
+                "Benchmarking"
+            } else if prefix >= 32 && first == 0x2001 && second == 3 {
+                "AMT"
+            } else if prefix >= 48 && raw >> 80 == 0x200100040112 {
+                "AS112-v6"
+            } else if prefix >= 28 && first == 0x2001 && second & 0xfff0 == 0x10 {
+                "Deprecated (previously ORCHID)"
+            } else if prefix >= 28 && first == 0x2001 && second & 0xfff0 == 0x20 {
+                "ORCHIDv2"
+            } else if prefix >= 23 && first == 0x2001 && second & 0xff00 <= 0x100 {
+                "IETF Protocol Assignments"
+            } else if prefix >= 32 && first == 0x2001 && second == 0xdb8 {
+                "Documentation"
+            } else if first == 0x2002 {
+                "6to4"
+            } else if prefix >= 48 && raw >> 80 == 0x2620004f8000 {
+                "Direct Delegation AS112 Service"
+            } else if first & 0xe000 == 0x2000 {
+                "Global Unicast"
+            } else if first & 0xfe00 == 0xfc00 {
+                "Unique Local Unicast"
+            } else if first & 0xffc0 == 0xfe80 {
+                "Link-Scoped Unicast"
+            } else if first & 0xff00 == 0xff00 {
+                "Multicast"
+            } else {
+                "Reserved"
+            }
+        }
     }
 }
 
@@ -2819,12 +3313,14 @@ struct LinkView {
     peer: Option<u32>,
     netns: Option<i32>,
     address: Option<String>,
+    raw_address: Vec<u8>,
     broadcast: Option<String>,
     permanent_address: Option<String>,
     alternate_names: Vec<String>,
     kind: Option<String>,
     tx_queue_len: Option<u32>,
     stats: Option<LinkStats>,
+    map: Option<netlink_packet_route::link::Map>,
 }
 
 #[derive(Clone, Copy)]
@@ -2839,8 +3335,11 @@ struct LinkStats {
     tx_dropped: u64,
     rx_over_errors: u64,
     rx_missed_errors: u64,
+    rx_fifo_errors: u64,
+    rx_frame_total: u64,
     multicast: u64,
     tx_carrier_errors: u64,
+    tx_carrier_total: u64,
     tx_fifo_errors: u64,
     collisions: u64,
 }
@@ -2872,7 +3371,8 @@ impl LinkView {
                 LinkAttribute::Link(value) => link.peer = Some(value),
                 LinkAttribute::LinkNetNsId(value) => link.netns = Some(value),
                 LinkAttribute::Address(value) => {
-                    link.address = Some(link_address(&value, message.header.link_layer_type))
+                    link.address = Some(link_address(&value, message.header.link_layer_type));
+                    link.raw_address = value;
                 }
                 LinkAttribute::Broadcast(value) => {
                     link.broadcast = Some(link_address(&value, message.header.link_layer_type))
@@ -2894,6 +3394,7 @@ impl LinkView {
                     });
                 }
                 LinkAttribute::TxQueueLen(value) => link.tx_queue_len = Some(value),
+                LinkAttribute::Map(value) => link.map = Some(value),
                 LinkAttribute::Stats(value) if link.stats.is_none() => {
                     link.stats = Some(LinkStats {
                         rx_packets: value.rx_packets.into(),
@@ -2906,8 +3407,17 @@ impl LinkView {
                         tx_dropped: value.tx_dropped.into(),
                         rx_over_errors: value.rx_over_errors.into(),
                         rx_missed_errors: value.rx_missed_errors.into(),
+                        rx_fifo_errors: value.rx_fifo_errors.into(),
+                        rx_frame_total: u64::from(value.rx_length_errors)
+                            + u64::from(value.rx_over_errors)
+                            + u64::from(value.rx_crc_errors)
+                            + u64::from(value.rx_frame_errors),
                         multicast: value.multicast.into(),
                         tx_carrier_errors: value.tx_carrier_errors.into(),
+                        tx_carrier_total: u64::from(value.tx_carrier_errors)
+                            + u64::from(value.tx_aborted_errors)
+                            + u64::from(value.tx_window_errors)
+                            + u64::from(value.tx_heartbeat_errors),
                         tx_fifo_errors: value.tx_fifo_errors.into(),
                         collisions: value.collisions.into(),
                     });
@@ -2924,8 +3434,19 @@ impl LinkView {
                         tx_dropped: value.tx_dropped,
                         rx_over_errors: value.rx_over_errors,
                         rx_missed_errors: value.rx_missed_errors,
+                        rx_fifo_errors: value.rx_fifo_errors,
+                        rx_frame_total: value
+                            .rx_length_errors
+                            .wrapping_add(value.rx_over_errors)
+                            .wrapping_add(value.rx_crc_errors)
+                            .wrapping_add(value.rx_frame_errors),
                         multicast: value.multicast,
                         tx_carrier_errors: value.tx_carrier_errors,
+                        tx_carrier_total: value
+                            .tx_carrier_errors
+                            .wrapping_add(value.tx_aborted_errors)
+                            .wrapping_add(value.tx_window_errors)
+                            .wrapping_add(value.tx_heartbeat_errors),
                         tx_fifo_errors: value.tx_fifo_errors,
                         collisions: value.collisions,
                     });
@@ -2994,24 +3515,18 @@ impl LinkView {
             insert_optional(&mut value, "link_netnsid", self.netns);
             value.insert("flags".into(), self.ip_flags(snapshot).into());
             insert_optional(&mut value, "mtu", self.mtu);
-            let full_link =
-                object != Object::Address || options.family != Some(AddressFamily::Inet6);
-            if full_link {
-                insert_optional(&mut value, "qdisc", self.qdisc.as_deref());
-                if let Some(master) = self.master {
-                    value.insert("master".into(), snapshot.name(master).as_ref().into());
-                }
+            insert_optional(&mut value, "qdisc", self.qdisc.as_deref());
+            if let Some(master) = self.master {
+                value.insert("master".into(), snapshot.name(master).as_ref().into());
             }
             if object == Object::Link {
                 value.insert("linkmode".into(), self.mode.as_str().into());
             }
-            if full_link {
-                value.insert(
-                    "group".into(),
-                    name_of(self.group, GROUPS, options.numeric).as_ref().into(),
-                );
-                insert_optional(&mut value, "txqlen", self.tx_queue_len);
-            }
+            value.insert(
+                "group".into(),
+                name_of(self.group, GROUPS, options.numeric).as_ref().into(),
+            );
+            insert_optional(&mut value, "txqlen", self.tx_queue_len);
             if options.family.is_none() || options.family == Some(AddressFamily::Packet) {
                 value.insert(
                     "link_type".into(),
@@ -3650,10 +4165,15 @@ fn ifconfig_flags(flags: u32) -> String {
         (libc::IFF_DEBUG, "DEBUG"),
         (libc::IFF_LOOPBACK, "LOOPBACK"),
         (libc::IFF_POINTOPOINT, "POINTOPOINT"),
+        (libc::IFF_NOTRAILERS, "NOTRAILERS"),
         (libc::IFF_RUNNING, "RUNNING"),
         (libc::IFF_NOARP, "NOARP"),
         (libc::IFF_PROMISC, "PROMISC"),
+        (libc::IFF_ALLMULTI, "ALLMULTI"),
+        (libc::IFF_SLAVE, "SLAVE"),
+        (libc::IFF_MASTER, "MASTER"),
         (libc::IFF_MULTICAST, "MULTICAST"),
+        (libc::IFF_DYNAMIC, "DYNAMIC"),
     ]
     .into_iter()
     .filter_map(|(mask, name)| (flags & mask as u32 != 0).then_some(name))
@@ -3710,18 +4230,6 @@ mod tests {
                 assert_eq!(json[field], expected, "{link_type:?} {field}");
             }
         }
-    }
-
-    #[test]
-    fn ipcalc_rejects_non_contiguous_masks() {
-        assert!(parse_netmask("255.0.255.0", false).is_err());
-    }
-
-    #[test]
-    fn ipcalc_accepts_prefix_and_dotted_masks() {
-        assert_eq!(parse_netmask("24", false).unwrap(), 24);
-        assert_eq!(parse_netmask("255.255.255.0", false).unwrap(), 24);
-        assert_eq!(parse_netmask("ffff:ffff:ffff:ffff::", true).unwrap(), 64);
     }
 
     fn request(args: &[&str]) -> Result<IpRequest, CommandError> {
@@ -3850,7 +4358,10 @@ mod tests {
     #[test]
     fn lookup_validates_family_and_builds_an_oif_host_request() {
         let snapshot = snapshot(vec![link(4, "d0", 0, vec![])]);
-        let mut request = request(&["r", "get", "0x0a.1", "mark", "0x6", "dev", "d0"]).unwrap();
+        let mut request = request(&[
+            "r", "get", "0x0a.1", "mark", "0x6", "uid", "1000", "dev", "d0",
+        ])
+        .unwrap();
         resolve_selectors(&snapshot, &mut request.options, request.object).unwrap();
         let query = request.query.unwrap();
         assert_eq!(query.destination.to_string(), "10.1.0.0");
@@ -3862,6 +4373,7 @@ mod tests {
             vec![
                 RouteAttribute::Destination(RouteAddress::Inet(Ipv4Addr::new(10, 1, 0, 0))),
                 RouteAttribute::Mark(6),
+                RouteAttribute::Uid(1000),
                 RouteAttribute::Oif(4),
             ]
         );
@@ -3875,6 +4387,7 @@ mod tests {
             error(&["r", "get", "192.0.2.1", "mark", "not-a-number"]).code,
             255
         );
+        assert_eq!(error(&["r", "get", "192.0.2.1", "uid", "-1"]).code, 255);
         let missing = render(&snapshot, &["r", "show", "dev", "nosuch"]).unwrap_err();
         assert_eq!(missing.code, 1);
         assert_eq!(missing.message, "Cannot find device \"nosuch\"");
@@ -4093,10 +4606,11 @@ mod tests {
             vec![RouteAttribute::Uid(1000), RouteAttribute::Oif(4)],
         );
         cached.flags = RouteFlags::Cloned.bits() | 0x80000000;
-        let query = RouteGet {
+        let mut query = RouteGet {
             destination: "127.0.0.1".parse().unwrap(),
             source: None,
             mark: None,
+            uid: None,
         };
         let mut output = Vec::new();
         render_routes(
@@ -4110,6 +4624,24 @@ mod tests {
         assert_eq!(
             String::from_utf8(output).unwrap(),
             "local 127.0.0.1 dev d0 table local uid 1000 \n    cache <local> \n"
+        );
+        query.uid = Some(1000);
+        let mut output = Vec::new();
+        render_routes(
+            &snapshot,
+            std::iter::once(&cached),
+            &IpOptions::default(),
+            Some(&query),
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "local 127.0.0.1 dev d0 table local uid 1000 \n    cache <local> \n"
+        );
+        assert_eq!(
+            cached.json(&snapshot, &IpOptions::default(), Some(&query))["uid"],
+            1000
         );
     }
 
@@ -4341,15 +4873,32 @@ mod tests {
             if args[1] == "a" && args[0] == "-6" {
                 assert_eq!(json[0]["mtu"], 1500);
                 assert_eq!(json[0]["operstate"], "UNKNOWN");
-                for field in ["qdisc", "group", "txqlen"] {
-                    assert!(json[0].get(field).is_none(), "{field}");
-                }
+                assert_eq!(json[0]["qdisc"], "noqueue", "{args:?}");
+                assert_eq!(json[0]["group"], "5", "{args:?}");
+                assert_eq!(json[0]["txqlen"], 1000, "{args:?}");
                 assert_eq!(json[0]["addr_info"][0]["local"], "2001:db8::1");
             } else {
                 assert_eq!(json[0]["qdisc"], "noqueue", "{args:?}");
                 assert_eq!(json[0]["group"], "5", "{args:?}");
                 assert_eq!(json[0]["txqlen"], 1000, "{args:?}");
             }
+        }
+        for args in [
+            vec!["-6", "a", "show"],
+            vec!["-6", "a", "show", "dev", "d0"],
+        ] {
+            assert_eq!(
+                render_json(&snapshot, &args),
+                serde_json::json!([{
+                    "ifindex":4, "ifname":"d0", "operstate":"UNKNOWN",
+                    "flags":["BROADCAST","NOARP","UP","LOWER_UP"],
+                    "mtu":1500, "qdisc":"noqueue", "group":"5", "txqlen":1000,
+                    "addr_info":[{
+                        "family":"inet6", "local":"2001:db8::1", "prefixlen":64, "scope":"global"
+                    }]
+                }]),
+                "{args:?}"
+            );
         }
     }
 
@@ -4551,5 +5100,292 @@ mod tests {
             render_json(&snapshot, &["r", "show"])[0]["flow"],
             serde_json::json!({"from":"7","to":"unknown"})
         );
+    }
+
+    #[test]
+    fn rule_table_filters_use_extended_table_ids_in_text_and_json() {
+        let mut local = RuleMessage::default();
+        local.header.table = 255;
+        let mut main = RuleMessage::default();
+        main.header.table = 254;
+        main.attributes.push(RuleAttribute::Priority(32766));
+        let mut extended = RuleMessage::default();
+        extended.attributes = vec![RuleAttribute::Table(1000), RuleAttribute::Priority(100)];
+        let snapshot = Snapshot {
+            rules: vec![local, main, extended],
+            ..Snapshot::default()
+        };
+        assert_eq!(
+            render(&snapshot, &["rule", "show", "table", "local"]).unwrap(),
+            "0:\tfrom all lookup local\n"
+        );
+        assert_eq!(
+            render(&snapshot, &["rule", "show", "table", "1000"]).unwrap(),
+            "100:\tfrom all lookup 1000\n"
+        );
+        assert_eq!(
+            render_json(&snapshot, &["rule", "show", "lookup", "main"]),
+            serde_json::json!([{"priority":32766,"src":"all","table":"main"}])
+        );
+        assert_eq!(
+            render_json(&snapshot, &["rule", "show", "table", "100"]),
+            serde_json::json!([])
+        );
+    }
+
+    fn ifconfig_text(snapshot: &Snapshot, all: bool, short: bool) -> String {
+        let mut output = Vec::new();
+        render_ifconfig(snapshot, all, short, None, &mut output).unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    #[test]
+    fn ifconfig_summary_filters_down_links_and_keeps_net_tools_flags_and_counters() {
+        let mut stats = netlink_packet_route::link::Stats64::default();
+        stats.rx_packets = 11;
+        stats.tx_packets = 13;
+        stats.rx_errors = 2;
+        stats.tx_errors = 3;
+        stats.rx_dropped = 5;
+        stats.rx_missed_errors = 7;
+        stats.tx_dropped = 19;
+        stats.rx_fifo_errors = 17;
+        stats.rx_over_errors = 23;
+        stats.tx_fifo_errors = 29;
+        let flags = (libc::IFF_UP
+            | libc::IFF_RUNNING
+            | libc::IFF_POINTOPOINT
+            | libc::IFF_NOARP
+            | libc::IFF_MULTICAST) as u32;
+        let snapshot = snapshot(vec![
+            link(3, "p10", flags, vec![LinkAttribute::Stats64(stats)]),
+            link(2, "p2", flags, vec![LinkAttribute::Stats64(stats)]),
+            link(4, "down", 0, vec![LinkAttribute::Stats64(stats)]),
+        ]);
+        assert_eq!(
+            ifconfig_text(&snapshot, false, true),
+            concat!(
+                "p2               1500       11      2     12 17           13      3     19     29 MOPRU\n",
+                "p10              1500       11      2     12 17           13      3     19     29 MOPRU\n"
+            )
+        );
+        assert!(
+            ifconfig_text(&snapshot, true, true)
+                .lines()
+                .next()
+                .unwrap()
+                .ends_with("[NO FLAGS]")
+        );
+    }
+
+    #[test]
+    fn ifconfig_point_to_point_hardware_and_error_counters_are_not_ethernet_guesses() {
+        let mut stats = netlink_packet_route::link::Stats64::default();
+        stats.rx_packets = 11;
+        stats.tx_packets = 13;
+        stats.rx_bytes = 2048;
+        stats.tx_bytes = 1024;
+        stats.rx_errors = 2;
+        stats.tx_errors = 3;
+        stats.rx_dropped = 5;
+        stats.rx_missed_errors = 7;
+        stats.rx_fifo_errors = 17;
+        stats.rx_length_errors = 19;
+        stats.rx_over_errors = 23;
+        stats.rx_crc_errors = 29;
+        stats.rx_frame_errors = 31;
+        stats.tx_carrier_errors = 37;
+        stats.tx_aborted_errors = 41;
+        stats.tx_window_errors = 43;
+        stats.tx_heartbeat_errors = 47;
+        stats.tx_fifo_errors = 53;
+        stats.collisions = 59;
+        let flags = (libc::IFF_UP
+            | libc::IFF_RUNNING
+            | libc::IFF_POINTOPOINT
+            | libc::IFF_NOARP
+            | libc::IFF_MULTICAST) as u32;
+        let mut message = link(
+            2,
+            "p2",
+            flags,
+            vec![
+                LinkAttribute::Stats64(stats),
+                LinkAttribute::Address(vec![]),
+                LinkAttribute::TxQueueLen(500),
+            ],
+        );
+        message.header.link_layer_type = LinkLayerType::None;
+        let mut snapshot = snapshot(vec![message]);
+        snapshot.addresses.push(address(
+            2,
+            "192.0.2.1",
+            0,
+            AddressFlags::Permanent,
+            vec![
+                AddressAttribute::Address("192.0.2.2".parse().unwrap()),
+                AddressAttribute::Broadcast("192.0.2.255".parse().unwrap()),
+            ],
+        ));
+        assert_eq!(
+            ifconfig_text(&snapshot, false, false),
+            concat!(
+                "p2: flags=4305<UP,POINTOPOINT,RUNNING,NOARP,MULTICAST>  mtu 1500\n",
+                "        inet 192.0.2.1  netmask 255.255.255.0  destination 192.0.2.2\n",
+                "        unspec 00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00  txqueuelen 500  (UNSPEC)\n",
+                "        RX packets 11  bytes 2048 (2.0 KiB)\n",
+                "        RX errors 2  dropped 12  overruns 17  frame 102\n",
+                "        TX packets 13  bytes 1024 (1024.0 B)\n",
+                "        TX errors 3  dropped 0 overruns 53  carrier 168  collisions 59\n\n"
+            )
+        );
+        snapshot.addresses[0].peer = None;
+        assert!(ifconfig_text(&snapshot, false, false).contains("destination 192.0.2.1\n"));
+        for (kind, expected) in [
+            (
+                LinkLayerType::Loopback,
+                "        loop  txqueuelen 500  (Local Loopback)\n",
+            ),
+            (
+                LinkLayerType::Tunnel,
+                "        tunnel   txqueuelen 500  (IPIP Tunnel)\n",
+            ),
+            (
+                LinkLayerType::Sit,
+                "        sit  txqueuelen 500  (IPv6-in-IPv4)\n",
+            ),
+        ] {
+            snapshot.links[0].link_type = kind.into();
+            assert!(ifconfig_text(&snapshot, false, false).contains(expected));
+        }
+    }
+
+    #[test]
+    fn ifconfig_ipv6_text_follows_the_kernel_procfs_listing_order() {
+        let mut snapshot = snapshot(vec![link(2, "p2", libc::IFF_UP as u32, vec![])]);
+        snapshot.addresses = vec![
+            address(2, "2001:db8::1", 0, AddressFlags::Permanent, vec![]),
+            address(2, "2001:db8::2", 0, AddressFlags::Permanent, vec![]),
+        ];
+        order_ifconfig_ipv6(
+            io::Cursor::new(concat!(
+                "20010db8000000000000000000000002 02 40 00 80 p2\n",
+                "20010db8000000000000000000000001 02 40 00 80 p2\n"
+            )),
+            &mut snapshot.addresses,
+        )
+        .unwrap();
+        let output = ifconfig_text(&snapshot, false, false);
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.starts_with("        inet6 "))
+                .collect::<Vec<_>>(),
+            [
+                "        inet6 2001:db8::2  prefixlen 64  scopeid 0x0<global>",
+                "        inet6 2001:db8::1  prefixlen 64  scopeid 0x0<global>",
+            ]
+        );
+    }
+
+    fn calculator(args: &[&str]) -> Result<String, CommandError> {
+        let args = std::iter::once("ipcalc")
+            .chain(args.iter().copied())
+            .map(OsString::from)
+            .collect();
+        let mut output = Vec::new();
+        run_ipcalc(args, &mut output)?;
+        Ok(String::from_utf8(output).unwrap())
+    }
+
+    #[test]
+    fn ipcalc_human_output_and_host_only_operands_use_modern_not_perl_policy() {
+        assert_eq!(
+            calculator(&["10.1.2.3"]).unwrap(),
+            "Address:\t10.1.2.3\nAddress space:\tPrivate Use\n"
+        );
+        assert_eq!(
+            calculator(&["192.0.2.1/31"]).unwrap(),
+            concat!(
+                "Address:\t192.0.2.1\nNetwork:\t192.0.2.0/31\nNetmask:\t255.255.255.254 = 31\n",
+                "Broadcast:\t255.255.255.255\n\nAddress space:\tDocumentation (TEST-NET-1)\n",
+                "HostMin:\t192.0.2.0\nHostMax:\t192.0.2.1\nHosts/Net:\t2\n"
+            )
+        );
+        assert_eq!(
+            calculator(&["2001:db8::42/64"]).unwrap(),
+            concat!(
+                "Full Address:\t2001:0db8:0000:0000:0000:0000:0000:0042\nAddress:\t2001:db8::42\n",
+                "Full Network:\t2001:0db8:0000:0000:0000:0000:0000:0000/64\nNetwork:\t2001:db8::/64\n",
+                "Netmask:\tffff:ffff:ffff:ffff:: = 64\n\nAddress space:\tDocumentation\n",
+                "HostMin:\t2001:db8::\nHostMax:\t2001:db8::ffff:ffff:ffff:ffff\n",
+                "Hosts/Net:\t2^(64) = 18446744073709551616\n"
+            )
+        );
+        assert_eq!(
+            calculator(&["-bmpn", "2001:db8::42/64"]).unwrap(),
+            "NETMASK=ffff:ffff:ffff:ffff::\nPREFIX=64\nNETWORK=2001:db8::\n"
+        );
+        assert_eq!(
+            calculator(&["-nmp", "10.1.2.3"]).unwrap(),
+            "NETMASK=255.255.255.255\nPREFIX=32\nNETWORK=10.1.2.3\n"
+        );
+        assert_eq!(
+            calculator(&["-nm", "192.168.7.42", "255.255.255.0"]).unwrap(),
+            "NETMASK=255.255.255.0\nNETWORK=192.168.7.0\n"
+        );
+    }
+
+    #[test]
+    fn ipcalc_json_preserves_exact_ipv6_count_and_single_host_semantics() {
+        let value: serde_json::Value =
+            serde_json::from_str(&calculator(&["-j", "::/0"]).unwrap()).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "FULLNETWORK":"0000:0000:0000:0000:0000:0000:0000:0000",
+                "NETWORK":"::", "NETMASK":"::", "PREFIX":"0", "ADDRSPACE":"Reserved",
+                "MINADDR":"::", "MAXADDR":"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+                "ADDRESSES":"340282366920938463463374607431768211456"
+            })
+        );
+        for address in ["192.0.2.1", "192.0.2.1/32"] {
+            let value: serde_json::Value =
+                serde_json::from_str(&calculator(&["-jn", address]).unwrap()).unwrap();
+            assert_eq!(
+                value,
+                serde_json::json!({
+                    "ADDRESS":"192.0.2.1", "NETWORK":"192.0.2.1", "NETMASK":"255.255.255.255",
+                    "PREFIX":"32", "BROADCAST":"192.0.2.1", "MINADDR":"192.0.2.1", "MAXADDR":"192.0.2.1",
+                    "ADDRSPACE":"Documentation (TEST-NET-1)", "ADDRESSES":"1"
+                })
+            );
+        }
+        for address in ["2001:db8::1", "2001:db8::1/128"] {
+            let value: serde_json::Value =
+                serde_json::from_str(&calculator(&["-j", address]).unwrap()).unwrap();
+            assert_eq!(
+                value,
+                serde_json::json!({
+                    "FULLADDRESS":"2001:0db8:0000:0000:0000:0000:0000:0001",
+                    "ADDRESS":"2001:db8::1",
+                    "FULLNETWORK":"2001:0db8:0000:0000:0000:0000:0000:0001",
+                    "NETWORK":"2001:db8::1", "NETMASK":"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+                    "PREFIX":"128", "MINADDR":"2001:db8::1", "MAXADDR":"2001:db8::1",
+                    "ADDRSPACE":"Documentation", "ADDRESSES":"1"
+                })
+            );
+        }
+        for args in [
+            vec!["192.0.2.1/24", "255.255.0.0"],
+            vec!["192.0.2.1", "24", "garbage"],
+            vec!["2001:db8::1", "64"],
+            vec!["-4", "::1"],
+            vec!["-6", "192.0.2.1"],
+            vec!["-46", "::1"],
+            vec!["-cn", "192.0.2.1"],
+        ] {
+            assert_eq!(calculator(&args).unwrap_err().code, 1, "{args:?}");
+        }
     }
 }
