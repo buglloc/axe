@@ -32,6 +32,8 @@ Commands:
   refresh-tools                     fetch and verify the current signed Index
   axe APPLET -- --help             print applet-specific help
   zstd [-cdfkt] [FILE ...]          Zstandard compression; keeps input files by default
+  diff [OPTIONS] FILE1 FILE2      compare files line by line
+  sdiff [OPTIONS] FILE1 FILE2     side-by-side comparison or interactive merge
   killall [OPTIONS] NAME ...        Linux bundled exact-name process signalling
                                    -s/-SIGNAL/-NUM, -I, -u, -l, -q, -v;
                                    names use the kernel's 15-byte comm field

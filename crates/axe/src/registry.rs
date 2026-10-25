@@ -321,11 +321,11 @@ fn bundled_category(name: &str) -> &'static str {
         | "pathchk" | "pwd" | "readlink" | "realpath" | "rm" | "rmdir" | "stat" | "touch"
         | "tree" | "truncate" | "unlink" | "vdir" => "files",
         "awk" | "b2sum" | "base32" | "base64" | "basenc" | "cat" | "cksum" | "cmp" | "comm"
-        | "csplit" | "cut" | "diff" | "expand" | "factor" | "fmt" | "fold" | "grep"
-        | "head" | "hexdump" | "join" | "jq" | "md5sum" | "nl" | "numfmt" | "od" | "paste"
-        | "pr" | "ptx" | "sed" | "seq" | "sha1sum" | "sha224sum" | "sha256sum" | "sha384sum"
-        | "sha512sum" | "shuf" | "sort" | "split" | "sum" | "tac" | "tail" | "tee" | "tr"
-        | "tsort" | "unexpand" | "uniq" | "wc" => "text",
+        | "csplit" | "cut" | "diff" | "expand" | "factor" | "fmt" | "fold" | "grep" | "head"
+        | "hexdump" | "join" | "jq" | "md5sum" | "nl" | "numfmt" | "od" | "paste" | "pr"
+        | "ptx" | "sed" | "seq" | "sha1sum" | "sha224sum" | "sha256sum" | "sha384sum"
+        | "sha512sum" | "sdiff" | "shuf" | "sort" | "split" | "sum" | "tac" | "tail" | "tee"
+        | "tr" | "tsort" | "unexpand" | "uniq" | "wc" => "text",
         "bunzip2" | "bzcat" | "bzip2" | "gzip" | "tar" | "unxz" | "xz" | "xzcat" | "zstd" => {
             "archives"
         }
@@ -380,6 +380,7 @@ fn bundled_synopsis(name: &str) -> &'static str {
         "dd" => "Copy and convert raw data streams",
         "df" => "Report filesystem space usage",
         "diff" => "Compare files line by line",
+        "sdiff" => "Merge files side by side",
         "dir" | "ls" | "vdir" => "List directory contents",
         "dircolors" => "Generate color settings for directory listings",
         "dirname" => "Strip the final component from paths",
@@ -574,6 +575,7 @@ pub fn build(
     {
         commands.insert_bundled("diff", None, crate::applets::diff as BundledFn);
         commands.insert_bundled("cmp", None, crate::applets::cmp as BundledFn);
+        commands.insert_bundled("sdiff", None, crate::applets::sdiff as BundledFn);
     }
     commands.insert_bundled("file", None, crate::applets::file as BundledFn);
     commands.insert_bundled("goblin", None, crate::applets::goblin as BundledFn);

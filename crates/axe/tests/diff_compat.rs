@@ -94,7 +94,7 @@ fn informational_options_do_not_override_delimited_file_operands() {
             1,
             b"1c1\n< one\n---\n> two\n",
         );
-}
+    }
 }
 
 #[test]
@@ -272,7 +272,6 @@ fn shallow_directories_and_recursive_new_files_report_the_right_entries() {
     );
 }
 
-
 #[test]
 fn recursive_new_file_comparison_treats_missing_directory_roots_as_empty_trees() {
     let scratch = Scratch::new("missing-directory-root");
@@ -289,7 +288,6 @@ fn recursive_new_file_comparison_treats_missing_directory_roots_as_empty_trees()
         b"diff -rN right/a left/a\n0a1\n> x\ndiff -rN right/sub/x left/sub/x\n0a1\n> nested\n",
     );
 }
-
 
 #[test]
 fn ignore_matching_lines_preserves_basic_bracket_backslashes_and_named_classes() {
@@ -375,7 +373,6 @@ fn side_by_side_ignored_replacements_use_common_row_markers() {
         b"#a    |\t#b\n",
     );
 }
-
 
 #[test]
 fn cmp_byte_limits_stop_before_eof_or_differences_outside_the_selected_prefix() {
@@ -574,4 +571,39 @@ fn cmp_reports_stdout_write_failures() {
         assert_eq!(output.status.code(), Some(2), "{output:?}");
         assert!(!output.stderr.is_empty(), "{output:?}");
     }
+}
+
+#[test]
+fn diff_and_sdiff_renderers_preserve_final_newline_markers() {
+    let scratch = Scratch::new("renderer-newlines");
+    scratch.write("a", b"a\n");
+    scratch.write("b", b"b");
+    assert_output(
+        run(&scratch.0, "diff", &["-e", "a", "b"], b""),
+        2,
+        b"1c\nb\n.\n",
+    );
+    assert_output(
+        run(&scratch.0, "diff", &["-y", "-W", "40", "a", "b"], b""),
+        1,
+        b"a\t\t   /\tb\n",
+    );
+    assert_output(
+        run(&scratch.0, "diff", &["-y", "-t", "-W", "40", "a", "b"], b""),
+        1,
+        b"a                  /  b\n",
+    );
+
+    scratch.write("a", b"a\nb\n");
+    scratch.write("b", b"a\nc\n");
+    assert_output(
+        run(&scratch.0, "sdiff", &["a", "b"], b""),
+        1,
+        b"a\t\t\t\t\t\t\t\ta\nb\t\t\t\t\t\t\t      |\tc\n",
+    );
+    assert_output(
+        run(&scratch.0, "sdiff", &["-s", "a", "b"], b""),
+        1,
+        b"b\t\t\t\t\t\t\t      |\tc\n",
+    );
 }

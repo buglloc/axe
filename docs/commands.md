@@ -72,7 +72,7 @@ Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-sty
 | Category | Bundled commands |
 | --- | --- |
 | `files` — Files & search | `basename`, `cp`, `dir`, `dirname`, `find`, `inotifywait`, `inotifywatch`, `install`, `link`, `ln`, `ls`, `mkdir`, `mkfifo`, `mknod`, `mktemp`, `mv`, `pathchk`, `pwd`, `readlink`, `realpath`, `rm`, `rmdir`, `stat`, `touch`, `tree`, `truncate`, `unlink`, `vdir` |
-| `text` — Text & data | `awk`, `b2sum`, `base32`, `base64`, `basenc`, `cat`, `cksum`, `cmp`, `comm`, `csplit`, `cut`, `diff`, `expand`, `factor`, `fmt`, `fold`, `grep`, `egrep`, `fgrep`, `rgrep`, `head`, `hexdump`, `hd`, `join`, `jq`, `md5sum`, `nl`, `numfmt`, `od`, `paste`, `pr`, `ptx`, `sed`, `seq`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, `shuf`, `sort`, `split`, `sum`, `tac`, `tail`, `tee`, `tr`, `tsort`, `unexpand`, `uniq`, `wc` |
+| `text` — Text & data | `awk`, `b2sum`, `base32`, `base64`, `basenc`, `cat`, `cksum`, `cmp`, `comm`, `csplit`, `cut`, `diff`, `expand`, `factor`, `fmt`, `fold`, `grep`, `egrep`, `fgrep`, `rgrep`, `head`, `hexdump`, `hd`, `join`, `jq`, `md5sum`, `nl`, `numfmt`, `od`, `paste`, `pr`, `ptx`, `sdiff`, `sed`, `seq`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, `shuf`, `sort`, `split`, `sum`, `tac`, `tail`, `tee`, `tr`, `tsort`, `unexpand`, `uniq`, `wc` |
 | `archives` — Archives & compression | `tar`, `gzip`, `gunzip`, `zcat`, `gzcat`, `bzip2`, `bunzip2`, `bzcat`, `xz`, `unxz`, `xzcat`, `zstd` |
 | `storage` — Storage & backup | `blkid`, `blockdev`, `dd`, `df`, `du`, `iostat`, `mount`, `mountpoint`, `sync`, `umount` |
 | `process` — Processes | `hugetop`, `kill`, `killall`, `lsof`, `nice`, `nohup`, `pgrep`, `pidof`, `pidwait`, `pkill`, `pmap`, `ps`, `pwdx`, `skill`, `snice`, `timeout`, `top`, `watch`, `xargs` |
@@ -127,9 +127,10 @@ ed (`-e`), side-by-side (`-y`), ASCII case folding, whitespace modes
 (`-i`, `-w`, `-b`, `-E`, `-Z`), `-B`, `-I`, `--strip-trailing-cr`, labels,
 directory recursion, and `--unidirectional-new-file`. `-x`, `-X`, `-D`, `-F`,
 `-l`, `-p`, `-H`, `--color`, and custom line-format options are rejected.
-`diff` and `cmp` distinguish differences from input errors. Case folding is
-ASCII-only. `diff -I` accepts a byte-oriented BRE subset and rejects
-unsupported constructs, including backreferences.
+`sdiff` prints side-by-side output and merges interactively with `-o FILE`.
+`diff`, `cmp`, and `sdiff` distinguish differences or merge decisions from
+input errors. Case folding is ASCII-only. `diff -I` accepts a byte-oriented
+BRE subset and rejects unsupported constructs, including backreferences.
 
 NUL-delimited pathname output from `find -print0` and `grep -lZ` preserves Unix
 filename bytes. `stat` filename formats and `which` PATH lookup also preserve

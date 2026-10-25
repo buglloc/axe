@@ -1,9 +1,11 @@
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local};
 use diffutilslib::params::{self, Format};
@@ -75,6 +77,390 @@ pub fn diff(args: Vec<OsString>) -> i32 {
         }
     }
 }
+#[derive(Default)]
+struct SdiffOptions {
+    diff: DiffOptions,
+    output: Option<OsString>,
+}
+
+pub fn sdiff(args: Vec<OsString>) -> i32 {
+    let options = match parse_sdiff(args) {
+        Ok(Some(options)) => options,
+        Ok(None) => return 0,
+        Err(error) => {
+            eprintln!("sdiff: {error}");
+            return 2;
+        }
+    };
+    let left = match read_diff_operand(&options.diff.params.from, false) {
+        Ok(data) => data,
+        Err(error) => {
+            eprintln!("sdiff: {error}");
+            return 2;
+        }
+    };
+    let right = match read_diff_operand(&options.diff.params.to, false) {
+        Ok(data) => data,
+        Err(error) => {
+            eprintln!("sdiff: {error}");
+            return 2;
+        }
+    };
+    if left != right && !options.diff.text && (left.contains(&0) || right.contains(&0)) {
+        eprintln!(
+            "sdiff: Binary files {} and {} differ",
+            options.diff.params.from.to_string_lossy(),
+            options.diff.params.to.to_string_lossy()
+        );
+        return 2;
+    }
+    let from_lines = split_lines(&left);
+    let to_lines = split_lines(&right);
+    let changes = diff_changes(&from_lines, &to_lines, &options.diff);
+    if let Some(output) = options.output {
+        return match sdiff_merge(
+            &options.diff,
+            &from_lines,
+            &to_lines,
+            &changes,
+            Path::new(&output),
+        ) {
+            Ok(status) => status,
+            Err(error) => {
+                eprintln!("sdiff: {error}");
+                2
+            }
+        };
+    }
+    let mut output = Vec::new();
+    render_side_by_side(
+        &mut output,
+        &from_lines,
+        &to_lines,
+        &changes,
+        &options.diff.params,
+        options.diff.left_column,
+        options.diff.suppress_common_lines,
+    );
+    write_output(
+        "sdiff",
+        &output,
+        i32::from(changes.iter().any(|change| !change.ignored)),
+    )
+}
+
+fn parse_sdiff(args: Vec<OsString>) -> Result<Option<SdiffOptions>, String> {
+    let mut options = SdiffOptions::default();
+    let mut files = Vec::new();
+    let mut iter = args.into_iter();
+    options.diff.params.executable = iter.next().unwrap_or_else(|| "sdiff".into());
+    let mut operands = false;
+    while let Some(argument) = iter.next() {
+        if operands || argument == "-" || !argument.as_encoded_bytes().starts_with(b"-") {
+            files.push(argument);
+            continue;
+        }
+        if argument == "--" {
+            operands = true;
+            continue;
+        }
+        let text = argument.to_str().ok_or("invalid option encoding")?;
+        if informational_option(text, "sdiff", "Usage: sdiff [OPTION]... FILE1 FILE2") {
+            return Ok(None);
+        }
+        if let Some(long) = text.strip_prefix("--") {
+            let (name, attached) = long
+                .split_once('=')
+                .map_or((long, None), |(name, value)| (name, Some(value)));
+            let value = match name {
+                "output" | "width" | "tabsize" | "ignore-matching-lines" => {
+                    Some(attached.map(OsString::from).map_or_else(
+                        || {
+                            iter.next()
+                                .ok_or_else(|| format!("option '--{name}' requires an argument"))
+                        },
+                        Ok,
+                    )?)
+                }
+                _ => None,
+            };
+            if attached.is_some()
+                && !matches!(
+                    name,
+                    "output" | "width" | "tabsize" | "ignore-matching-lines"
+                )
+            {
+                return Err(format!("option '--{name}' doesn't allow an argument"));
+            }
+            match name {
+                "output" => options.output = value,
+                "ignore-case" => options.diff.ignore_case = true,
+                "ignore-tab-expansion" => options.diff.ignore_tab_expansion = true,
+                "ignore-trailing-space" => options.diff.ignore_trailing_space = true,
+                "ignore-space-change" => options.diff.ignore_space_change = true,
+                "ignore-all-space" => options.diff.ignore_all_space = true,
+                "ignore-blank-lines" => options.diff.ignore_blank_lines = true,
+                "ignore-matching-lines" => options
+                    .diff
+                    .ignore_matching
+                    .push(ignore_regex(value.as_deref().unwrap())?),
+                "strip-trailing-cr" => options.diff.strip_trailing_cr = true,
+                "text" => options.diff.text = true,
+                "width" => {
+                    options.diff.params.width = positive_number(value.as_deref().unwrap(), "width")?
+                }
+                "tabsize" => {
+                    options.diff.params.tabsize =
+                        positive_number(value.as_deref().unwrap(), "tabsize")?
+                }
+                "left-column" => options.diff.left_column = true,
+                "suppress-common-lines" => options.diff.suppress_common_lines = true,
+                "expand-tabs" => options.diff.params.expand_tabs = true,
+                "minimal" => options.diff.minimal = true,
+                "speed-large-files" => {}
+                "diff-program" => return Err("unsupported option '--diff-program'".into()),
+                _ => return Err(format!("unrecognized option '{text}'")),
+            }
+            continue;
+        }
+        for (offset, flag) in text[1..].char_indices() {
+            let rest = &text[offset + 2..];
+            match flag {
+                'a' => options.diff.text = true,
+                'i' => options.diff.ignore_case = true,
+                'E' => options.diff.ignore_tab_expansion = true,
+                'Z' => options.diff.ignore_trailing_space = true,
+                'b' => options.diff.ignore_space_change = true,
+                'W' => options.diff.ignore_all_space = true,
+                'B' => options.diff.ignore_blank_lines = true,
+                'd' => options.diff.minimal = true,
+                'H' => {}
+                'l' => options.diff.left_column = true,
+                's' => options.diff.suppress_common_lines = true,
+                't' => options.diff.params.expand_tabs = true,
+                'w' => {
+                    let value = if rest.is_empty() {
+                        iter.next().ok_or("option requires an argument -- 'w'")?
+                    } else {
+                        OsString::from(rest)
+                    };
+                    options.diff.params.width = positive_number(&value, "width")?;
+                    break;
+                }
+                'I' => {
+                    let value = if rest.is_empty() {
+                        iter.next().ok_or("option requires an argument -- 'I'")?
+                    } else {
+                        OsString::from(rest)
+                    };
+                    options.diff.ignore_matching.push(ignore_regex(&value)?);
+                    break;
+                }
+                'o' => {
+                    options.output = Some(if rest.is_empty() {
+                        iter.next().ok_or("option requires an argument -- 'o'")?
+                    } else {
+                        OsString::from(rest)
+                    });
+                    break;
+                }
+                _ => return Err(format!("invalid option -- '{flag}'")),
+            }
+        }
+    }
+    if files.len() != 2 {
+        return Err("exactly two input files are required".into());
+    }
+    options.diff.params.from = files.remove(0);
+    options.diff.params.to = files.remove(0);
+    options.diff.params.format = Format::SideBySide;
+    Ok(Some(options))
+}
+
+fn sdiff_merge(
+    options: &DiffOptions,
+    from: &[&[u8]],
+    to: &[&[u8]],
+    changes: &[Change],
+    output_path: &Path,
+) -> Result<i32, String> {
+    let mut merged = Vec::new();
+    let mut display = Vec::new();
+    let mut old = 0;
+    let mut new = 0;
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let mut status = 0;
+    let mut skipped = false;
+    for change in changes {
+        while old < change.old.start && new < change.new.start {
+            merged.extend_from_slice(from[old]);
+            side_row(
+                &mut display,
+                Some(from[old]),
+                Some(to[new]),
+                b' ',
+                &options.params,
+                options.left_column,
+            );
+            old += 1;
+            new += 1;
+        }
+        let count = change.old.len().max(change.new.len());
+        for index in 0..count {
+            let left = from[change.old.clone()].get(index).copied();
+            let right = to[change.new.clone()].get(index).copied();
+            let marker = side_marker(left, right, change.ignored);
+            side_row(
+                &mut display,
+                left,
+                right,
+                marker,
+                &options.params,
+                options.left_column,
+            );
+        }
+        if change.ignored {
+            merged.extend_from_slice(from[change.old.clone()].concat().as_slice());
+            old = change.old.end;
+            new = change.new.end;
+            continue;
+        }
+        io::stdout()
+            .write_all(&display)
+            .map_err(|error| format!("write error: {error}"))?;
+        display.clear();
+        io::stdout()
+            .write_all(b"%")
+            .map_err(|error| format!("write error: {error}"))?;
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("write error: {error}"))?;
+        let mut command = String::new();
+        if input
+            .read_line(&mut command)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            status = 2;
+            break;
+        }
+        let command = command.trim();
+        match command {
+            "l" | "1" => {
+                append_lines_bytes(&mut merged, from, &change.old);
+                status = 1;
+            }
+            "r" | "2" => {
+                append_lines_bytes(&mut merged, to, &change.new);
+                status = 1;
+            }
+            "s" => {
+                skipped = true;
+                status = 1;
+            }
+            "q" => {
+                status = 2;
+                break;
+            }
+            "v" => {}
+            "e" | "eb" => {
+                let left = edit_sdiff_lines(&from[change.old.clone()], "left")?;
+                let right = edit_sdiff_lines(&to[change.new.clone()], "right")?;
+                if left != from[change.old.clone()].concat() {
+                    merged.extend_from_slice(&left);
+                } else {
+                    merged.extend_from_slice(&right);
+                }
+                status = 1;
+            }
+            "el" => {
+                merged.extend_from_slice(&edit_sdiff_lines(&from[change.old.clone()], "left")?);
+                status = 1;
+            }
+            "er" => {
+                merged.extend_from_slice(&edit_sdiff_lines(&to[change.new.clone()], "right")?);
+                status = 1;
+            }
+            _ => {
+                status = 2;
+                break;
+            }
+        }
+        old = change.old.end;
+        new = change.new.end;
+    }
+    if status != 2 {
+        while old < from.len() && new < to.len() {
+            merged.extend_from_slice(from[old]);
+            old += 1;
+            new += 1;
+        }
+        while old < from.len() {
+            merged.extend_from_slice(from[old]);
+            old += 1;
+        }
+        while new < to.len() {
+            merged.extend_from_slice(to[new]);
+            new += 1;
+        }
+        io::stdout()
+            .write_all(&display)
+            .map_err(|error| format!("write error: {error}"))?;
+        if skipped && status != 2 {
+            io::stdout()
+                .write_all(b"%")
+                .map_err(|error| format!("write error: {error}"))?;
+            status = 2;
+        }
+    }
+    atomic_write_sdiff(output_path, &merged).map_err(|error| error.to_string())?;
+    Ok(if changes.is_empty() { 0 } else { status.max(1) })
+}
+
+fn append_lines_bytes(output: &mut Vec<u8>, lines: &[&[u8]], range: &Range<usize>) {
+    for line in &lines[range.clone()] {
+        output.extend_from_slice(line);
+    }
+}
+
+fn edit_sdiff_lines(lines: &[&[u8]], suffix: &str) -> Result<Vec<u8>, String> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let path =
+        std::env::temp_dir().join(format!("axe-sdiff-{}-{suffix}-{nonce}", std::process::id()));
+    let original = lines.concat();
+    fs::write(&path, &original).map_err(|error| error.to_string())?;
+    let editor = std::env::var_os("EDITOR").unwrap_or_else(|| "ed".into());
+    let result = Command::new(editor)
+        .arg(&path)
+        .status()
+        .map_err(|error| error.to_string())?;
+    let content = fs::read(&path).map_err(|error| error.to_string());
+    let _ = fs::remove_file(path);
+    if !result.success() {
+        return Err("editor failed".into());
+    }
+    content
+}
+
+fn atomic_write_sdiff(path: &Path, content: &[u8]) -> io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = parent.join(format!(".axe-sdiff-{}-{nonce}", std::process::id()));
+    {
+        let mut file = fs::File::create_new(&temporary)?;
+        file.write_all(content)?;
+        file.sync_all()?;
+    }
+    fs::rename(&temporary, path)
+}
+
 fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
     let mut options = DiffOptions::default();
     let mut files = Vec::new();
@@ -168,7 +554,7 @@ fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
                     }
                 }
                 "speed-large-files" | "horizon-lines" | "color" | "palette" => {
-                    return Err(format!("unsupported option '--{name}'"))
+                    return Err(format!("unsupported option '--{name}'"));
                 }
                 _ => return Err(format!("unrecognized option '{text}'")),
             }
@@ -251,11 +637,9 @@ fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
                         break;
                     }
                     'l' | 'D' | 'F' | 'p' | 'H' | 'h' => {
-                        return Err(format!("unsupported option -- '{flag}'"))
+                        return Err(format!("unsupported option -- '{flag}'"));
                     }
-                    'x' | 'X' => {
-                        return Err(format!("unsupported option -- '{flag}'"))
-                    }
+                    'x' | 'X' => return Err(format!("unsupported option -- '{flag}'")),
                     _ => return Err(format!("invalid option -- '{flag}'")),
                 }
             }
@@ -419,13 +803,7 @@ fn comparison_key(line: &[u8], options: &DiffOptions) -> Vec<u8> {
         }
         if !trailing.is_empty() {
             for byte in trailing.drain(..) {
-                append_comparison_byte(
-                    &mut key,
-                    byte,
-                    options,
-                    &mut column,
-                    &mut whitespace,
-                );
+                append_comparison_byte(&mut key, byte, options, &mut column, &mut whitespace);
             }
         }
         append_comparison_byte(&mut key, byte, options, &mut column, &mut whitespace);
@@ -1332,12 +1710,9 @@ fn gnu_quantity(value: &OsStr) -> Result<u64, String> {
     Ok(number)
 }
 
-
-
 fn split_lines(input: &[u8]) -> Vec<&[u8]> {
     input.split_inclusive(|byte| *byte == b'\n').collect()
 }
-
 
 fn informational_option(option: &str, name: &str, usage: &str) -> bool {
     match option {
