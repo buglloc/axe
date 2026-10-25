@@ -598,7 +598,7 @@ fn build_matcher_tree(
                     )));
                 }
                 i += 1;
-                Some(RegexMatcher::new(regex_type, arg_text(args[i])?, false)?.into_box())
+                Some(RegexMatcher::new(regex_type, args[i], false)?.into_box())
             }
             "-iregex" => {
                 if i >= args.len() - 1 {
@@ -608,7 +608,7 @@ fn build_matcher_tree(
                     )));
                 }
                 i += 1;
-                Some(RegexMatcher::new(regex_type, arg_text(args[i])?, true)?.into_box())
+                Some(RegexMatcher::new(regex_type, args[i], true)?.into_box())
             }
             "-type" => {
                 if i >= args.len() - 1 {

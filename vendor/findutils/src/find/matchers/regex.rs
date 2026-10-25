@@ -4,9 +4,9 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
-use std::{error::Error, fmt, str::FromStr};
+use std::{error::Error, ffi::OsStr, fmt, str::FromStr};
 
-use onig::{Regex, RegexOptions, Syntax};
+use onig::{EncodedBytes, Regex, RegexOptions, SearchOptions, Syntax};
 
 use super::{Matcher, MatcherIO, WalkEntry};
 
@@ -82,7 +82,7 @@ pub struct RegexMatcher {
 impl RegexMatcher {
     pub fn new(
         regex_type: RegexType,
-        pattern: &str,
+        pattern: impl AsRef<OsStr>,
         ignore_case: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let syntax = match regex_type {
@@ -92,8 +92,8 @@ impl RegexMatcher {
             RegexType::PosixExtended => Syntax::posix_extended(),
         };
 
-        let regex = Regex::with_options(
-            pattern,
+        let regex = Regex::with_options_and_encoding(
+            EncodedBytes::ascii(pattern.as_ref().as_encoded_bytes()),
             if ignore_case {
                 RegexOptions::REGEX_OPTION_IGNORECASE
             } else {
@@ -107,8 +107,15 @@ impl RegexMatcher {
 
 impl Matcher for RegexMatcher {
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
+        let path = file_info.path().as_os_str().as_encoded_bytes();
         self.regex
-            .is_match(file_info.path().to_string_lossy().as_ref())
+            .match_with_encoding(
+                EncodedBytes::ascii(path),
+                0,
+                SearchOptions::SEARCH_OPTION_WHOLE_STRING,
+                None,
+            )
+            .is_some_and(|length| length == path.len())
     }
 }
 

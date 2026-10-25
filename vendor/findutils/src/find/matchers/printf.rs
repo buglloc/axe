@@ -8,7 +8,7 @@ use std::error::Error;
 use std::fs::{self, File};
 use std::path::Path;
 use std::time::SystemTime;
-use std::{borrow::Cow, io::Write};
+use std::{borrow::Cow, io::{self, Write}};
 
 use chrono::{format::StrftimeItems, DateTime, Local};
 
@@ -126,6 +126,7 @@ enum FormatComponent {
     Directive {
         directive: FormatDirective,
         width: Option<usize>,
+        precision: Option<usize>,
         justify: Justify,
     },
 }
@@ -233,6 +234,13 @@ impl FormatStringParser<'_> {
             Ok(None)
         }
     }
+    fn parse_format_precision(&mut self) -> Result<Option<usize>, Box<dyn Error>> {
+        if !self.string.starts_with('.') {
+            return Ok(None);
+        }
+        self.advance_one()?;
+        Ok(Some(self.parse_format_width()?.unwrap_or(0)))
+    }
 
     fn parse_time_specifier(&mut self, first: char) -> Result<TimeFormat, Box<dyn Error>> {
         match self.advance_one()? {
@@ -257,7 +265,7 @@ impl FormatStringParser<'_> {
         let mut justify = Justify::Right;
         loop {
             match self.front()? {
-                ' ' => (),
+                ' ' | '+' | '#' | '\'' | '0' => (),
                 '-' => justify = Justify::Left,
                 _ => break,
             }
@@ -267,6 +275,7 @@ impl FormatStringParser<'_> {
         }
 
         let width = self.parse_format_width()?;
+        let precision = self.parse_format_precision()?;
 
         let first = self.advance_one()?;
         if first == '%' {
@@ -318,6 +327,7 @@ impl FormatStringParser<'_> {
         Ok(FormatComponent::Directive {
             directive,
             width,
+            precision,
             justify,
         })
     }
@@ -351,6 +361,58 @@ impl FormatStringParser<'_> {
 
         Ok(FormatString { components })
     }
+}
+
+enum FormatContent<'entry> {
+    Text(Cow<'static, str>),
+    Bytes(Cow<'entry, [u8]>),
+}
+
+impl<'entry> From<String> for FormatContent<'entry> {
+    fn from(value: String) -> Self {
+        Self::Text(Cow::Owned(value))
+    }
+}
+
+impl<'entry> From<&'static str> for FormatContent<'entry> {
+    fn from(value: &'static str) -> Self {
+        Self::Text(Cow::Borrowed(value))
+    }
+}
+
+impl<'entry> From<Cow<'static, str>> for FormatContent<'entry> {
+    fn from(value: Cow<'static, str>) -> Self {
+        Self::Text(value)
+    }
+}
+
+fn write_content(
+    out: &mut impl Write,
+    content: &FormatContent<'_>,
+    width: Option<usize>,
+    precision: Option<usize>,
+    justify: &Justify,
+) -> std::io::Result<()> {
+    let content = match content {
+        FormatContent::Text(text) => text.as_bytes(),
+        FormatContent::Bytes(bytes) => bytes.as_ref(),
+    };
+    let bytes = precision.map_or(content, |precision| {
+        &content[..precision.min(content.len())]
+    });
+    let padding = width.map_or(0, |width| width.saturating_sub(bytes.len()));
+    if matches!(justify, Justify::Right) {
+        for _ in 0..padding {
+            out.write_all(b" ")?;
+        }
+    }
+    out.write_all(bytes)?;
+    if matches!(justify, Justify::Left) {
+        for _ in 0..padding {
+            out.write_all(b" ")?;
+        }
+    }
+    Ok(())
 }
 
 struct FormatString {
@@ -388,7 +450,7 @@ fn format_non_link_file_type(file_type: FileType) -> char {
 fn format_directive<'entry>(
     file_info: &'entry WalkEntry,
     directive: &FormatDirective,
-) -> Result<Cow<'entry, str>, Box<dyn Error>> {
+) -> Result<FormatContent<'entry>, Box<dyn Error>> {
     let meta = || file_info.metadata();
 
     // NOTE ON QUOTING:
@@ -397,11 +459,12 @@ fn format_directive<'entry>(
     // practice, thus the set of rules is undoubtedly very different (if this is
     // still done at all).
 
-    let res: Cow<'entry, str> = match directive {
-        FormatDirective::AccessTime(tf) => tf.apply(meta()?.accessed()?)?,
+    let res: FormatContent<'entry> = match directive {
+        FormatDirective::AccessTime(tf) => tf.apply(meta()?.accessed()?)?.into(),
 
-        FormatDirective::Basename => file_info.file_name().to_string_lossy(),
-
+        FormatDirective::Basename => {
+            FormatContent::Bytes(Cow::Borrowed(file_info.file_name().as_encoded_bytes()))
+        }
         FormatDirective::Blocks { large_blocks } => {
             #[cfg(unix)]
             let len = meta()?.blocks() * STANDARD_BLOCK_SIZE;
@@ -419,7 +482,7 @@ fn format_directive<'entry>(
         }
 
         #[cfg(not(unix))]
-        FormatDirective::ChangeTime(tf) => tf.apply(meta()?.modified()?)?,
+        FormatDirective::ChangeTime(tf) => tf.apply(meta()?.modified()?)?.into(),
         #[cfg(unix)]
         FormatDirective::ChangeTime(tf) => {
             use std::time::Duration;
@@ -428,7 +491,7 @@ fn format_directive<'entry>(
             let ctime = SystemTime::UNIX_EPOCH
                 + Duration::from_secs(meta.ctime() as u64)
                 + Duration::from_nanos(meta.ctime_nsec() as u64);
-            tf.apply(ctime)?
+            tf.apply(ctime)?.into()
         }
 
         FormatDirective::Depth => file_info.depth().to_string().into(),
@@ -448,7 +511,9 @@ fn format_directive<'entry>(
             None => "".into(),
             Some(p) if p == Path::new("/") => "".into(),
             Some(p) if p == Path::new("") => ".".into(),
-            Some(parent) => parent.to_string_lossy(),
+            Some(parent) => FormatContent::Bytes(Cow::Borrowed(
+                parent.as_os_str().as_encoded_bytes(),
+            )),
         },
 
         #[cfg(not(unix))]
@@ -488,21 +553,24 @@ fn format_directive<'entry>(
         #[cfg(unix)]
         FormatDirective::Inode => meta()?.ino().to_string().into(),
 
-        FormatDirective::ModificationTime(tf) => tf.apply(meta()?.modified()?)?,
+        FormatDirective::ModificationTime(tf) => tf.apply(meta()?.modified()?)?.into(),
 
         FormatDirective::Path {
             strip_starting_point,
-        } => file_info
-            .path()
-            .strip_prefix(if *strip_starting_point {
-                get_starting_point(file_info)
-            } else {
-                Path::new("")
-            })
-            // safe to unwrap: the prefix is derived *from* the path to begin
-            // with, so it cannot be invalid.
-            .unwrap()
-            .to_string_lossy(),
+        } => FormatContent::Bytes(Cow::Borrowed(
+            file_info
+                .path()
+                .strip_prefix(if *strip_starting_point {
+                    get_starting_point(file_info)
+                } else {
+                    Path::new("")
+                })
+                // safe to unwrap: the prefix is derived *from* the path to begin
+                // with, so it cannot be invalid.
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes(),
+        )),
 
         FormatDirective::Permissions(PermissionsFormat::Symbolic) => {
             uucore::fs::display_permissions(meta()?, true).into()
@@ -535,14 +603,18 @@ fn format_directive<'entry>(
             }
         }
 
-        FormatDirective::StartingPoint => get_starting_point(file_info).to_string_lossy(),
+        FormatDirective::StartingPoint => FormatContent::Bytes(Cow::Borrowed(
+            get_starting_point(file_info)
+                .as_os_str()
+                .as_encoded_bytes(),
+        )),
 
         FormatDirective::SymlinkTarget => {
             if file_info.path_is_symlink() {
-                fs::read_link(file_info.path())?
-                    .to_string_lossy()
-                    .into_owned()
-                    .into()
+                let target = fs::read_link(file_info.path())?;
+                FormatContent::Bytes(Cow::Owned(
+                    target.into_os_string().into_encoded_bytes(),
+                ))
             } else {
                 "".into()
             }
@@ -597,32 +669,23 @@ impl Printf {
         })
     }
 
-    fn print(&self, file_info: &WalkEntry, mut out: impl Write) {
+    fn print(&self, file_info: &WalkEntry, mut out: impl Write) -> io::Result<()> {
         for component in &self.format.components {
             match component {
-                FormatComponent::Literal(literal) => write!(out, "{literal}").unwrap(),
-                FormatComponent::Flush => out.flush().unwrap(),
+                FormatComponent::Literal(literal) => out.write_all(literal.as_bytes())?,
+                FormatComponent::Flush => out.flush()?,
                 FormatComponent::Directive {
                     directive,
                     width,
+                    precision,
                     justify,
                 } => match format_directive(file_info, directive) {
                     Ok(content) => {
-                        if let Some(width) = width {
-                            match justify {
-                                Justify::Left => {
-                                    write!(out, "{content:<width$}").unwrap();
-                                }
-                                Justify::Right => {
-                                    write!(out, "{content:>width$}").unwrap();
-                                }
-                            }
-                        } else {
-                            write!(out, "{content}").unwrap();
-                        }
+                        write_content(&mut out, &content, *width, *precision, justify)?
                     }
                     Err(e) => {
-                        eprintln!(
+                        let _ = writeln!(
+                            &mut io::stderr(),
                             "Error processing '{}': {}",
                             file_info.path().to_string_lossy(),
                             e
@@ -632,15 +695,20 @@ impl Printf {
                 },
             }
         }
+        Ok(())
     }
 }
 
 impl Matcher for Printf {
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
-        if let Some(file) = &self.output_file {
-            self.print(file_info, file);
+        let result = if let Some(file) = &self.output_file {
+            self.print(file_info, file)
         } else {
-            self.print(file_info, &mut *matcher_io.deps.get_output().borrow_mut());
+            self.print(file_info, &mut *matcher_io.deps.get_output().borrow_mut())
+        };
+        if let Err(error) = result {
+            let _ = writeln!(&mut io::stderr(), "find: write error: {error}");
+            matcher_io.set_exit_code(1);
         }
 
         true
@@ -733,6 +801,7 @@ mod tests {
             FormatComponent::Directive {
                 directive,
                 width: None,
+                precision: None,
                 justify: Justify::Right,
             }
         }
@@ -816,32 +885,38 @@ mod tests {
                 FormatComponent::Directive {
                     directive: FormatDirective::Depth,
                     justify: Justify::Right,
-                    width: None
+                    width: None,
+                    precision: None
                 },
                 FormatComponent::Directive {
                     directive: FormatDirective::Size,
                     justify: Justify::Left,
-                    width: None
+                    width: None,
+                    precision: None
                 },
                 FormatComponent::Directive {
                     directive: FormatDirective::Sparseness,
                     justify: Justify::Right,
-                    width: Some(5)
+                    width: Some(5),
+                    precision: None
                 },
                 FormatComponent::Directive {
                     directive: FormatDirective::HardlinkCount,
                     justify: Justify::Left,
-                    width: Some(12)
+                    width: Some(12),
+                    precision: None
                 },
                 FormatComponent::Directive {
                     directive: FormatDirective::Basename,
                     justify: Justify::Right,
-                    width: Some(3)
+                    width: Some(3),
+                    precision: None
                 },
                 FormatComponent::Directive {
                     directive: FormatDirective::Inode,
                     justify: Justify::Left,
-                    width: Some(4)
+                    width: Some(4),
+                    precision: None
                 },
             ]
         );
