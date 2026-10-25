@@ -253,13 +253,13 @@ pub fn run(args: Args) -> ExitCode {
     if !args.format.is_empty() {
         let specs = match parse_format_spec(&args.format) {
             Ok(s) if s.is_empty() => {
-                eprintln!("ps: -o requires at least one column");
-                return ExitCode::from(2);
+                eprintln!("error: empty format list");
+                return ExitCode::FAILURE;
             }
             Ok(s) => s,
             Err(e) => {
-                eprintln!("{e}");
-                return ExitCode::from(2);
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
             }
         };
         return run_with_format(&ctx, &specs);

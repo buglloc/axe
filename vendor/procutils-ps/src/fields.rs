@@ -166,11 +166,24 @@ pub struct Field {
     pub aliases: &'static [&'static str],
     /// Default header text. Overridden by a `=label` suffix on the spec.
     pub header: &'static str,
+    /// Minimum display width before header and value expansion.
+    pub width: usize,
     pub align: Align,
     pub compute: fn(&mut ProcessContext) -> String,
 }
 
 impl Field {
+    pub(super) fn minimum_width(&self, pid_width: usize) -> usize {
+        if matches!(
+            self.name,
+            "pid" | "tgid" | "tid" | "lwp" | "spid" | "ppid" | "pgid" | "sid" | "tpgid"
+        ) {
+            self.width.max(pid_width)
+        } else {
+            self.width
+        }
+    }
+
     pub(super) fn render(&self, context: &mut ProcessContext<'_>) -> String {
         // procps output.c's PO/TO applicability applies only when m/-m
         // displays both summaries and tasks. Flat task modes print all fields.
@@ -277,6 +290,7 @@ pub static FIELDS: &[Field] = &[
     // ---- Identifiers ------------------------------------------------
     Field {
         name: "pid",
+        width: 5,
         aliases: &[],
         header: "PID",
         align: Align::Right,
@@ -284,6 +298,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "tgid",
+        width: 5,
         aliases: &[],
         header: "TGID",
         align: Align::Right,
@@ -291,6 +306,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "tid",
+        width: 5,
         aliases: &[],
         header: "TID",
         align: Align::Right,
@@ -298,6 +314,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "lwp",
+        width: 5,
         aliases: &[],
         header: "LWP",
         align: Align::Right,
@@ -305,6 +322,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "spid",
+        width: 5,
         aliases: &[],
         header: "SPID",
         align: Align::Right,
@@ -312,6 +330,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "ppid",
+        width: 5,
         aliases: &[],
         header: "PPID",
         align: Align::Right,
@@ -319,6 +338,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "pgid",
+        width: 5,
         aliases: &["pgrp"],
         header: "PGID",
         align: Align::Right,
@@ -326,6 +346,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "sid",
+        width: 5,
         aliases: &["sess"],
         header: "SID",
         align: Align::Right,
@@ -333,6 +354,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "tpgid",
+        width: 5,
         aliases: &[],
         header: "TPGID",
         align: Align::Right,
@@ -341,6 +363,7 @@ pub static FIELDS: &[Field] = &[
     // ---- User / group IDs -------------------------------------------
     Field {
         name: "uid",
+        width: 5,
         aliases: &["euid"],
         header: "UID",
         align: Align::Right,
@@ -348,6 +371,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "ruid",
+        width: 5,
         aliases: &[],
         header: "RUID",
         align: Align::Right,
@@ -355,6 +379,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "suid",
+        width: 5,
         aliases: &[],
         header: "SUID",
         align: Align::Right,
@@ -362,6 +387,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "gid",
+        width: 5,
         aliases: &["egid"],
         header: "GID",
         align: Align::Right,
@@ -369,6 +395,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "rgid",
+        width: 5,
         aliases: &[],
         header: "RGID",
         align: Align::Right,
@@ -376,6 +403,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "user",
+        width: 8,
         aliases: &["uname", "euser"],
         header: "USER",
         align: Align::Left,
@@ -383,6 +411,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "ruser",
+        width: 8,
         aliases: &[],
         header: "RUSER",
         align: Align::Left,
@@ -390,6 +419,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "group",
+        width: 8,
         aliases: &["egroup"],
         header: "GROUP",
         align: Align::Left,
@@ -397,6 +427,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "rgroup",
+        width: 8,
         aliases: &[],
         header: "RGROUP",
         align: Align::Left,
@@ -405,6 +436,7 @@ pub static FIELDS: &[Field] = &[
     // ---- Command ----------------------------------------------------
     Field {
         name: "comm",
+        width: 15,
         aliases: &["ucmd", "ucomm"],
         header: "COMMAND",
         align: Align::Left,
@@ -412,6 +444,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "args",
+        width: 27,
         aliases: &["cmd", "command"],
         header: "COMMAND",
         align: Align::Left,
@@ -426,6 +459,7 @@ pub static FIELDS: &[Field] = &[
     // ---- State / scheduling -----------------------------------------
     Field {
         name: "state",
+        width: 1,
         aliases: &["s"],
         header: "S",
         align: Align::Left,
@@ -433,6 +467,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "stat",
+        width: 4,
         aliases: &[],
         header: "STAT",
         align: Align::Left,
@@ -440,6 +475,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "nice",
+        width: 3,
         aliases: &["ni"],
         header: "NI",
         align: Align::Right,
@@ -447,6 +483,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "pri",
+        width: 3,
         aliases: &[],
         header: "PRI",
         align: Align::Right,
@@ -454,6 +491,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "psr",
+        width: 3,
         aliases: &["processor"],
         header: "PSR",
         align: Align::Right,
@@ -461,6 +499,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "nlwp",
+        width: 4,
         aliases: &["thcount"],
         header: "NLWP",
         align: Align::Right,
@@ -469,6 +508,7 @@ pub static FIELDS: &[Field] = &[
     // ---- Memory -----------------------------------------------------
     Field {
         name: "vsz",
+        width: 6,
         aliases: &["vsize"],
         header: "VSZ",
         align: Align::Right,
@@ -476,6 +516,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "rss",
+        width: 5,
         aliases: &["rsz"],
         header: "RSS",
         align: Align::Right,
@@ -483,6 +524,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "%mem",
+        width: 4,
         aliases: &["pmem"],
         header: "%MEM",
         align: Align::Right,
@@ -491,6 +533,7 @@ pub static FIELDS: &[Field] = &[
     // ---- CPU --------------------------------------------------------
     Field {
         name: "%cpu",
+        width: 4,
         aliases: &["pcpu"],
         header: "%CPU",
         align: Align::Right,
@@ -498,6 +541,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "c",
+        width: 2,
         aliases: &[],
         header: "C",
         align: Align::Right,
@@ -505,6 +549,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "time",
+        width: 8,
         aliases: &["cputime"],
         header: "TIME",
         align: Align::Right,
@@ -512,6 +557,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "cputimes",
+        width: 8,
         aliases: &["times"],
         header: "TIME",
         align: Align::Right,
@@ -519,6 +565,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "bsdtime",
+        width: 6,
         aliases: &[],
         header: "TIME",
         align: Align::Right,
@@ -526,6 +573,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "etime",
+        width: 11,
         aliases: &[],
         header: "ELAPSED",
         align: Align::Right,
@@ -533,6 +581,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "etimes",
+        width: 7,
         aliases: &[],
         header: "ELAPSED",
         align: Align::Right,
@@ -540,6 +589,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "start",
+        width: 5,
         aliases: &["start_time", "stime", "bsdstart"],
         header: "START",
         align: Align::Left,
@@ -547,6 +597,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "lstart",
+        width: 24,
         aliases: &[],
         header: "STARTED",
         align: Align::Left,
@@ -555,6 +606,7 @@ pub static FIELDS: &[Field] = &[
     // ---- TTY --------------------------------------------------------
     Field {
         name: "tty",
+        width: 8,
         aliases: &["tt", "tname"],
         header: "TTY",
         align: Align::Left,
@@ -563,6 +615,7 @@ pub static FIELDS: &[Field] = &[
     // ---- Other ------------------------------------------------------
     Field {
         name: "wchan",
+        width: 6,
         aliases: &[],
         header: "WCHAN",
         align: Align::Left,
@@ -570,6 +623,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "flags",
+        width: 1,
         aliases: &["f"],
         header: "F",
         align: Align::Right,
@@ -579,6 +633,7 @@ pub static FIELDS: &[Field] = &[
     // ---- Scheduling class ------------------------------------------
     Field {
         name: "cls",
+        width: 3,
         aliases: &["class", "policy"],
         header: "CLS",
         align: Align::Right,
@@ -587,6 +642,7 @@ pub static FIELDS: &[Field] = &[
     // ---- Open file descriptors -------------------------------------
     Field {
         name: "fds",
+        width: 3,
         aliases: &[],
         header: "FDS",
         align: Align::Right,
@@ -595,6 +651,7 @@ pub static FIELDS: &[Field] = &[
     // ---- Signal masks (16-char hex, like procps) -------------------
     Field {
         name: "pending",
+        width: 16,
         aliases: &["sig", "sig_pend"],
         header: "PENDING",
         align: Align::Left,
@@ -602,6 +659,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "blocked",
+        width: 16,
         aliases: &["sig_block", "sigmask"],
         header: "BLOCKED",
         align: Align::Left,
@@ -609,6 +667,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "ignored",
+        width: 16,
         aliases: &["sig_ignore", "sigignore"],
         header: "IGNORED",
         align: Align::Left,
@@ -616,6 +675,7 @@ pub static FIELDS: &[Field] = &[
     },
     Field {
         name: "caught",
+        width: 16,
         aliases: &["sig_catch", "sigcatch"],
         header: "CAUGHT",
         align: Align::Left,

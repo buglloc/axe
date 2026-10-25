@@ -8,8 +8,8 @@ use crate::{
 use std::{
     env,
     ffi::{CStr, CString},
-    fs::OpenOptions,
-    io::{self, IsTerminal, Write},
+    fs::{File, OpenOptions},
+    io::{self, IsTerminal, Read, Write},
     os::{fd::AsRawFd, unix::ffi::OsStrExt, unix::fs::OpenOptionsExt},
 };
 use unicode_width::UnicodeWidthChar;
@@ -223,6 +223,17 @@ fn write_spaces(out: &mut impl Write, mut count: usize) -> io::Result<()> {
     Ok(())
 }
 
+fn pid_width() -> usize {
+    let mut buffer = [0; 32];
+    let value = File::open("/proc/sys/kernel/pid_max")
+        .and_then(|mut file| file.read(&mut buffer))
+        .ok()
+        .and_then(|length| std::str::from_utf8(&buffer[..length]).ok())
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .and_then(|value| value.checked_sub(1)?.checked_ilog10());
+    value.map_or(5, |digits| (digits as usize + 1).max(5))
+}
+
 pub(super) fn write_table<'a>(
     specs: &[FieldSpec],
     rows: impl Clone + Iterator<Item = &'a Row>,
@@ -231,6 +242,7 @@ pub(super) fn write_table<'a>(
 ) -> io::Result<()> {
     let utf8 = utf8_locale();
     let limit = width.unwrap_or(OUTPUT_LIMIT).max(1);
+    let pid_width = pid_width();
     let mut widths: Vec<usize> = specs
         .iter()
         .map(|spec| {
@@ -240,6 +252,7 @@ pub(super) fn write_table<'a>(
                 utf8,
                 usize::MAX,
             )
+            .max(spec.field.minimum_width(pid_width))
         })
         .collect();
     for row in rows.clone() {
@@ -249,10 +262,8 @@ pub(super) fn write_table<'a>(
         }
     }
 
-    // Fixed fields are never discarded or clipped to fit a narrow screen.
-    // procps expands to a multiple of the screen width when the fixed layout
-    // plus its command minimum will not fit. Keep the registry's existing
-    // dynamic widths rather than introducing a second field-width registry.
+    // Fixed fields survive narrow screens. Expand to a screen-width multiple
+    // when their procps minimum widths and the command minimum do not fit.
     let minimum = specs
         .iter()
         .enumerate()

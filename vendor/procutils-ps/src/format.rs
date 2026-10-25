@@ -55,8 +55,9 @@ pub fn parse_format_spec(specs: &[String]) -> Result<Vec<FieldSpec>, ParseError>
                 Some((n, l)) => (n, Some(l.to_string())),
                 None => (token.as_str(), None),
             };
-            let field = resolve_field(name)
-                .ok_or_else(|| ParseError(format!("ps: unknown column name: {name}")))?;
+            let field = resolve_field(name).ok_or_else(|| {
+                ParseError(format!("unknown user-defined format specifier \"{name}\""))
+            })?;
             out.push(FieldSpec { field, label });
         }
     }
