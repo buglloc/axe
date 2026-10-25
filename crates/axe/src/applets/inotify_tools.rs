@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString};
+use std::io::Write;
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Local;
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
-use regex::Regex;
+use regex::bytes::{Regex, RegexBuilder};
 
 pub fn inotifywait(args: Vec<OsString>) -> i32 {
     match WaitOptions::parse(args).and_then(run_wait) {
@@ -35,10 +37,13 @@ pub fn inotifywatch(args: Vec<OsString>) -> i32 {
 
 struct Common {
     paths: Vec<PathBuf>,
+    excluded_paths: Vec<PathBuf>,
     recursive: bool,
     no_dereference: bool,
     timeout: Option<Duration>,
     mask: WatchMask,
+    output_mask: EventMask,
+    events_specified: bool,
     selected_events: Vec<&'static str>,
     exclude: Option<Regex>,
     include: Option<Regex>,
@@ -48,10 +53,14 @@ impl Common {
     fn new() -> Self {
         Self {
             paths: Vec::new(),
+            excluded_paths: Vec::new(),
             recursive: false,
             no_dereference: false,
             timeout: None,
             mask: WatchMask::ALL_EVENTS,
+            output_mask: EventMask::from_bits_retain(WatchMask::ALL_EVENTS.bits())
+                | EventMask::UNMOUNT,
+            events_specified: false,
             selected_events: event_columns().to_vec(),
             exclude: None,
             include: None,
@@ -59,21 +68,54 @@ impl Common {
     }
 
     fn apply_event(&mut self, value: &str) -> Result<(), String> {
-        if self.mask == WatchMask::ALL_EVENTS {
-            self.mask = WatchMask::empty();
+        if !self.events_specified {
+            self.events_specified = true;
+            self.output_mask = EventMask::empty();
             self.selected_events.clear();
         }
         for value in value.split(',') {
             let (mask, names) = parse_event(value)?;
-            self.mask.insert(mask);
+            self.output_mask.insert(mask);
             for name in names {
                 if !self.selected_events.contains(&name) {
                     self.selected_events.push(name);
                 }
             }
         }
+        self.mask = WatchMask::from_bits_truncate(self.output_mask.bits());
+        if self.mask.is_empty() {
+            // UNMOUNT is delivered automatically but is not a WatchMask flag.
+            self.mask = WatchMask::ALL_EVENTS;
+        }
         Ok(())
     }
+
+    fn add_operand(&mut self, value: OsString) -> Result<(), String> {
+        if let Some(path) = value.as_bytes().strip_prefix(b"@") {
+            self.excluded_paths
+                .push(absolute_path(Path::new(OsStr::from_bytes(path)))?);
+        } else {
+            self.paths.push(PathBuf::from(value));
+        }
+        Ok(())
+    }
+
+    fn path_excluded(&self, path: &Path) -> bool {
+        !self.excluded_paths.is_empty()
+            && absolute_path(path).is_ok_and(|path| {
+                self.excluded_paths
+                    .iter()
+                    .any(|excluded| path.starts_with(excluded))
+            })
+    }
+}
+
+fn path_regex(pattern: &str, case_insensitive: bool) -> Result<Regex, String> {
+    RegexBuilder::new(pattern)
+        .unicode(false)
+        .case_insensitive(case_insensitive)
+        .build()
+        .map_err(|error| error.to_string())
 }
 
 struct WaitOptions {
@@ -94,7 +136,7 @@ enum WaitOutcome {
 
 impl WaitOptions {
     fn parse(args: Vec<OsString>) -> Result<Self, String> {
-        let values = utf8_args(args)?;
+        let mut iter = args.into_iter().skip(1);
         let mut options = Self {
             common: Common::new(),
             monitor: false,
@@ -105,24 +147,26 @@ impl WaitOptions {
             newline: true,
             output: None,
         };
-        let mut iter = values.into_iter().skip(1);
         while let Some(value) = iter.next() {
-            match value.as_str() {
+            match value.to_str().unwrap_or_default() {
                 "-m" | "--monitor" => options.monitor = true,
                 "-r" | "--recursive" => options.common.recursive = true,
                 "-P" | "--no-dereference" => options.common.no_dereference = true,
                 "-q" | "--quiet" => options.quiet = options.quiet.saturating_add(1),
                 "-c" | "--csv" => options.csv = true,
                 "--no-newline" => options.newline = false,
-                "-e" | "--event" => options
-                    .common
-                    .apply_event(&iter.next().ok_or("event option requires an argument")?)?,
+                "-e" | "--event" => options.common.apply_event(&text_argument(
+                    iter.next(),
+                    "event option requires an argument",
+                )?)?,
                 "-t" | "--timeout" => options.common.timeout = parse_timeout(iter.next())?,
                 "--format" => {
-                    options.format = Some(iter.next().ok_or("--format requires an argument")?)
+                    options.format =
+                        Some(text_argument(iter.next(), "--format requires an argument")?)
                 }
                 "--timefmt" => {
-                    options.time_format = iter.next().ok_or("--timefmt requires an argument")?
+                    options.time_format =
+                        text_argument(iter.next(), "--timefmt requires an argument")?
                 }
                 "-o" | "--outfile" => {
                     options.output = Some(PathBuf::from(
@@ -130,34 +174,28 @@ impl WaitOptions {
                     ))
                 }
                 "--exclude" => {
-                    options.common.exclude = Some(
-                        Regex::new(&iter.next().ok_or("--exclude requires a pattern")?)
-                            .map_err(|error| error.to_string())?,
-                    )
+                    options.common.exclude = Some(path_regex(
+                        &text_argument(iter.next(), "--exclude requires a pattern")?,
+                        false,
+                    )?)
                 }
                 "--excludei" => {
-                    options.common.exclude = Some(
-                        Regex::new(&format!(
-                            "(?i:{})",
-                            iter.next().ok_or("--excludei requires a pattern")?
-                        ))
-                        .map_err(|error| error.to_string())?,
-                    )
+                    options.common.exclude = Some(path_regex(
+                        &text_argument(iter.next(), "--excludei requires a pattern")?,
+                        true,
+                    )?)
                 }
                 "--include" => {
-                    options.common.include = Some(
-                        Regex::new(&iter.next().ok_or("--include requires a pattern")?)
-                            .map_err(|error| error.to_string())?,
-                    )
+                    options.common.include = Some(path_regex(
+                        &text_argument(iter.next(), "--include requires a pattern")?,
+                        false,
+                    )?)
                 }
                 "--includei" => {
-                    options.common.include = Some(
-                        Regex::new(&format!(
-                            "(?i:{})",
-                            iter.next().ok_or("--includei requires a pattern")?
-                        ))
-                        .map_err(|error| error.to_string())?,
-                    )
+                    options.common.include = Some(path_regex(
+                        &text_argument(iter.next(), "--includei requires a pattern")?,
+                        true,
+                    )?)
                 }
                 "-h" | "--help" => {
                     println!(
@@ -166,11 +204,16 @@ impl WaitOptions {
                     return Err(String::new());
                 }
                 "-d" | "--daemon" | "-s" | "--syslog" => {
-                    return Err(format!("unsupported option '{value}'"));
+                    return Err(format!("unsupported option '{}'", value.to_string_lossy()));
+                }
+                "--" => {
+                    for path in iter {
+                        options.common.add_operand(path)?;
+                    }
+                    break;
                 }
                 value if value.starts_with('-') => return Err(format!("unknown option '{value}'")),
-                value if value.starts_with('@') => {}
-                _ => options.common.paths.push(PathBuf::from(value)),
+                _ => options.common.add_operand(value)?,
             }
         }
         if options.common.paths.is_empty() {
@@ -184,9 +227,18 @@ impl WaitOptions {
 }
 
 fn run_wait(options: WaitOptions) -> Result<WaitOutcome, String> {
-    let (mut inotify, mut watches) = establish(&options.common)?;
     if options.quiet == 0 {
-        eprintln!("Setting up watches.");
+        eprintln!(
+            "Setting up watches.{}",
+            if options.common.recursive {
+                "  Beware: since -r was given, this may take a while!"
+            } else {
+                ""
+            }
+        );
+    }
+    let (mut inotify, mut watches) = establish(&options.common, false)?;
+    if options.quiet == 0 {
         eprintln!("Watches established.");
     }
     let stopped = signal_flag()?;
@@ -215,7 +267,7 @@ fn run_wait(options: WaitOptions) -> Result<WaitOutcome, String> {
                 .name
                 .as_ref()
                 .map_or_else(|| root.clone(), |name| root.join(name));
-            if !path_selected(&full, &options.common) {
+            if options.common.path_excluded(&full) {
                 continue;
             }
             if options.common.recursive
@@ -223,48 +275,45 @@ fn run_wait(options: WaitOptions) -> Result<WaitOutcome, String> {
                 && (event.mask.contains(EventMask::CREATE)
                     || event.mask.contains(EventMask::MOVED_TO))
             {
-                add_tree(
-                    &mut inotify,
-                    &mut watches,
-                    &full,
-                    options.common.mask,
-                    options.common.no_dereference,
-                )?;
+                add_tree(&mut inotify, &mut watches, &full, &options.common, true)?;
+            }
+            let selected = event.mask & options.common.output_mask;
+            if selected.is_empty() || !path_selected(&full, &options.common) {
+                continue;
             }
             if options.quiet < 2 {
-                let names = event_names(event.mask).join(",");
+                let names = event_names(selected).join(",");
                 let watched = watched_name(&root);
                 let filename = event
                     .name
                     .as_ref()
-                    .map(|value| value.to_string_lossy().into_owned())
+                    .map(|value| value.as_bytes())
                     .unwrap_or_default();
                 let rendered = if let Some(format) = &options.format {
                     render_format(
                         format,
                         &watched,
-                        &filename,
+                        filename,
                         &names,
                         event.cookie,
                         &options.time_format,
                     )
                 } else if options.csv {
-                    format!(
-                        "{},{},{}",
-                        csv_field(&watched),
-                        csv_field(&names),
-                        csv_field(&filename)
-                    )
+                    let mut rendered = csv_field(&watched);
+                    rendered.push(b',');
+                    rendered.extend(csv_field(names.as_bytes()));
+                    rendered.push(b',');
+                    rendered.extend(csv_field(filename));
+                    rendered
                 } else if filename.is_empty() {
-                    format!("{watched} {names}")
+                    [watched.as_slice(), b" ", names.as_bytes()].concat()
                 } else {
-                    format!("{watched} {names} {filename}")
+                    [watched.as_slice(), b" ", names.as_bytes(), b" ", filename].concat()
                 };
-                use std::io::Write;
                 output
-                    .write_all(rendered.as_bytes())
+                    .write_all(&rendered)
                     .map_err(|error| error.to_string())?;
-                if options.newline && !rendered.ends_with('\n') {
+                if options.newline && !rendered.ends_with(b"\n") {
                     output.write_all(b"\n").map_err(|error| error.to_string())?;
                 }
                 output.flush().map_err(|error| error.to_string())?;
@@ -286,7 +335,7 @@ struct WatchOptions {
 
 impl WatchOptions {
     fn parse(args: Vec<OsString>) -> Result<Self, String> {
-        let values = utf8_args(args)?;
+        let mut iter = args.into_iter().skip(1);
         let mut options = Self {
             common: Common::new(),
             zero: false,
@@ -294,36 +343,37 @@ impl WatchOptions {
             ascending: false,
             verbose: false,
         };
-        let mut iter = values.into_iter().skip(1);
         while let Some(value) = iter.next() {
-            match value.as_str() {
+            match value.to_str().unwrap_or_default() {
                 "-r" | "--recursive" => options.common.recursive = true,
                 "-P" | "--no-dereference" => options.common.no_dereference = true,
                 "-z" | "--zero" => options.zero = true,
                 "-v" | "--verbose" => options.verbose = true,
-                "-e" | "--event" => options
-                    .common
-                    .apply_event(&iter.next().ok_or("event option requires an argument")?)?,
+                "-e" | "--event" => options.common.apply_event(&text_argument(
+                    iter.next(),
+                    "event option requires an argument",
+                )?)?,
                 "-t" | "--timeout" => options.common.timeout = parse_timeout(iter.next())?,
                 "-a" | "--ascending" => {
                     options.ascending = true;
-                    options.sort_event = iter.next().ok_or("ascending requires an event")?;
+                    options.sort_event = text_argument(iter.next(), "ascending requires an event")?;
                 }
                 "-d" | "--descending" => {
                     options.ascending = false;
-                    options.sort_event = iter.next().ok_or("descending requires an event")?;
+                    options.sort_event =
+                        text_argument(iter.next(), "descending requires an event")?;
                 }
                 "--exclude" => {
-                    options.common.exclude = Some(
-                        Regex::new(&iter.next().ok_or("--exclude requires a pattern")?)
-                            .map_err(|error| error.to_string())?,
-                    )
+                    options.common.exclude = Some(path_regex(
+                        &text_argument(iter.next(), "--exclude requires a pattern")?,
+                        false,
+                    )?)
                 }
                 "--include" => {
-                    options.common.include = Some(
-                        Regex::new(&iter.next().ok_or("--include requires a pattern")?)
-                            .map_err(|error| error.to_string())?,
-                    )
+                    options.common.include = Some(path_regex(
+                        &text_argument(iter.next(), "--include requires a pattern")?,
+                        false,
+                    )?)
                 }
                 "-h" | "--help" => {
                     println!(
@@ -331,9 +381,14 @@ impl WatchOptions {
                     );
                     return Err(String::new());
                 }
+                "--" => {
+                    for path in iter {
+                        options.common.add_operand(path)?;
+                    }
+                    break;
+                }
                 value if value.starts_with('-') => return Err(format!("unknown option '{value}'")),
-                value if value.starts_with('@') => {}
-                _ => options.common.paths.push(PathBuf::from(value)),
+                _ => options.common.add_operand(value)?,
             }
         }
         if options.common.paths.is_empty() {
@@ -348,9 +403,14 @@ impl WatchOptions {
 }
 
 fn run_watch(options: WatchOptions) -> Result<(), String> {
-    let (mut inotify, mut watches) = establish(&options.common)?;
+    eprintln!("Establishing watches...");
+    let (mut inotify, mut watches) = establish(&options.common, options.verbose)?;
     if options.verbose {
-        eprintln!("Watches established, collecting statistics.");
+        eprintln!("Total of {} watches.", watches.len());
+    }
+    eprintln!("Finished establishing watches, now collecting statistics.");
+    if let Some(timeout) = options.common.timeout {
+        eprintln!("Will listen for events for {} seconds.", timeout.as_secs());
     }
     let stopped = signal_flag()?;
     let started = Instant::now();
@@ -372,7 +432,7 @@ fn run_watch(options: WatchOptions) -> Result<(), String> {
                 .name
                 .as_ref()
                 .map_or_else(|| root.clone(), |name| root.join(name));
-            if !path_selected(&full, &options.common) {
+            if options.common.path_excluded(&full) {
                 continue;
             }
             if options.common.recursive
@@ -380,16 +440,14 @@ fn run_watch(options: WatchOptions) -> Result<(), String> {
                 && (event.mask.contains(EventMask::CREATE)
                     || event.mask.contains(EventMask::MOVED_TO))
             {
-                add_tree(
-                    &mut inotify,
-                    &mut watches,
-                    &full,
-                    options.common.mask,
-                    options.common.no_dereference,
-                )?;
+                add_tree(&mut inotify, &mut watches, &full, &options.common, true)?;
+            }
+            let selected = event.mask & options.common.output_mask;
+            if selected.is_empty() || !path_selected(&full, &options.common) {
+                continue;
             }
             let row = counts.entry(root).or_default();
-            for name in event_counter_names(event.mask) {
+            for name in event_counter_names(selected) {
                 *row.entry(name).or_default() += 1;
             }
         }
@@ -397,11 +455,20 @@ fn run_watch(options: WatchOptions) -> Result<(), String> {
     for path in watches.values() {
         counts.entry(path.clone()).or_default();
     }
-    print_counts(counts, &options);
-    Ok(())
+    print_counts(counts, &options).map_err(|error| error.to_string())
 }
 
-fn print_counts(counts: BTreeMap<PathBuf, BTreeMap<&'static str, u64>>, options: &WatchOptions) {
+fn print_counts(
+    counts: BTreeMap<PathBuf, BTreeMap<&'static str, u64>>,
+    options: &WatchOptions,
+) -> std::io::Result<()> {
+    if !counts
+        .values()
+        .any(|row| row.values().any(|count| *count != 0))
+    {
+        eprintln!("No events occurred.");
+        return Ok(());
+    }
     let columns = options
         .common
         .selected_events
@@ -431,18 +498,48 @@ fn print_counts(counts: BTreeMap<PathBuf, BTreeMap<&'static str, u64>>, options:
     if !options.ascending {
         rows.reverse();
     }
-    print!("total ");
-    for column in &columns {
-        print!("{column} ");
+    let widths = std::iter::once("total")
+        .chain(columns.iter().copied())
+        .map(|column| {
+            let maximum = rows
+                .iter()
+                .map(|(_, row)| {
+                    if column == "total" {
+                        row.values().sum::<u64>()
+                    } else {
+                        row.get(column).copied().unwrap_or_default()
+                    }
+                })
+                .max()
+                .unwrap_or_default();
+            column.len().max(maximum.to_string().len()) + 2
+        })
+        .collect::<Vec<_>>();
+    let mut output = std::io::stdout().lock();
+    write!(output, "{:<width$}", "total", width = widths[0])?;
+    for (index, column) in columns.iter().enumerate() {
+        write!(output, "{column:<width$}", width = widths[index + 1])?;
     }
-    println!("filename");
+    writeln!(output, "filename")?;
     for (path, row) in rows {
-        print!("{} ", row.values().sum::<u64>());
-        for column in &columns {
-            print!("{} ", row.get(column).copied().unwrap_or_default());
+        write!(
+            output,
+            "{:<width$}",
+            row.values().sum::<u64>(),
+            width = widths[0]
+        )?;
+        for (index, column) in columns.iter().enumerate() {
+            write!(
+                output,
+                "{:<width$}",
+                row.get(column).copied().unwrap_or_default(),
+                width = widths[index + 1]
+            )?;
         }
-        println!("{}", watched_name(&path));
+        output.write_all(&watched_name(&path))?;
+        output.write_all(b"\n")?;
     }
+    output.flush()
 }
 
 #[derive(Clone)]
@@ -474,7 +571,11 @@ fn read_batch(
     // SAFETY: descriptor points to one initialized pollfd for the duration of poll.
     let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
     if ready < 0 {
-        return Err(std::io::Error::last_os_error().to_string());
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            return Ok(Some(Vec::new()));
+        }
+        return Err(error.to_string());
     }
     if ready == 0 {
         return if timeout.is_some() {
@@ -496,17 +597,20 @@ fn read_batch(
     Ok(Some(events))
 }
 
-fn establish(common: &Common) -> Result<(Inotify, HashMap<WatchDescriptor, PathBuf>), String> {
+fn establish(
+    common: &Common,
+    verbose: bool,
+) -> Result<(Inotify, HashMap<WatchDescriptor, PathBuf>), String> {
     let mut inotify = Inotify::init().map_err(|error| error.to_string())?;
     let mut watches = HashMap::new();
     for path in &common.paths {
-        add_tree(
-            &mut inotify,
-            &mut watches,
-            path,
-            common.mask,
-            common.no_dereference,
-        )?;
+        if verbose && common.recursive {
+            eprintln!("Setting up watch(es) on {}", path.display());
+        }
+        add_tree(&mut inotify, &mut watches, path, common, false)?;
+        if verbose && common.recursive {
+            eprintln!("OK, {} is now being watched.", path.display());
+        }
     }
     Ok((inotify, watches))
 }
@@ -515,65 +619,100 @@ fn add_tree(
     inotify: &mut Inotify,
     watches: &mut HashMap<WatchDescriptor, PathBuf>,
     root: &Path,
-    mask: WatchMask,
-    no_dereference: bool,
+    common: &Common,
+    missing_ok: bool,
 ) -> Result<(), String> {
-    let metadata = if no_dereference {
+    if common.path_excluded(root) {
+        return Ok(());
+    }
+    let metadata = match if common.no_dereference {
         std::fs::symlink_metadata(root)
     } else {
         std::fs::metadata(root)
-    }
-    .map_err(|error| format!("{}: {error}", root.display()))?;
-    let watch_mask = if no_dereference {
-        mask | WatchMask::DONT_FOLLOW
-    } else {
-        mask
+    } {
+        Ok(metadata) => metadata,
+        Err(error) if missing_ok && error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("{}: {error}", root.display())),
     };
-    let descriptor = inotify
-        .watches()
-        .add(root, watch_mask)
-        .map_err(|error| format!("{}: {error}", root.display()))?;
+    let mut watch_mask = common.mask;
+    if common.recursive {
+        watch_mask |= WatchMask::CREATE | WatchMask::MOVED_TO;
+    }
+    if common.no_dereference {
+        watch_mask |= WatchMask::DONT_FOLLOW;
+    }
+    let descriptor = match inotify.watches().add(root, watch_mask) {
+        Ok(descriptor) => descriptor,
+        Err(error) if missing_ok && error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("{}: {error}", root.display())),
+    };
     watches.insert(descriptor, root.to_path_buf());
-    if !metadata.is_dir() {
+    if !common.recursive || !metadata.is_dir() {
         return Ok(());
     }
     let mut stack = vec![root.to_path_buf()];
     while let Some(directory) = stack.pop() {
+        if common.path_excluded(&directory) {
+            continue;
+        }
         if directory != root {
-            let descriptor = inotify
-                .watches()
-                .add(&directory, watch_mask)
-                .map_err(|error| format!("{}: {error}", directory.display()))?;
+            let descriptor = match inotify.watches().add(&directory, watch_mask) {
+                Ok(descriptor) => descriptor,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(format!("{}: {error}", directory.display())),
+            };
             watches.insert(descriptor, directory.clone());
         }
-        let entries = std::fs::read_dir(&directory)
-            .map_err(|error| format!("{}: {error}", directory.display()))?;
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                stack.push(entry.path());
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error)
+                if (missing_ok || directory != root)
+                    && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                continue;
+            }
+            Err(error) => return Err(format!("{}: {error}", directory.display())),
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(format!("{}: {error}", directory.display())),
+            };
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => stack.push(entry.path()),
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("{}: {error}", entry.path().display())),
             }
         }
     }
     Ok(())
 }
 
-fn parse_event(value: &str) -> Result<(WatchMask, Vec<&'static str>), String> {
+fn parse_event(value: &str) -> Result<(EventMask, Vec<&'static str>), String> {
     match value.to_ascii_lowercase().as_str() {
-        "access" => Ok((WatchMask::ACCESS, vec!["access"])),
-        "modify" => Ok((WatchMask::MODIFY, vec!["modify"])),
-        "attrib" => Ok((WatchMask::ATTRIB, vec!["attrib"])),
-        "close_write" => Ok((WatchMask::CLOSE_WRITE, vec!["close_write"])),
-        "close_nowrite" => Ok((WatchMask::CLOSE_NOWRITE, vec!["close_nowrite"])),
-        "close" => Ok((WatchMask::CLOSE, vec!["close_write", "close_nowrite"])),
-        "open" => Ok((WatchMask::OPEN, vec!["open"])),
-        "moved_to" => Ok((WatchMask::MOVED_TO, vec!["moved_to"])),
-        "moved_from" => Ok((WatchMask::MOVED_FROM, vec!["moved_from"])),
-        "move" => Ok((WatchMask::MOVE, vec!["moved_to", "moved_from"])),
-        "move_self" => Ok((WatchMask::MOVE_SELF, vec!["move_self"])),
-        "create" => Ok((WatchMask::CREATE, vec!["create"])),
-        "delete" => Ok((WatchMask::DELETE, vec!["delete"])),
-        "delete_self" => Ok((WatchMask::DELETE_SELF, vec!["delete_self"])),
-        "unmount" => Ok((WatchMask::ALL_EVENTS, vec!["unmount"])),
+        "access" => Ok((EventMask::ACCESS, vec!["access"])),
+        "modify" => Ok((EventMask::MODIFY, vec!["modify"])),
+        "attrib" => Ok((EventMask::ATTRIB, vec!["attrib"])),
+        "close_write" => Ok((EventMask::CLOSE_WRITE, vec!["close_write"])),
+        "close_nowrite" => Ok((EventMask::CLOSE_NOWRITE, vec!["close_nowrite"])),
+        "close" => Ok((
+            EventMask::CLOSE_WRITE | EventMask::CLOSE_NOWRITE,
+            vec!["close_write", "close_nowrite"],
+        )),
+        "open" => Ok((EventMask::OPEN, vec!["open"])),
+        "moved_to" => Ok((EventMask::MOVED_TO, vec!["moved_to"])),
+        "moved_from" => Ok((EventMask::MOVED_FROM, vec!["moved_from"])),
+        "move" => Ok((
+            EventMask::MOVED_FROM | EventMask::MOVED_TO,
+            vec!["moved_to", "moved_from"],
+        )),
+        "move_self" => Ok((EventMask::MOVE_SELF, vec!["move_self"])),
+        "create" => Ok((EventMask::CREATE, vec!["create"])),
+        "delete" => Ok((EventMask::DELETE, vec!["delete"])),
+        "delete_self" => Ok((EventMask::DELETE_SELF, vec!["delete_self"])),
+        "unmount" => Ok((EventMask::UNMOUNT, vec!["unmount"])),
         _ => Err(format!("unknown event '{value}'")),
     }
 }
@@ -639,32 +778,52 @@ fn event_columns() -> &'static [&'static str] {
 }
 
 fn path_selected(path: &Path, common: &Common) -> bool {
-    let value = path.to_string_lossy();
+    let value = path.as_os_str().as_bytes();
     !common
         .exclude
         .as_ref()
-        .is_some_and(|regex| regex.is_match(&value))
+        .is_some_and(|regex| regex.is_match(value))
         && common
             .include
             .as_ref()
-            .is_none_or(|regex| regex.is_match(&value))
+            .is_none_or(|regex| regex.is_match(value))
 }
 
-fn watched_name(path: &Path) -> String {
-    let mut value = path.to_string_lossy().into_owned();
-    if path.is_dir() && !value.ends_with('/') {
-        value.push('/');
+fn absolute_path(path: &Path) -> Result<PathBuf, String> {
+    let absolute = std::path::absolute(path).map_err(|error| error.to_string())?;
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        if component == std::path::Component::ParentDir {
+            normalized.pop();
+        } else {
+            normalized.push(component.as_os_str());
+        }
+    }
+    Ok(normalized)
+}
+
+fn watched_name(path: &Path) -> Vec<u8> {
+    let mut value = path.as_os_str().as_bytes().to_vec();
+    if path.is_dir() && !value.ends_with(b"/") {
+        value.push(b'/');
     }
     value
 }
 
-fn csv_field(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
+fn csv_field(value: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(value.len() + 2);
+    output.push(b'"');
+    for byte in value {
+        output.push(*byte);
+        if *byte == b'"' {
+            output.push(b'"');
+        }
+    }
+    output.push(b'"');
+    output
 }
-
-fn parse_timeout(value: Option<String>) -> Result<Option<Duration>, String> {
-    let seconds = value
-        .ok_or("timeout requires an argument")?
+fn parse_timeout(value: Option<OsString>) -> Result<Option<Duration>, String> {
+    let seconds = text_argument(value, "timeout requires an argument")?
         .parse::<u64>()
         .map_err(|_| "invalid timeout")?;
     Ok((seconds > 0).then(|| Duration::from_secs(seconds)))
@@ -679,49 +838,50 @@ fn signal_flag() -> Result<Arc<AtomicBool>, String> {
     Ok(flag)
 }
 
-fn utf8_args(args: Vec<OsString>) -> Result<Vec<String>, String> {
-    args.into_iter()
-        .map(|value| {
-            value.into_string().map_err(|value| {
-                format!("argument is not valid UTF-8: {}", value.to_string_lossy())
-            })
-        })
-        .collect()
+fn text_argument(value: Option<OsString>, missing: &str) -> Result<String, String> {
+    value
+        .ok_or_else(|| missing.to_owned())?
+        .into_string()
+        .map_err(|_| "option value is not valid UTF-8".to_owned())
 }
 
 fn render_format(
     format: &str,
-    watched: &str,
-    filename: &str,
+    watched: &[u8],
+    filename: &[u8],
     events: &str,
     cookie: u32,
     time_format: &str,
-) -> String {
-    let mut output = String::new();
+) -> Vec<u8> {
+    let mut output = Vec::new();
     let mut chars = format.chars().peekable();
     while let Some(character) = chars.next() {
         if character != '%' {
-            output.push(character);
+            let mut encoded = [0; 4];
+            output.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
             continue;
         }
         match chars.next() {
-            Some('w') => output.push_str(watched),
-            Some('f') => output.push_str(filename),
-            Some('e') => output.push_str(events),
-            Some('c') => output.push_str(&cookie.to_string()),
-            Some('T') => output.push_str(&Local::now().format(time_format).to_string()),
-            Some('0') => output.push('\0'),
-            Some('n') => output.push('\n'),
-            Some('%') => output.push('%'),
+            Some('w') => output.extend_from_slice(watched),
+            Some('f') => output.extend_from_slice(filename),
+            Some('e') => output.extend_from_slice(events.as_bytes()),
+            Some('c') => output.extend_from_slice(cookie.to_string().as_bytes()),
+            Some('T') => {
+                output.extend_from_slice(Local::now().format(time_format).to_string().as_bytes())
+            }
+            Some('0') => output.push(0),
+            Some('n') => output.push(b'\n'),
+            Some('%') => output.push(b'%'),
             Some(separator) if chars.peek() == Some(&'e') => {
                 chars.next();
-                output.push_str(&events.replace(',', &separator.to_string()));
+                output.extend_from_slice(events.replace(',', &separator.to_string()).as_bytes());
             }
             Some(other) => {
-                output.push('%');
-                output.push(other);
+                output.push(b'%');
+                let mut encoded = [0; 4];
+                output.extend_from_slice(other.encode_utf8(&mut encoded).as_bytes());
             }
-            None => output.push('%'),
+            None => output.push(b'%'),
         }
     }
     output
@@ -734,13 +894,13 @@ mod tests {
     #[test]
     fn format_conversions_match_inotifywait() {
         assert_eq!(
-            render_format("%w%f %e %Xe%n", "/tmp/", "file", "CREATE,CLOSE", 0, "%s"),
-            "/tmp/file CREATE,CLOSE CREATEXCLOSE\n"
+            render_format("%w%f %e %Xe%n", b"/tmp/", b"file", "CREATE,CLOSE", 0, "%s"),
+            b"/tmp/file CREATE,CLOSE CREATEXCLOSE\n"
         );
     }
 
     #[test]
     fn csv_doubles_quotes() {
-        assert_eq!(csv_field("a\"b"), "\"a\"\"b\"");
+        assert_eq!(csv_field(b"a\"b"), b"\"a\"\"b\"");
     }
 }
