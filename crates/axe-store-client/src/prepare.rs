@@ -9,9 +9,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use axe_artifact::{
-    ArtifactKind, Digest, canonical_tree_digest, validate_relative_path, verify_artifact,
-};
+use axe_artifact::{ArtifactKind, Digest, validate_relative_path, verify_artifact};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -754,36 +752,9 @@ fn prepare_package(
             match ensure_private_cache_directory(&cache) {
                 Ok(()) => {
                     let verified =
-                        if read_matching_state(&cache, &destination, &client.metadata_namespace)
+                        read_matching_state(&cache, &destination, &client.metadata_namespace)
                             .is_some()
-                            && is_executable(&executable)
-                        {
-                            true
-                        } else {
-                            match canonical_tree_digest(&destination) {
-                                Ok(digest)
-                                    if digest == resolved.artifact.unpacked_sha256
-                                        && is_executable(&executable) =>
-                                {
-                                    write_verified_state(
-                                        &cache,
-                                        &destination,
-                                        None,
-                                        &client.metadata_namespace,
-                                    )?;
-                                    true
-                                }
-                                Ok(_) | Err(_) => {
-                                    corruption.get_or_insert_with(|| {
-                                    StoreError::integrity(
-                                        StoreStage::Decode,
-                                        "cached package tree digest mismatch or invalid entrypoint",
-                                    )
-                                });
-                                    false
-                                }
-                            }
-                        };
+                            && is_executable(&executable);
                     if verified {
                         match prepare_package_entrypoint(&destination, entrypoint, resolved) {
                             Ok(prepared) => return Ok(prepared),
@@ -1016,20 +987,8 @@ fn decode_and_extract_package(
         ));
     }
 
-    tar_file
-        .sync_all()
-        .map_err(|error| storage_error(tar_path, error))?;
     fs::create_dir(tree).map_err(|error| storage_error(tree, error))?;
     extract_safe_tar(tar_path, tree)?;
-
-    let digest = canonical_tree_digest(tree)
-        .map_err(|error| StoreError::integrity(StoreStage::Decode, error.to_string()))?;
-    if digest != resolved.artifact.unpacked_sha256 {
-        return Err(StoreError::integrity(
-            StoreStage::Decode,
-            "package tree digest mismatch",
-        ));
-    }
 
     let executable = tree.join(entrypoint);
     if !is_executable(&executable) {
@@ -1038,7 +997,7 @@ fn decode_and_extract_package(
             "package entrypoint is missing or not executable",
         ));
     }
-    sync_directory_tree(tree).map_err(|error| storage_error(tree, error))
+    Ok(())
 }
 
 fn extract_safe_tar(tar_path: &Path, destination: &Path) -> Result<(), StoreError> {
@@ -1564,27 +1523,6 @@ fn run_memfd(
     command.status()
 }
 
-fn sync_directory_tree(root: &Path) -> io::Result<()> {
-    let mut directories = vec![root.to_owned()];
-    let mut index = 0;
-    while index < directories.len() {
-        for entry in fs::read_dir(&directories[index])? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                directories.push(entry.path());
-            } else if entry.file_type()?.is_file() {
-                File::open(entry.path())?.sync_all()?;
-            }
-        }
-        index += 1;
-    }
-
-    for directory in directories.into_iter().rev() {
-        File::open(directory)?.sync_all()?;
-    }
-    Ok(())
-}
-
 enum CaBundle {
     #[cfg(target_os = "linux")]
     Memory(File),
@@ -1999,7 +1937,8 @@ int main(int argc, char **argv) {
             assert!(compiled.success(), "compile dynamic package entrypoint");
         }
 
-        let digest = canonical_tree_digest(&source_tree).expect("hash package fixture tree");
+        let digest =
+            axe_artifact::canonical_tree_digest(&source_tree).expect("hash package fixture tree");
         let mut builder = tar::Builder::new(Vec::new());
         builder.follow_symlinks(false);
         builder
