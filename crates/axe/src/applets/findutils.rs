@@ -55,6 +55,7 @@ struct Xargs {
     command: OsString,
     initial: Vec<OsString>,
     delimiter: Option<u8>,
+    eof: Option<OsString>,
     max_args: Option<usize>,
     max_lines: Option<usize>,
     max_chars: Option<usize>,
@@ -68,6 +69,7 @@ impl Xargs {
         let mut iter = args.into_iter();
         let _name = iter.next();
         let mut delimiter = None;
+        let mut eof = None;
         let mut max_args = None;
         let mut max_lines = None;
         let mut max_chars = None;
@@ -99,6 +101,33 @@ impl Xargs {
             } else {
                 (&bytes[..2], (bytes.len() > 2).then_some(&bytes[2..]))
             };
+            if option == b"-e" {
+                eof = attached
+                    .map(os_string_from_input)
+                    .transpose()
+                    .map_err(XargsFailure::usage)?
+                    .and_then(nonempty_os_string);
+                continue;
+            }
+            if option == b"-E" {
+                let value = match attached {
+                    Some(value) => os_string_from_input(value).map_err(XargsFailure::usage)?,
+                    None => iter
+                        .next()
+                        .ok_or_else(|| XargsFailure::usage("option requires an argument: -E"))?,
+                };
+                eof = nonempty_os_string(value);
+                continue;
+            }
+            if option == b"--eof" {
+                eof = attached
+                    .map(os_string_from_input)
+                    .transpose()
+                    .map_err(XargsFailure::usage)?
+                    .and_then(nonempty_os_string);
+                continue;
+            }
+
             if matches!(
                 option,
                 b"-0" | b"--null" | b"-r" | b"--no-run-if-empty" | b"--help" | b"--version"
@@ -114,7 +143,8 @@ impl Xargs {
                     b"-r" | b"--no-run-if-empty" => no_run_if_empty = true,
                     b"--help" => {
                         println!(
-                            "Usage: xargs [-0] [-r] [-d DELIM] [-n MAX-ARGS] [-L MAX-LINES] \
+                            "Usage: xargs [-0] [-r] [-E EOFSTR] [-e[EOFSTR]] \
+                             [--eof[=EOFSTR]] [-d DELIM] [-n MAX-ARGS] [-L MAX-LINES] \
                              [-s MAX-CHARS] [-P MAX-PROCS] [-I REPLACE] [COMMAND [ARG...]]"
                         );
                         return Err(XargsFailure::done());
@@ -184,6 +214,7 @@ impl Xargs {
             command: command.unwrap_or_else(|| OsString::from("echo")),
             initial,
             delimiter,
+            eof,
             max_args,
             max_lines,
             max_chars,
@@ -211,6 +242,7 @@ impl Xargs {
             BufReader::new(stdin.lock()),
             self.delimiter,
             self.replace.is_some(),
+            self.eof.clone(),
             budget,
         );
         let mut active = VecDeque::new();
@@ -421,6 +453,10 @@ fn parse_nonnegative(value: &OsStr, option: &str) -> Result<usize, XargsFailure>
         })
 }
 
+fn nonempty_os_string(value: OsString) -> Option<OsString> {
+    (!value.as_encoded_bytes().is_empty()).then_some(value)
+}
+
 fn parse_delimiter(value: &OsStr) -> Result<u8, XargsFailure> {
     let bytes = value.as_encoded_bytes();
     match bytes {
@@ -455,6 +491,7 @@ enum Quote {
 struct InputRecords<R> {
     input: R,
     delimiter: Option<u8>,
+    eof: Option<Vec<u8>>,
     replacement: bool,
     trailing_blank: bool,
     field: Vec<u8>,
@@ -466,11 +503,33 @@ struct InputRecords<R> {
     max_field_bytes: usize,
 }
 
+fn take_input_field(
+    field: &mut Vec<u8>,
+    eof: Option<&[u8]>,
+    replacement: bool,
+) -> Result<Option<OsString>, XargsFailure> {
+    let field = os_string_from_input(&std::mem::take(field)).map_err(XargsFailure::usage)?;
+    if !replacement && eof.is_some_and(|eof| eof == field.as_encoded_bytes()) {
+        return Ok(None);
+    }
+    Ok(Some(field))
+}
+
+fn replacement_record_is_eof(record: &[OsString], eof: Option<&[u8]>, replacement: bool) -> bool {
+    replacement && record.len() == 1 && eof.is_some_and(|eof| eof == record[0].as_encoded_bytes())
+}
 impl<R: BufRead> InputRecords<R> {
-    fn new(input: R, delimiter: Option<u8>, replacement: bool, budget: usize) -> Self {
+    fn new(
+        input: R,
+        delimiter: Option<u8>,
+        replacement: bool,
+        eof: Option<OsString>,
+        budget: usize,
+    ) -> Self {
         Self {
             input,
             delimiter,
+            eof: eof.map(|value| value.as_encoded_bytes().to_vec()),
             replacement,
             trailing_blank: false,
             field: Vec::new(),
@@ -548,10 +607,22 @@ impl<R: BufRead> InputRecords<R> {
                         return Err(XargsFailure::usage("unmatched quote in input"));
                     }
                     if self.started {
-                        let field = os_string_from_input(&std::mem::take(&mut self.field))
-                            .map_err(XargsFailure::usage)?;
-                        self.record.push(field);
+                        if let Some(field) = take_input_field(
+                            &mut self.field,
+                            self.eof.as_deref(),
+                            self.replacement,
+                        )? {
+                            self.record.push(field);
+                        }
                         self.started = false;
+                    }
+                    if replacement_record_is_eof(
+                        &self.record,
+                        self.eof.as_deref(),
+                        self.replacement,
+                    ) {
+                        self.record.clear();
+                        return Ok(None);
                     }
                     return if self.record.is_empty() {
                         Ok(None)
@@ -610,11 +681,32 @@ impl<R: BufRead> InputRecords<R> {
                             }
                             (Quote::None, b' ' | b'\t' | b'\n') => {
                                 if self.started {
-                                    let field =
-                                        os_string_from_input(&std::mem::take(&mut self.field))
-                                            .map_err(XargsFailure::usage)?;
-                                    self.record.push(field);
+                                    if let Some(field) = take_input_field(
+                                        &mut self.field,
+                                        self.eof.as_deref(),
+                                        self.replacement,
+                                    )? {
+                                        self.record.push(field);
+                                    } else {
+                                        self.exhausted = true;
+                                    }
                                     self.started = false;
+                                }
+                                if self.exhausted {
+                                    completed = (!self.record.is_empty())
+                                        .then(|| std::mem::take(&mut self.record));
+                                    break;
+                                }
+                                if byte == b'\n'
+                                    && replacement_record_is_eof(
+                                        &self.record,
+                                        self.eof.as_deref(),
+                                        self.replacement,
+                                    )
+                                {
+                                    self.record.clear();
+                                    self.exhausted = true;
+                                    break;
                                 }
                                 if byte == b'\n'
                                     && (self.replacement || !continued_line)
@@ -639,7 +731,7 @@ impl<R: BufRead> InputRecords<R> {
                 consumed
             };
             self.input.consume(consumed);
-            if completed.is_some() {
+            if self.exhausted || completed.is_some() {
                 return Ok(completed);
             }
         }

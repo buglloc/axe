@@ -125,6 +125,12 @@ NUL-delimited pathname output from `find -print0` and `grep -lZ` preserves Unix
 filename bytes. `stat` filename formats and `which` PATH lookup also preserve
 those bytes. `which` does not parse shell aliases or functions.
 
+`find -printf` and `-fprintf` emit pathname directives byte-for-byte on Unix,
+including invalid UTF-8, and `-regex`/`-iregex` accept byte-oriented operands.
+Output write failures report an error and return status 1. `xargs` supports
+GNU logical EOF options `-E`, legacy `-e`, and `--eof`; the marker is ignored
+with `-0` and `-d`.
+
 `tree -h` prints compact human-readable sizes before names, for example
 `[4.9K]  big`. It accepts clustered and repeated flags; `--help` prints help.
 `-N` prints pathname bytes as-is; `-q` replaces non-printable characters with
