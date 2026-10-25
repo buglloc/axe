@@ -814,23 +814,22 @@ fn print_terminal_size(
 
     let mut printer = WrappedPrinter::new(window_size);
 
-    // BSDs and Linux (not ppc/big-endian ppc64) use a u32 for the baud rate, so we can simply
-    // print it.
-    #[cfg(any(target_os = "linux", bsd))]
-    #[cfg(all(
-        not(target_arch = "powerpc"),
-        not(all(target_arch = "powerpc64", target_endian = "big"))
+    // Linux termios2 and BSD use numeric baud rates directly.
+    #[cfg(any(
+        bsd,
+        all(
+            any(target_os = "linux", target_os = "android"),
+            linux_termios2
+        )
     ))]
     printer.print(&translate!("stty-output-speed", "speed" => speed));
 
-    // Big-endian Linux PowerPC uses BaudRate enum, need to convert to display format
-    #[cfg(target_os = "linux")]
-    #[cfg(any(
-        target_arch = "powerpc",
-        all(target_arch = "powerpc64", target_endian = "big")
+    // Linux PowerPC targets currently use nix's BaudRate representation.
+    #[cfg(all(
+        any(target_os = "linux", target_os = "android"),
+        not(linux_termios2)
     ))]
     {
-        // On PowerPC, find the corresponding baud rate string for display
         let speed_str = BAUD_RATES
             .iter()
             .find(|(_, rate)| *rate == speed)
@@ -841,7 +840,10 @@ fn print_terminal_size(
 
     // Other platforms need to use the baud rate enum, so printing the right value
     // becomes slightly more complicated.
-    #[cfg(not(any(target_os = "linux", bsd)))]
+    #[cfg(all(
+        not(any(target_os = "linux", target_os = "android")),
+        not(bsd)
+    ))]
     for (text, baud_rate) in BAUD_RATES {
         if *baud_rate == speed {
             printer.print(&translate!("stty-output-speed", "speed" => (*text)));
@@ -896,7 +898,6 @@ fn string_to_combo(arg: &str) -> Option<&str> {
 ///   - If followed only by zeros (or nothing): banker's rounding (round to nearest even)
 ///
 /// Examples: "9600.49" -> 9600, "9600.51" -> 9600, "9600.5" -> 9600 (even), "9601.5" -> 9602 (even)
-/// TODO: there are two special cases "exta" → B19200 and "extb" → B38400
 fn parse_baud_with_rounding(normalized: &str) -> Option<u32> {
     let (int_part, frac_part) = match normalized.split_once('.') {
         Some((i, f)) => (i, Some(f)),
@@ -908,8 +909,6 @@ fn parse_baud_with_rounding(normalized: &str) -> Option<u32> {
     if let Some(frac) = frac_part {
         let mut chars = frac.chars();
         let first_digit = chars.next()?.to_digit(10)?;
-
-        // Validate all remaining chars are digits
         let rest: Vec<_> = chars.collect();
         if !rest.iter().all(char::is_ascii_digit) {
             return None;
@@ -918,15 +917,13 @@ fn parse_baud_with_rounding(normalized: &str) -> Option<u32> {
         match first_digit.cmp(&5) {
             Ordering::Greater => value = value.checked_add(1)?,
             Ordering::Equal => {
-                // Check if any non-zero digit follows
                 if rest.iter().any(|&c| c != '0') {
                     value = value.checked_add(1)?;
                 } else {
-                    // Banker's rounding: round to nearest even
                     value = value.checked_add(value & 1)?;
                 }
             }
-            Ordering::Less => {} // Round down, already validated
+            Ordering::Less => {}
         }
     }
 
@@ -934,33 +931,49 @@ fn parse_baud_with_rounding(normalized: &str) -> Option<u32> {
 }
 
 fn string_to_baud(arg: &str, baud_type: flags::BaudType) -> Option<AllFlags<'_>> {
-    // Reject invalid formats
-    if arg != arg.trim_end()
-        || arg.trim().starts_with('-')
-        || arg.trim().starts_with("++")
-        || arg.contains('E')
-        || arg.contains('e')
-        || arg.matches('.').count() > 1
+    // GNU accepts the historical aliases even though their spelling contains
+    // a character otherwise reserved for scientific notation.
+    let alias = matches!(arg.trim(), "exta" | "extb");
+    if !alias
+        && (arg != arg.trim_end()
+            || arg.trim().starts_with('-')
+            || arg.trim().starts_with("++")
+            || arg.contains('E')
+            || arg.contains('e')
+            || arg.matches('.').count() > 1)
     {
         return None;
     }
 
     let normalized = arg.trim().trim_start_matches('+');
     let normalized = normalized.strip_suffix('.').unwrap_or(normalized);
-    let value = parse_baud_with_rounding(normalized)?;
 
-    // BSDs use a u32 for the baud rate, so any decimal number applies.
-    #[cfg(bsd)]
-    return Some(AllFlags::Baud(value, baud_type));
-
-    #[cfg(not(bsd))]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        for (text, baud_rate) in BAUD_RATES {
-            if text.parse::<u32>().ok() == Some(value) {
-                return Some(AllFlags::Baud(*baud_rate, baud_type));
-            }
-        }
-        None
+        // Linux termios2 exposes arbitrary rates through BOTHER.  Keep the
+        // historical aliases used by GNU stty in addition to numeric rates.
+        let value = match normalized {
+            "exta" => 19_200,
+            "extb" => 38_400,
+            _ => parse_baud_with_rounding(normalized)?,
+        };
+        return Some(AllFlags::Baud(value, baud_type));
+    }
+
+    #[cfg(bsd)]
+    return match normalized {
+        "exta" => Some(AllFlags::Baud(19_200, baud_type)),
+        "extb" => Some(AllFlags::Baud(38_400, baud_type)),
+        _ => parse_baud_with_rounding(normalized).map(|value| AllFlags::Baud(value, baud_type)),
+    };
+
+    #[cfg(all(not(bsd), not(any(target_os = "linux", target_os = "android"))))]
+    {
+        let value = parse_baud_with_rounding(normalized)?;
+        BAUD_RATES
+            .iter()
+            .find(|(text, _)| text.parse::<u32>().ok() == Some(value))
+            .map(|(_, baud_rate)| AllFlags::Baud(*baud_rate, baud_type))
     }
 }
 
@@ -1174,13 +1187,12 @@ fn apply_baud_rate_flag(settings: &mut TerminalSettings, input: &AllFlags) -> ni
     if let AllFlags::Baud(rate, baud_type) = input {
         #[cfg(linux_termios2)]
         {
-            let speed = baud_to_speed(*rate as _).ok_or(nix::errno::Errno::EINVAL)?;
             match baud_type {
-                flags::BaudType::Input => settings.input_speed = speed,
-                flags::BaudType::Output => settings.output_speed = speed,
+                flags::BaudType::Input => settings.input_speed = *rate,
+                flags::BaudType::Output => settings.output_speed = *rate,
                 flags::BaudType::Both => {
-                    settings.input_speed = speed;
-                    settings.output_speed = speed;
+                    settings.input_speed = *rate;
+                    settings.output_speed = *rate;
                 }
             }
             settings.update_speed_flags();

@@ -31,9 +31,19 @@ pub enum BaudType {
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
 pub enum AllFlags<'a> {
+    #[cfg(all(any(target_os = "linux", target_os = "android"), linux_termios2))]
+    Baud(u32, BaudType),
+    #[cfg(all(
+        any(target_os = "linux", target_os = "android"),
+        not(linux_termios2)
+    ))]
+    Baud(BaudRate, BaudType),
     #[cfg(bsd)]
     Baud(u32, BaudType),
-    #[cfg(not(bsd))]
+    #[cfg(all(
+        not(any(target_os = "linux", target_os = "android")),
+        not(bsd)
+    ))]
     Baud(BaudRate, BaudType),
     ControlFlags((&'a Flag<C>, bool)),
     InputFlags((&'a Flag<I>, bool)),
