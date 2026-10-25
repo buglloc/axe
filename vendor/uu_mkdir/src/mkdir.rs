@@ -423,7 +423,7 @@ fn restore_set_id(
         return Err(std::io::Error::from_raw_os_error(libc::ENOTDIR));
     }
     let mode = (actual & 0o777) | (requested_mode & 0o7000);
-    rustix::fs::fchmod(&directory, Mode::from_bits_truncate(mode as _))
+    rustix::fs::fchmod(&directory, Mode::from_bits_truncate(mode as _)).map_err(Into::into)
 }
 
 #[cfg(not(unix))]
