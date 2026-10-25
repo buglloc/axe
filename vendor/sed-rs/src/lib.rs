@@ -92,27 +92,19 @@ use std::io;
 /// ```
 pub struct Sed {
     options: Options,
-    script: String,
+    script: Vec<u8>,
 }
 
 impl Sed {
-    /// Create a new `Sed` instance from a sed script string.
-    ///
-    /// The script is validated (parsed and regex-compiled) eagerly
-    /// against the default options; an error is returned immediately if
-    /// the script is malformed. Errors that depend on a later builder
-    /// change — e.g. a pattern that is only invalid under
-    /// [`extended_regexp`](Self::extended_regexp) — surface at `eval*`
-    /// time, which recompiles with the current options.
-    pub fn new(script: &str) -> Result<Self> {
-        // Validate the script eagerly
-        let cmds = command::parse(script)?;
+    pub fn new<S: AsRef<[u8]>>(script: S) -> Result<Self> {
+        let script = script.as_ref().to_vec();
+        let cmds = command::parse(&script)?;
         let opts = Options::default();
         let _ = engine::Engine::new(cmds, &opts)?;
 
         Ok(Self {
             options: opts,
-            script: script.to_string(),
+            script,
         })
     }
 

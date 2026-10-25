@@ -1,162 +1,139 @@
-// Translation of sed regex dialects into Rust `regex` syntax.
+// Translation of sed regex dialects into Oniguruma regex syntax.
 //
-// GNU sed defaults to POSIX *basic* regular expressions (BRE), where
-// `\(...\)` groups, `\{m,n\}` is an interval, and bare `( ) { } + ? |`
-// are literals; `-E` switches to *extended* REs (ERE), which is what the
-// Rust `regex` crate speaks natively. `translate_pattern` rewrites a sed
-// pattern into equivalent `regex` syntax, swapping the escaped/unescaped
-// meaning of the metacharacters in BRE mode.
-//
-// Both modes also normalize GNU sed's character escapes — `\xHH` (hex),
-// `\oNNN` (octal), and `\dNNN` (decimal) — into `\x{..}` regex syntax.
+// GNU sed defaults to POSIX basic regular expressions (BRE), where
+// \(...\) groups, \{m,n\} is an interval, and bare `( ) { } + ? |` are
+// literals. `-E` switches to extended REs (EREs). The translator deliberately
+// works on bytes: a C-locale script may contain arbitrary non-UTF-8 bytes.
 
-/// Parse up to `max` digits of the given radix starting at `chars[*i]`,
-/// advancing `*i` past them. Returns `None` if no digit is present.
-pub(crate) fn parse_digits(chars: &[char], i: &mut usize, radix: u32, max: usize) -> Option<u32> {
-    let mut val: u32 = 0;
-    let mut n = 0;
-    while n < max {
-        match chars.get(*i).and_then(|c| c.to_digit(radix)) {
-            Some(d) => {
-                val = val * radix + d;
-                *i += 1;
-                n += 1;
-            }
-            None => break,
-        }
-    }
-    if n == 0 { None } else { Some(val) }
-}
-
-/// Parse the digits of a `\xHH` / `\oNNN` / `\dNNN` character escape
-/// (after the letter), returning the decoded value. `None` if no digit
-/// of the right radix follows.
-pub(crate) fn parse_escape_value(kind: char, chars: &[char], i: &mut usize) -> Option<u32> {
-    let (radix, max) = match kind {
-        'x' => (16, 2),
-        'o' => (8, 3),
-        _ => (10, 3),
-    };
-    parse_digits(chars, i, radix, max)
-}
-
-pub(crate) fn translate_pattern(pattern: &str, extended: bool) -> String {
-    let chars: Vec<char> = pattern.chars().collect();
-    let mut out = String::with_capacity(pattern.len() + 8);
+pub(crate) fn translate_pattern<S: AsRef<[u8]>>(pattern: S, extended: bool) -> Vec<u8> {
+    let bytes = pattern.as_ref();
+    let mut out = Vec::with_capacity(bytes.len() + 8);
     let mut i = 0;
-    // BRE bookkeeping: `^` anchors and a leading `*` is literal only at the
-    // start of the pattern or of a subexpression (after `\(` or `\|`).
     let mut at_subexpr_start = true;
-    // Whether a repeatable atom precedes the current position.
     let mut prev_atom = false;
 
-    while i < chars.len() {
-        let c = chars[i];
-        match c {
-            '\\' if i + 1 < chars.len() => {
-                let next = chars[i + 1];
+    while i < bytes.len() {
+        let byte = bytes[i];
+        match byte {
+            b'\\' if i + 1 < bytes.len() => {
+                let next = bytes[i + 1];
                 i += 2;
                 match next {
-                    'x' | 'o' | 'd' => {
-                        match parse_escape_value(next, &chars, &mut i) {
-                            Some(v) => out.push_str(&format!("\\x{{{v:X}}}")),
-                            // Bare `\d` keeps the Rust regex digit-class
-                            // meaning; `\x`/`\o` degrade to the letter.
-                            None if next == 'd' => out.push_str("\\d"),
-                            None => out.push(next),
+                    b'x' | b'o' | b'd' => {
+                        let (radix, max) = match next {
+                            b'x' => (16, 2),
+                            b'o' => (8, 3),
+                            _ => (10, 3),
+                        };
+                        let start = i;
+                        let mut value = 0u32;
+                        let mut count = 0;
+                        while count < max && i < bytes.len() {
+                            let Some(digit) = digit(bytes[i], radix) else { break };
+                            value = value * radix as u32 + digit as u32;
+                            i += 1;
+                            count += 1;
+                        }
+                        if count == 0 {
+                            if next == b'd' {
+                                out.extend_from_slice(b"\\d");
+                            } else {
+                                out.push(next);
+                            }
+                            // `start` is intentionally unused after deciding
+                            // that this was a bare escape; the following byte
+                            // belongs to the rest of the pattern.
+                            let _ = start;
+                        } else {
+                            out.extend_from_slice(format!("\\x{{{value:X}}}").as_bytes());
                         }
                         prev_atom = true;
                         at_subexpr_start = false;
                     }
-                    'A' | 'Z' | 'z' => {
+                    b'A' | b'Z' | b'z' => {
                         out.push(next);
                         prev_atom = true;
                         at_subexpr_start = false;
                     }
-                    '(' | '|' if !extended => {
+                    b'(' | b'|' if !extended => {
                         out.push(next);
                         at_subexpr_start = true;
                         prev_atom = false;
                     }
-                    ')' if !extended => {
-                        out.push(')');
+                    b')' if !extended => {
+                        out.push(b')');
                         prev_atom = true;
                         at_subexpr_start = false;
                     }
-                    '{' | '}' | '+' | '?' if !extended => {
+                    b'{' | b'}' | b'+' | b'?' if !extended => {
                         out.push(next);
                         at_subexpr_start = false;
                     }
                     _ => {
-                        out.push('\\');
+                        out.push(b'\\');
                         out.push(next);
                         prev_atom = true;
                         at_subexpr_start = false;
                     }
                 }
             }
-            '\\' => {
-                // Trailing backslash: pass through, regex will reject it.
-                out.push('\\');
+            b'\\' => {
+                out.push(b'\\');
                 i += 1;
             }
-            '[' => {
-                copy_bracket_expression(&chars, &mut i, &mut out);
+            b'[' => {
+                copy_bracket_expression(bytes, &mut i, &mut out);
                 prev_atom = true;
                 at_subexpr_start = false;
             }
-            '(' | ')' | '{' | '}' | '+' | '?' | '|' if !extended => {
-                // Literal in BRE
-                out.push('\\');
-                out.push(c);
+            b'(' | b')' | b'{' | b'}' | b'+' | b'?' | b'|' if !extended => {
+                out.push(b'\\');
+                out.push(byte);
                 i += 1;
                 prev_atom = true;
                 at_subexpr_start = false;
             }
-            '^' if !extended => {
+            b'^' if !extended => {
                 if at_subexpr_start {
-                    out.push_str("\\A");
+                    out.extend_from_slice(b"\\A");
                     prev_atom = false;
                 } else {
-                    out.push_str("\\^");
+                    out.extend_from_slice(b"\\^");
                     prev_atom = true;
                 }
                 at_subexpr_start = false;
                 i += 1;
             }
-            '$' if !extended => {
-                // Anchor only at end of pattern or before `\)` / `\|`
-                let is_anchor = matches!(
-                    (chars.get(i + 1), chars.get(i + 2)),
-                    (None, _) | (Some('\\'), Some(')' | '|'))
-                );
+            b'$' if !extended => {
+                let is_anchor = i + 1 == bytes.len()
+                    || (bytes.get(i + 1) == Some(&b'\\')
+                        && matches!(bytes.get(i + 2), Some(b')' | b'|')));
                 if is_anchor {
-                    out.push_str("\\z");
+                    out.extend_from_slice(b"\\z");
                     prev_atom = false;
                 } else {
-                    out.push_str("\\$");
+                    out.extend_from_slice(b"\\$");
                     prev_atom = true;
                 }
                 at_subexpr_start = false;
                 i += 1;
             }
-            '^' | '$' if extended => {
-                out.push_str(if c == '^' { "\\A" } else { "\\z" });
+            b'^' | b'$' if extended => {
+                out.extend_from_slice(if byte == b'^' { b"\\A" } else { b"\\z" });
                 i += 1;
                 prev_atom = false;
                 at_subexpr_start = false;
             }
-            '*' if !extended && !prev_atom => {
-                // A `*` with nothing to repeat is literal in BRE
-                out.push_str("\\*");
+            b'*' if !extended && !prev_atom => {
+                out.extend_from_slice(b"\\*");
                 i += 1;
                 prev_atom = true;
                 at_subexpr_start = false;
             }
             _ => {
-                out.push(c);
+                out.push(byte);
                 i += 1;
-                if !(c == '*' && !extended) {
+                if !(byte == b'*' && !extended) {
                     prev_atom = true;
                 }
                 at_subexpr_start = false;
@@ -166,53 +143,55 @@ pub(crate) fn translate_pattern(pattern: &str, extended: bool) -> String {
     out
 }
 
-/// Copy a bracket expression (`[...]`) verbatim, respecting the POSIX
-/// rules for a leading `^`/`]` and embedded `[:class:]`, `[=equiv=]`,
-/// and `[.collate.]` forms.
-fn copy_bracket_expression(chars: &[char], i: &mut usize, out: &mut String) {
-    out.push('[');
-    *i += 1;
-    if chars.get(*i) == Some(&'^') {
-        out.push('^');
-        *i += 1;
+fn digit(byte: u8, radix: u8) -> Option<u8> {
+    let value = match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => return None,
+    };
+    (value < radix).then_some(value)
+}
+
+fn copy_bracket_expression(bytes: &[u8], index: &mut usize, out: &mut Vec<u8>) {
+    out.push(b'[');
+    *index += 1;
+    if bytes.get(*index) == Some(&b'^') {
+        out.push(b'^');
+        *index += 1;
     }
-    if chars.get(*i) == Some(&']') {
-        out.push(']');
-        *i += 1;
+    if bytes.get(*index) == Some(&b']') {
+        out.push(b']');
+        *index += 1;
     }
-    while *i < chars.len() {
-        let c = chars[*i];
-        if c == '[' && matches!(chars.get(*i + 1), Some(':' | '.' | '=')) {
-            let kind = chars[*i + 1];
-            out.push('[');
-            out.push(kind);
-            *i += 2;
-            while *i < chars.len() && !(chars[*i] == kind && chars.get(*i + 1) == Some(&']')) {
-                out.push(chars[*i]);
-                *i += 1;
+    while *index < bytes.len() {
+        let byte = bytes[*index];
+        if byte == b'[' && matches!(bytes.get(*index + 1), Some(b':' | b'.' | b'=')) {
+            let kind = bytes[*index + 1];
+            out.extend_from_slice(&[b'[', kind]);
+            *index += 2;
+            while *index < bytes.len()
+                && !(bytes[*index] == kind && bytes.get(*index + 1) == Some(&b']'))
+            {
+                out.push(bytes[*index]);
+                *index += 1;
             }
-            if *i < chars.len() {
-                out.push(kind);
-                out.push(']');
-                *i += 2;
+            if *index < bytes.len() {
+                out.extend_from_slice(&[kind, b']']);
+                *index += 2;
             }
-        } else if c == ']' {
-            out.push(']');
-            *i += 1;
+        } else if byte == b']' {
+            out.push(b']');
+            *index += 1;
             return;
-        } else if c == '\\' && chars.get(*i + 1) == Some(&']') {
-            // GNU treats a backslash before `]` as a literal backslash
-            // (the `]` still closes the class); double it so the regex
-            // crate doesn't read `\]` as an escaped bracket.
-            out.push_str("\\\\");
-            *i += 1;
+        } else if byte == b'\\' && bytes.get(*index + 1) == Some(&b']') {
+            out.extend_from_slice(b"\\\\");
+            *index += 1;
         } else {
-            out.push(c);
-            *i += 1;
+            out.push(byte);
+            *index += 1;
         }
     }
-    // Unterminated bracket: everything was copied; the regex compiler
-    // will report the error.
 }
 
 #[cfg(test)]
@@ -221,74 +200,69 @@ mod tests {
 
     #[test]
     fn bre_swaps_group_escapes() {
-        assert_eq!(translate_pattern(r"\(a\)", false), "(a)");
-        assert_eq!(translate_pattern("(a)", false), r"\(a\)");
+        assert_eq!(translate_pattern(r"\(a\)", false), b"(a)");
+        assert_eq!(translate_pattern("(a)", false), br"\(a\)");
     }
 
     #[test]
     fn bre_swaps_repetition_escapes() {
-        assert_eq!(translate_pattern(r"a\+b\?", false), "a+b?");
-        assert_eq!(translate_pattern("a+b?", false), r"a\+b\?");
-        assert_eq!(translate_pattern(r"a\{2,3\}", false), "a{2,3}");
-        assert_eq!(translate_pattern("a{2}", false), r"a\{2\}");
-    }
-
-    #[test]
-    fn bre_alternation() {
-        assert_eq!(translate_pattern(r"a\|b", false), "a|b");
-        assert_eq!(translate_pattern("a|b", false), r"a\|b");
+        assert_eq!(translate_pattern(r"a\+b\?", false), b"a+b?");
+        assert_eq!(translate_pattern("a+b?", false), br"a\+b\?");
+        assert_eq!(translate_pattern(r"a\{2,3\}", false), b"a{2,3}");
+        assert_eq!(translate_pattern("a{2}", false), br"a\{2\}");
     }
 
     #[test]
     fn bre_anchors() {
-        assert_eq!(translate_pattern("^a$", false), r"\Aa\z");
-        assert_eq!(translate_pattern("a^b", false), r"a\^b");
-        assert_eq!(translate_pattern("a$b", false), r"a\$b");
-        assert_eq!(translate_pattern(r"\(^a$\)", false), r"(\Aa\z)");
+        assert_eq!(translate_pattern("^a$", false), br"\Aa\z");
+        assert_eq!(translate_pattern("a^b", false), br"a\^b");
+        assert_eq!(translate_pattern("a$b", false), br"a\$b");
+        assert_eq!(translate_pattern(r"\(^a$\)", false), br"(\Aa\z)");
     }
 
     #[test]
     fn bre_leading_star_is_literal() {
-        assert_eq!(translate_pattern("*a", false), r"\*a");
-        assert_eq!(translate_pattern("a*", false), "a*");
-        assert_eq!(translate_pattern(r"\(*\)", false), r"(\*)");
+        assert_eq!(translate_pattern("*a", false), br"\*a");
+        assert_eq!(translate_pattern("a*", false), b"a*");
+        assert_eq!(translate_pattern(r"\(*\)", false), br"(\*)");
     }
 
     #[test]
     fn ere_passthrough() {
-        assert_eq!(translate_pattern("(a|b)+c?", true), "(a|b)+c?");
-        assert_eq!(translate_pattern("a{2,3}", true), "a{2,3}");
+        assert_eq!(translate_pattern("(a|b)+c?", true), b"(a|b)+c?");
+        assert_eq!(translate_pattern("a{2,3}", true), b"a{2,3}");
     }
 
     #[test]
     fn char_escapes_both_modes() {
-        assert_eq!(translate_pattern(r"\x41", false), r"\x{41}");
-        assert_eq!(translate_pattern(r"\o101", false), r"\x{41}");
-        assert_eq!(translate_pattern(r"\d065", false), r"\x{41}");
-        assert_eq!(translate_pattern(r"\x41", true), r"\x{41}");
+        assert_eq!(translate_pattern(r"\x41", false), br"\x{41}");
+        assert_eq!(translate_pattern(r"\o101", false), br"\x{41}");
+        assert_eq!(translate_pattern(r"\d065", false), br"\x{41}");
+        assert_eq!(translate_pattern(r"\x41", true), br"\x{41}");
     }
 
     #[test]
     fn digit_class_preserved_without_digits() {
-        assert_eq!(translate_pattern(r"\d", false), r"\d");
-        assert_eq!(translate_pattern(r"\w\s", true), r"\w\s");
+        assert_eq!(translate_pattern(r"\d", false), br"\d");
+        assert_eq!(translate_pattern(r"\w\s", true), br"\w\s");
     }
 
     #[test]
     fn bracket_expression_verbatim() {
-        assert_eq!(translate_pattern("[a+?(]", false), "[a+?(]");
-        assert_eq!(translate_pattern("[^]a]", false), "[^]a]");
-        assert_eq!(translate_pattern("[[:alpha:]+]", false), "[[:alpha:]+]");
+        assert_eq!(translate_pattern("[a+?(]", false), b"[a+?(]");
+        assert_eq!(translate_pattern("[^]a]", false), b"[^]a]");
+        assert_eq!(translate_pattern("[[:alpha:]+]", false), b"[[:alpha:]+]");
     }
 
     #[test]
     fn bracket_backslash_before_closing_is_literal() {
-        // GNU: `[\]` is a class holding a literal backslash; the `]`
-        // still closes it. The regex crate would read `\]` as an
-        // escaped bracket, so the backslash must be doubled.
-        assert_eq!(translate_pattern(r"[\]", false), r"[\\]");
-        assert_eq!(translate_pattern(r"[a\]b", false), r"[a\\]b");
-        // Other in-class escapes pass through (regex handles \n, \t…)
-        assert_eq!(translate_pattern(r"[\n\t]", false), r"[\n\t]");
+        assert_eq!(translate_pattern(r"[\]", false), br"[\\]");
+        assert_eq!(translate_pattern(r"[a\]b", false), br"[a\\]b");
+        assert_eq!(translate_pattern(r"[\n\t]", false), br"[\n\t]");
+    }
+
+    #[test]
+    fn invalid_bytes_are_preserved() {
+        assert_eq!(translate_pattern(b"[\xff]", false), b"[\xff]");
     }
 }

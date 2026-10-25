@@ -1,4 +1,3 @@
-use crate::bre::parse_escape_value;
 use crate::error::Result;
 use crate::regex::{Captures, PosixRegex};
 
@@ -12,8 +11,7 @@ pub(crate) enum ReplacePart {
     UpperNext,
 }
 
-pub(crate) fn compile_replacement(replacement: &str) -> Vec<ReplacePart> {
-    let chars: Vec<char> = replacement.chars().collect();
+pub(crate) fn compile_replacement(replacement: &[u8]) -> Vec<ReplacePart> {
     let mut parts = Vec::new();
     let mut literal = Vec::new();
     let mut index = 0;
@@ -22,31 +20,30 @@ pub(crate) fn compile_replacement(replacement: &str) -> Vec<ReplacePart> {
             parts.push(ReplacePart::Literal(std::mem::take(literal)));
         }
     };
-    while index < chars.len() {
-        let ch = chars[index];
+    while index < replacement.len() {
+        let byte = replacement[index];
         index += 1;
-        if ch == '&' {
+        if byte == b'&' {
             flush(&mut literal, &mut parts);
             parts.push(ReplacePart::Group(0));
             continue;
         }
-        if ch != '\\' {
-            let mut bytes = [0; 4];
-            literal.extend_from_slice(ch.encode_utf8(&mut bytes).as_bytes());
+        if byte != b'\\' {
+            literal.push(byte);
             continue;
         }
-        let Some(&next) = chars.get(index) else {
+        let Some(&next) = replacement.get(index) else {
             literal.push(b'\\');
             break;
         };
         index += 1;
         let part = match next {
-            '0'..='9' => Some(ReplacePart::Group((next as u8 - b'0') as usize)),
-            'L' => Some(ReplacePart::Lower),
-            'U' => Some(ReplacePart::Upper),
-            'E' => Some(ReplacePart::EndCase),
-            'l' => Some(ReplacePart::LowerNext),
-            'u' => Some(ReplacePart::UpperNext),
+            b'0'..=b'9' => Some(ReplacePart::Group((next - b'0') as usize)),
+            b'L' => Some(ReplacePart::Lower),
+            b'U' => Some(ReplacePart::Upper),
+            b'E' => Some(ReplacePart::EndCase),
+            b'l' => Some(ReplacePart::LowerNext),
+            b'u' => Some(ReplacePart::UpperNext),
             _ => None,
         };
         if let Some(part) = part {
@@ -55,27 +52,58 @@ pub(crate) fn compile_replacement(replacement: &str) -> Vec<ReplacePart> {
             continue;
         }
         match next {
-            'n' => literal.push(b'\n'),
-            't' => literal.push(b'\t'),
-            'r' => literal.push(b'\r'),
-            'a' => literal.push(7),
-            'f' => literal.push(12),
-            'v' => literal.push(11),
-            'x' | 'o' | 'd' => {
-                if let Some(value) = parse_escape_value(next, &chars, &mut index) {
-                    literal.push(value as u8);
+            b'n' => literal.push(b'\n'),
+            b't' => literal.push(b'\t'),
+            b'r' => literal.push(b'\r'),
+            b'a' => literal.push(7),
+            b'f' => literal.push(12),
+            b'v' => literal.push(11),
+            b'c' => {
+                if let Some(&control) = replacement.get(index) {
+                    index += 1;
+                    literal.push(control & 0x1f);
                 } else {
-                    literal.push(next as u8);
+                    literal.push(b'c');
                 }
             }
-            _ => {
-                let mut bytes = [0; 4];
-                literal.extend_from_slice(next.encode_utf8(&mut bytes).as_bytes());
+            b'x' | b'o' | b'd' => {
+                let (radix, max) = match next {
+                    b'x' => (16, 2),
+                    b'o' => (8, 3),
+                    _ => (10, 3),
+                };
+                let start = index;
+                let mut value = 0u32;
+                let mut count = 0;
+                while count < max {
+                    let Some(&digit) = replacement.get(index) else { break };
+                    let Some(digit) = digit_value(digit, radix) else { break };
+                    value = value * radix as u32 + digit as u32;
+                    index += 1;
+                    count += 1;
+                }
+                if count == 0 {
+                    literal.push(next);
+                    index = start;
+                } else {
+                    literal.push((value & 0xff) as u8);
+                }
             }
+            _ => literal.push(next),
         }
     }
     flush(&mut literal, &mut parts);
     parts
+}
+
+fn digit_value(byte: u8, radix: u8) -> Option<u8> {
+    let value = match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => return None,
+    };
+    (value < radix).then_some(value)
 }
 
 pub(crate) fn apply_substitution(
@@ -122,7 +150,7 @@ pub(crate) fn apply_substitution(
         };
     }
     if let Some(output) = &mut output {
-        output.extend_from_slice(&text[copied..])
+        output.extend_from_slice(&text[copied..]);
     }
     Ok(output)
 }
@@ -186,13 +214,19 @@ fn append_case(
         let (text, invalid) = if unicode {
             match std::str::from_utf8(bytes) {
                 Ok(text) => (text, 0),
-                Err(error) => (
-                    std::str::from_utf8(&bytes[..error.valid_up_to()])
-                        .expect("validated UTF-8 prefix"),
-                    error
-                        .error_len()
-                        .unwrap_or(bytes.len() - error.valid_up_to()),
-                ),
+                Err(error) => {
+                    let valid_end = error.valid_up_to();
+                    let text = match std::str::from_utf8(&bytes[..valid_end]) {
+                        Ok(text) => text,
+                        Err(_) => "",
+                    };
+                    (
+                        text,
+                        error
+                            .error_len()
+                            .unwrap_or(bytes.len() - valid_end),
+                    )
+                }
             }
         } else {
             ("", bytes.len())

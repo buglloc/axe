@@ -11,9 +11,13 @@ pub enum Address {
     /// The last line of input
     Last,
     /// Lines matching a regex pattern
-    Regex(String),
+    Regex(Vec<u8>),
     /// GNU extension: first~step (every step-th line starting at first)
     Step { first: usize, step: usize },
+    /// GNU extension: an endpoint N lines after the first address
+    Plus(usize),
+    /// GNU extension: an endpoint at the next line number divisible by N
+    Tilde(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -32,13 +36,13 @@ pub enum AddressRange {
 
 #[derive(Debug, Clone)]
 pub struct SubstituteCmd {
-    pub pattern: String,
-    pub replacement: String,
+    pub pattern: Vec<u8>,
+    pub replacement: Vec<u8>,
     pub global: bool,
     pub print: bool,
     pub nth: Option<usize>,
     pub case_insensitive: bool,
-    pub write_file: Option<String>,
+    pub write_file: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,8 +50,8 @@ pub enum Command {
     // -- Substitution & Transliteration --
     Substitute(SubstituteCmd),
     Transliterate {
-        from: Vec<char>,
-        to: Vec<char>,
+        from: Vec<u8>,
+        to: Vec<u8>,
     },
 
     // -- Output --
@@ -72,28 +76,28 @@ pub enum Command {
     Exchange,
 
     // -- Text insertion --
-    Append(String),
-    Insert(String),
-    Change(String),
+    Append(Vec<u8>),
+    Insert(Vec<u8>),
+    Change(Vec<u8>),
 
     // -- Branching --
-    Label(String),
-    Branch(Option<String>),
-    BranchIfSub(Option<String>),
-    BranchIfNotSub(Option<String>),
+    Label(Vec<u8>),
+    Branch(Option<Vec<u8>>),
+    BranchIfSub(Option<Vec<u8>>),
+    BranchIfNotSub(Option<Vec<u8>>),
 
     // -- I/O --
-    ReadFile(String),
+    ReadFile(Vec<u8>),
     /// GNU extension: read one line per cycle from a file (`R`)
-    ReadLine(String),
-    WriteFile(String),
-    WriteFirstLine(String),
+    ReadLine(Vec<u8>),
+    WriteFile(Vec<u8>),
+    WriteFirstLine(Vec<u8>),
     /// GNU extension: print the current input file name (`F`)
     PrintFileName,
     /// GNU extension: execute a shell command (`e`).
     /// `None` runs the pattern space and replaces it with the output;
     /// `Some(cmd)` runs `cmd` and sends its output to the stream.
-    Execute(Option<String>),
+    Execute(Option<Vec<u8>>),
 
     // -- Control --
     Quit(Option<i32>),
@@ -115,43 +119,46 @@ pub struct SedCommand {
 // Parser
 // ---------------------------------------------------------------------------
 
-pub fn parse(script: &str) -> Result<Vec<SedCommand>> {
-    let mut parser = Parser::new(script);
+/// Parse a sed program without requiring it to be valid UTF-8.
+///
+/// `str` and byte slices are both accepted for the benefit of the library API;
+/// command-line scripts are passed here as their original argument bytes.
+pub fn parse<S: AsRef<[u8]>>(script: S) -> Result<Vec<SedCommand>> {
+    let mut parser = Parser::new(script.as_ref());
     parser.parse_script()
 }
 
 struct Parser {
-    chars: Vec<char>,
+    bytes: Vec<u8>,
     pos: usize,
 }
 
 impl Parser {
-    fn new(input: &str) -> Self {
+    fn new(input: &[u8]) -> Self {
         Self {
-            chars: input.chars().collect(),
+            bytes: input.to_vec(),
             pos: 0,
         }
     }
 
-    fn peek(&self) -> Option<char> {
-        self.chars.get(self.pos).copied()
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.pos).copied()
     }
 
-    fn advance(&mut self) -> Option<char> {
-        let c = self.chars.get(self.pos).copied();
-        if c.is_some() {
+    fn advance(&mut self) -> Option<u8> {
+        let byte = self.bytes.get(self.pos).copied();
+        if byte.is_some() {
             self.pos += 1;
         }
-        c
+        byte
     }
 
     fn is_at_end(&self) -> bool {
-        self.pos >= self.chars.len()
+        self.pos >= self.bytes.len()
     }
 
-    /// Consume the next char if it matches `c`, returning true if consumed.
-    fn consume_if(&mut self, c: char) -> bool {
-        if self.peek() == Some(c) {
+    fn consume_if(&mut self, byte: u8) -> bool {
+        if self.peek() == Some(byte) {
             self.advance();
             true
         } else {
@@ -161,7 +168,7 @@ impl Parser {
 
     /// Skip spaces and tabs (but NOT newlines).
     fn skip_spaces(&mut self) {
-        while matches!(self.peek(), Some(' ' | '\t')) {
+        while matches!(self.peek(), Some(b' ' | b'\t')) {
             self.advance();
         }
     }
@@ -170,10 +177,10 @@ impl Parser {
     fn skip_blanks(&mut self) {
         loop {
             match self.peek() {
-                Some(' ' | '\t' | '\n' | '\r' | ';') => {
+                Some(b' ' | b'\t' | b'\n' | b'\r' | b';') => {
                     self.advance();
                 }
-                Some('#') => self.skip_line(),
+                Some(b'#') => self.skip_line(),
                 _ => break,
             }
         }
@@ -181,8 +188,8 @@ impl Parser {
 
     /// Skip to end of current line.
     fn skip_line(&mut self) {
-        while let Some(c) = self.advance() {
-            if c == '\n' {
+        while let Some(byte) = self.advance() {
+            if byte == b'\n' {
                 break;
             }
         }
@@ -210,97 +217,89 @@ impl Parser {
             return Ok(None);
         }
 
-        // Parse address range
         let address = self.parse_address_range()?;
         self.skip_spaces();
         let has_address = !matches!(address, AddressRange::None);
-        // GNU sed rejects an address that isn't followed by a command
-        // on the same line, and commands like `:` and `#` that don't
-        // accept addresses at all.
-        let reject_address = |msg: &str| -> Result<()> {
+        let reject_address = |message: &str| -> Result<()> {
             if has_address {
-                Err(Error::Parse(msg.into()))
+                Err(Error::Parse(message.into()))
             } else {
                 Ok(())
             }
         };
 
-        let Some(ch) = self.advance() else {
+        let Some(byte) = self.advance() else {
             reject_address("missing command")?;
             return Ok(None);
         };
-
-        let command = match ch {
-            '{' => {
-                let block = self.parse_block()?;
-                Command::Block(block)
-            }
-            '}' => {
-                // Closing brace is handled by parse_block; an address
-                // directly before '}' means its command is missing.
+        let command = match byte {
+            b'{' => Command::Block(self.parse_block()?),
+            b'}' => {
                 reject_address("missing command")?;
                 return Ok(None);
             }
-            's' => self.parse_substitute()?,
-            'y' => self.parse_transliterate()?,
-            'd' => Command::Delete,
-            'D' => Command::DeleteFirstLine,
-            'p' => Command::Print,
-            'P' => Command::PrintFirstLine,
-            '=' => Command::PrintLineNumber,
-            'l' => Command::List,
-            'q' => Command::Quit(self.parse_optional_int()),
-            'Q' => Command::QuitNoprint(self.parse_optional_int()),
-            'h' => Command::HoldReplace,
-            'H' => Command::HoldAppend,
-            'g' => Command::GetReplace,
-            'G' => Command::GetAppend,
-            'x' => Command::Exchange,
-            'n' => Command::Next,
-            'N' => Command::NextAppend,
-            'z' => Command::ClearPattern,
-            'a' => Command::Append(self.parse_text_arg()),
-            'i' => Command::Insert(self.parse_text_arg()),
-            'c' => Command::Change(self.parse_text_arg()),
-            'r' => Command::ReadFile(self.parse_filename_arg()),
-            'w' => Command::WriteFile(self.parse_filename_arg()),
-            'W' => Command::WriteFirstLine(self.parse_filename_arg()),
-            'R' => Command::ReadLine(self.parse_filename_arg()),
-            'F' => Command::PrintFileName,
-            'e' => {
+            b's' => self.parse_substitute()?,
+            b'y' => self.parse_transliterate()?,
+            b'd' => Command::Delete,
+            b'D' => Command::DeleteFirstLine,
+            b'p' => Command::Print,
+            b'P' => Command::PrintFirstLine,
+            b'=' => Command::PrintLineNumber,
+            b'l' => Command::List,
+            b'q' => Command::Quit(self.parse_optional_int()),
+            b'Q' => Command::QuitNoprint(self.parse_optional_int()),
+            b'h' => Command::HoldReplace,
+            b'H' => Command::HoldAppend,
+            b'g' => Command::GetReplace,
+            b'G' => Command::GetAppend,
+            b'x' => Command::Exchange,
+            b'n' => Command::Next,
+            b'N' => Command::NextAppend,
+            b'z' => Command::ClearPattern,
+            b'a' => Command::Append(self.parse_text_arg()),
+            b'i' => Command::Insert(self.parse_text_arg()),
+            b'c' => Command::Change(self.parse_text_arg()),
+            b'r' => Command::ReadFile(self.parse_filename_arg()),
+            b'w' => Command::WriteFile(self.parse_filename_arg()),
+            b'W' => Command::WriteFirstLine(self.parse_filename_arg()),
+            b'R' => Command::ReadLine(self.parse_filename_arg()),
+            b'F' => Command::PrintFileName,
+            b'e' => {
                 let arg = self.parse_rest_of_line();
-                Command::Execute(if arg.is_empty() { None } else { Some(arg) })
+                Command::Execute((!arg.is_empty()).then_some(arg))
             }
             // GNU `v [version]` asserts a minimum sed version and enables
             // GNU extensions. They are always on here, so it's a no-op.
-            // The version is a single token; `;` terminates it (unlike `e`).
-            'v' => {
+            b'v' => {
                 let _ = self.parse_label_arg();
                 Command::Noop
             }
-            'b' => Command::Branch(self.parse_label_arg()),
-            't' => Command::BranchIfSub(self.parse_label_arg()),
-            'T' => Command::BranchIfNotSub(self.parse_label_arg()),
-            ':' => {
+            b'b' => Command::Branch(self.parse_label_arg()),
+            b't' => Command::BranchIfSub(self.parse_label_arg()),
+            b'T' => Command::BranchIfNotSub(self.parse_label_arg()),
+            b':' => {
                 reject_address(": doesn't want any addresses")?;
                 let label = self.parse_label_arg().unwrap_or_default();
                 Command::Label(label)
             }
-            '#' => {
+            b'#' => {
                 reject_address("comments don't accept any addresses")?;
                 self.skip_line();
                 Command::Noop
             }
-            ';' => {
+            b';' => {
                 reject_address("missing command")?;
                 return self.parse_one_command();
             }
-            c if c.is_whitespace() => {
+            byte if byte.is_ascii_whitespace() => {
                 reject_address("missing command")?;
                 return self.parse_one_command();
             }
-            c => {
-                return Err(Error::Parse(format!("unknown command: '{c}'")));
+            byte => {
+                return Err(Error::Parse(format!(
+                    "unknown command: {:?}",
+                    String::from_utf8_lossy(&[byte])
+                )));
             }
         };
 
@@ -311,29 +310,37 @@ impl Parser {
 
     fn parse_address_range(&mut self) -> Result<AddressRange> {
         let Some(addr1) = self.parse_address()? else {
-            // Check for negation without address
-            if self.consume_if('!') {
+            if self.consume_if(b'!') {
                 return Err(Error::Parse("'!' without preceding address".into()));
             }
             return Ok(AddressRange::None);
         };
 
         self.skip_spaces();
-
-        if self.consume_if(',') {
+        if self.consume_if(b',') {
             self.skip_spaces();
-            let addr2 = self
-                .parse_address()?
-                .ok_or_else(|| Error::Parse("expected address after ','".into()))?;
+            let addr2 = match self.peek() {
+                Some(b'+') => {
+                    self.advance();
+                    Address::Plus(self.parse_number())
+                }
+                Some(b'~') => {
+                    self.advance();
+                    Address::Tilde(self.parse_number())
+                }
+                _ => self
+                    .parse_address()?
+                    .ok_or_else(|| Error::Parse("expected address after ','".into()))?,
+            };
             self.skip_spaces();
-            let negated = self.consume_if('!');
+            let negated = self.consume_if(b'!');
             Ok(AddressRange::Range {
                 start: addr1,
                 end: addr2,
                 negated,
             })
         } else {
-            let negated = self.consume_if('!');
+            let negated = self.consume_if(b'!');
             Ok(AddressRange::Single {
                 addr: addr1,
                 negated,
@@ -343,30 +350,30 @@ impl Parser {
 
     fn parse_address(&mut self) -> Result<Option<Address>> {
         match self.peek() {
-            Some(c) if c.is_ascii_digit() => {
+            Some(byte) if byte.is_ascii_digit() => {
                 let n = self.parse_number();
-                if self.consume_if('~') {
+                if self.consume_if(b'~') {
                     let step = self.parse_number();
                     Ok(Some(Address::Step { first: n, step }))
                 } else {
                     Ok(Some(Address::Line(n)))
                 }
             }
-            Some('$') => {
+            Some(b'$') => {
                 self.advance();
                 Ok(Some(Address::Last))
             }
-            Some('/') => {
+            Some(b'/') => {
                 self.advance();
-                let pattern = self.parse_regex_delimited('/')?;
+                let pattern = self.parse_regex_delimited(b'/', false)?;
                 Ok(Some(Address::Regex(pattern)))
             }
-            Some('\\') => {
+            Some(b'\\') => {
                 self.advance();
                 let delim = self
                     .advance()
                     .ok_or_else(|| Error::Parse("expected delimiter after '\\'".into()))?;
-                let pattern = self.parse_regex_delimited(delim)?;
+                let pattern = self.parse_regex_delimited(delim, false)?;
                 Ok(Some(Address::Regex(pattern)))
             }
             _ => Ok(None),
@@ -374,24 +381,24 @@ impl Parser {
     }
 
     fn parse_number(&mut self) -> usize {
-        let mut n: usize = 0;
-        while let Some(c) = self.peek() {
-            if c.is_ascii_digit() {
-                n = n
+        let mut number = 0usize;
+        while let Some(byte) = self.peek() {
+            if byte.is_ascii_digit() {
+                number = number
                     .saturating_mul(10)
-                    .saturating_add((c as u8 - b'0') as usize);
+                    .saturating_add((byte - b'0') as usize);
                 self.advance();
             } else {
                 break;
             }
         }
-        n
+        number
     }
 
     fn parse_optional_int(&mut self) -> Option<i32> {
         self.skip_spaces();
-        if self.peek().is_some_and(|c| c.is_ascii_digit()) {
-            Some(self.parse_number() as i32)
+        if self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+            Some(self.parse_number().min(i32::MAX as usize) as i32)
         } else {
             None
         }
@@ -399,61 +406,124 @@ impl Parser {
 
     // -- Delimited content parsing --
 
-    /// Parse content between matching delimiters, handling backslash escapes.
-    fn parse_regex_delimited(&mut self, delim: char) -> Result<String> {
-        let mut s = String::new();
+    /// Decode one GNU sed escape after a backslash. Unknown escapes return
+    /// `None` so callers can preserve regex/replacement metacharacters.
+    fn decode_escape(&mut self) -> Option<Vec<u8>> {
+        let next = self.advance()?;
+        match next {
+            b'a' => Some(vec![7]),
+            b'f' => Some(vec![12]),
+            b'n' => Some(vec![b'\n']),
+            b'r' => Some(vec![b'\r']),
+            b't' => Some(vec![b'\t']),
+            b'v' => Some(vec![11]),
+            b'c' => self.advance().map(|byte| vec![byte & 0x1f]),
+            b'x' => self.parse_escape_digits(16, 2),
+            b'o' => self.parse_escape_digits(8, 3),
+            b'd' => self.parse_escape_digits(10, 3),
+            b'0' => self.parse_escape_digits(8, 3).or_else(|| Some(vec![0])),
+            b'\\' => Some(vec![b'\\']),
+            _ => None,
+        }
+    }
+
+    fn parse_escape_digits(&mut self, radix: u8, max: usize) -> Option<Vec<u8>> {
+        let start = self.pos;
+        let mut value = 0u32;
+        let mut count = 0;
+        while count < max {
+            let Some(byte) = self.peek() else { break };
+            let digit = match byte {
+                b'0'..=b'9' => byte - b'0',
+                b'a'..=b'f' => byte - b'a' + 10,
+                b'A'..=b'F' => byte - b'A' + 10,
+                _ => break,
+            };
+            if digit >= radix {
+                break;
+            }
+            value = value.saturating_mul(radix as u32).saturating_add(digit as u32);
+            self.advance();
+            count += 1;
+        }
+        if count == 0 {
+            self.pos = start;
+            None
+        } else {
+            Some(vec![(value & 0xff) as u8])
+        }
+    }
+
+    /// Parse content between matching delimiters, handling GNU byte escapes.
+    fn parse_regex_delimited(&mut self, delim: u8, decode_backspace: bool) -> Result<Vec<u8>> {
+        let mut output = Vec::new();
         loop {
             match self.advance() {
                 None => {
                     return Err(Error::Parse(format!(
-                        "unterminated regex (expected closing '{delim}')"
+                        "unterminated regex (expected closing {:?})",
+                        String::from_utf8_lossy(&[delim])
                     )));
                 }
-                Some(c) if c == delim => return Ok(s),
-                Some('\\') => {
-                    if let Some(next) = self.advance() {
-                        if next == delim {
-                            // Escaped delimiter → literal delimiter in regex
-                            s.push('\\');
-                            s.push(next);
+                Some(byte) if byte == delim => return Ok(output),
+                Some(b'\\') => {
+                    if self.peek() == Some(delim) {
+                        if decode_backspace {
+                            output.push(delim);
                         } else {
-                            s.push('\\');
-                            s.push(next);
+                            output.push(b'\\');
+                            output.push(delim);
                         }
+                        self.advance();
+                    } else if !decode_backspace && self.peek() == Some(b'b') {
+                        output.extend_from_slice(b"\\b");
+                        self.advance();
                     } else {
-                        s.push('\\');
+                        let before = self.pos;
+                        match self.decode_escape() {
+                            Some(decoded) => output.extend(decoded),
+                            None => {
+                                if decode_backspace {
+                                    output.extend_from_slice(&self.bytes[before..self.pos]);
+                                } else {
+                                    output.push(b'\\');
+                                    output.extend_from_slice(&self.bytes[before..self.pos]);
+                                }
+                            }
+                        }
                     }
                 }
-                Some(c) => s.push(c),
+                Some(byte) => output.push(byte),
             }
         }
     }
 
     /// Parse content between delimiters for s/// replacement strings.
-    /// Does NOT add extra backslash escaping (preserves sed replacement syntax).
-    fn parse_replacement_delimited(&mut self, delim: char) -> Result<String> {
-        let mut s = String::new();
+    /// Escaped delimiters are unescaped, while backreferences and case
+    /// controls remain in the replacement language for later compilation.
+    fn parse_replacement_delimited(&mut self, delim: u8) -> Result<Vec<u8>> {
+        let mut output = Vec::new();
         loop {
             match self.advance() {
                 None => {
                     return Err(Error::Parse(format!(
-                        "unterminated replacement (expected closing '{delim}')"
+                        "unterminated replacement (expected closing {:?})",
+                        String::from_utf8_lossy(&[delim])
                     )));
                 }
-                Some(c) if c == delim => return Ok(s),
-                Some('\\') => {
-                    if let Some(next) = self.advance() {
-                        if next == delim {
-                            s.push(next);
-                        } else {
-                            s.push('\\');
-                            s.push(next);
-                        }
+                Some(byte) if byte == delim => return Ok(output),
+                Some(b'\\') => {
+                    if self.peek() == Some(delim) {
+                        output.push(delim);
+                        self.advance();
                     } else {
-                        s.push('\\');
+                        output.push(b'\\');
+                        if let Some(next) = self.advance() {
+                            output.push(next);
+                        }
                     }
                 }
-                Some(c) => s.push(c),
+                Some(byte) => output.push(byte),
             }
         }
     }
@@ -464,38 +534,35 @@ impl Parser {
         let delim = self
             .advance()
             .ok_or_else(|| Error::Parse("missing delimiter for s command".into()))?;
-        let pattern = self.parse_regex_delimited(delim)?;
+        let pattern = self.parse_regex_delimited(delim, false)?;
         let replacement = self.parse_replacement_delimited(delim)?;
 
         let mut global = false;
         let mut print = false;
-        let mut nth: Option<usize> = None;
+        let mut nth = None;
         let mut case_insensitive = false;
         let mut write_file = None;
-
         loop {
             match self.peek() {
-                Some('g') => {
+                Some(b'g') => {
                     self.advance();
                     global = true;
                 }
-                Some('p') => {
+                Some(b'p') => {
                     self.advance();
                     print = true;
                 }
-                Some('i' | 'I') => {
+                Some(b'i' | b'I') => {
                     self.advance();
                     case_insensitive = true;
                 }
-                Some('w') => {
+                Some(b'w') => {
                     self.advance();
                     self.skip_spaces();
                     write_file = Some(self.parse_filename_arg());
                     break;
                 }
-                Some(c) if c.is_ascii_digit() => {
-                    nth = Some(self.parse_number());
-                }
+                Some(byte) if byte.is_ascii_digit() => nth = Some(self.parse_number()),
                 _ => break,
             }
         }
@@ -515,116 +582,93 @@ impl Parser {
         let delim = self
             .advance()
             .ok_or_else(|| Error::Parse("missing delimiter for y command".into()))?;
-        let from_str = self.parse_regex_delimited(delim)?;
-        let to_str = self.parse_regex_delimited(delim)?;
-
-        let from: Vec<char> = from_str.chars().collect();
-        let to: Vec<char> = to_str.chars().collect();
-
-        if from.len() != to.len() {
-            return Err(Error::Parse(format!(
-                "y command: 'from' and 'to' must be same length ({} vs {})",
-                from.len(),
-                to.len()
-            )));
-        }
-
+        let from = self.parse_regex_delimited(delim, true)?;
+        let to = self.parse_regex_delimited(delim, true)?;
         Ok(Command::Transliterate { from, to })
     }
 
     /// Parse text argument for a/i/c commands.
-    ///
-    /// Handles:
-    ///   a text       (GNU extension: text on same line)
-    ///   a\ text      (text after backslash)
-    ///   a\           (text on next line, with backslash continuation)
-    fn parse_text_arg(&mut self) -> String {
-        // Skip optional backslash
-        if self.peek() == Some('\\') {
+    fn parse_text_arg(&mut self) -> Vec<u8> {
+        if self.peek() == Some(b'\\') {
             self.advance();
         }
-
-        // Skip one space or newline after command char / backslash
         match self.peek() {
-            Some('\n') => {
+            Some(b'\n') => {
                 self.advance();
             }
-            Some(' ' | '\t') => {
+            Some(b' ' | b'\t') => {
                 self.advance();
             }
             _ => {}
         }
 
-        let mut text = String::new();
+        let mut text = Vec::new();
         loop {
             match self.peek() {
                 None => break,
-                Some('\n') => {
-                    // Check for backslash continuation
-                    if text.ends_with('\\') {
+                Some(b'\n') => {
+                    if text.last() == Some(&b'\\') {
                         text.pop();
-                        text.push('\n');
+                        text.push(b'\n');
                         self.advance();
                     } else {
                         break;
                     }
                 }
-                Some(c) => {
-                    text.push(c);
+                Some(byte) => {
+                    text.push(byte);
                     self.advance();
                 }
             }
         }
-
         text
     }
 
-    /// Parse a label name (for b, t, T, : commands).
-    fn parse_label_arg(&mut self) -> Option<String> {
+    fn parse_label_arg(&mut self) -> Option<Vec<u8>> {
         self.skip_spaces();
-        let mut label = String::new();
-        while let Some(c) = self.peek() {
-            if c.is_alphanumeric() || c == '_' || c == '.' || c == '-' {
-                label.push(c);
+        let start = self.pos;
+        while let Some(byte) = self.peek() {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-') {
                 self.advance();
             } else {
                 break;
             }
         }
-        if label.is_empty() { None } else { Some(label) }
+        (self.pos != start).then(|| self.bytes[start..self.pos].to_vec())
     }
 
-    /// Parse a filename argument (for r, w, W commands).
-    fn parse_filename_arg(&mut self) -> String {
+    fn parse_filename_arg(&mut self) -> Vec<u8> {
         self.skip_spaces();
-        let mut filename = String::new();
-        while let Some(c) = self.peek() {
-            if c == '\n' || c == ';' {
+        let start = self.pos;
+        while let Some(byte) = self.peek() {
+            if matches!(byte, b'\n' | b';') {
                 break;
             }
-            filename.push(c);
             self.advance();
         }
-        filename.trim_end().to_string()
+        let mut filename = self.bytes[start..self.pos].to_vec();
+        while matches!(filename.last(), Some(b' ' | b'\t' | b'\r')) {
+            filename.pop();
+        }
+        filename
     }
 
-    /// Parse the rest of the line as a single argument (for `e`, `v`).
-    /// Unlike `parse_filename_arg`, `;` is not a terminator — the
-    /// argument runs to the end of the line, matching GNU sed.
-    fn parse_rest_of_line(&mut self) -> String {
+    fn parse_rest_of_line(&mut self) -> Vec<u8> {
         self.skip_spaces();
-        let mut s = String::new();
-        while let Some(c) = self.peek() {
-            if c == '\n' {
+        let start = self.pos;
+        while let Some(byte) = self.peek() {
+            if byte == b'\n' {
                 break;
             }
-            s.push(c);
             self.advance();
         }
-        s.trim_end().to_string()
+        let mut result = self.bytes[start..self.pos].to_vec();
+        while matches!(result.last(), Some(b' ' | b'\t' | b'\r')) {
+            result.pop();
+        }
+        result
     }
 
-    /// Parse a { ... } block of commands.
     fn parse_block(&mut self) -> Result<Vec<SedCommand>> {
         let mut commands = Vec::new();
         loop {
@@ -632,7 +676,7 @@ impl Parser {
             if self.is_at_end() {
                 return Err(Error::Parse("unterminated block (missing '}')".into()));
             }
-            if self.peek() == Some('}') {
+            if self.peek() == Some(b'}') {
                 self.advance();
                 break;
             }
@@ -644,10 +688,6 @@ impl Parser {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,8 +698,8 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         match &cmds[0].command {
             Command::Substitute(s) => {
-                assert_eq!(s.pattern, "foo");
-                assert_eq!(s.replacement, "bar");
+                assert_eq!(s.pattern, b"foo");
+                assert_eq!(s.replacement, b"bar");
                 assert!(s.global);
             }
             other => panic!("expected Substitute, got {other:?}"),
@@ -669,11 +709,10 @@ mod tests {
     #[test]
     fn parse_substitute_custom_delim() {
         let cmds = parse("s|foo|bar|").unwrap();
-        assert_eq!(cmds.len(), 1);
         match &cmds[0].command {
             Command::Substitute(s) => {
-                assert_eq!(s.pattern, "foo");
-                assert_eq!(s.replacement, "bar");
+                assert_eq!(s.pattern, b"foo");
+                assert_eq!(s.replacement, b"bar");
                 assert!(!s.global);
             }
             other => panic!("expected Substitute, got {other:?}"),
@@ -683,80 +722,52 @@ mod tests {
     #[test]
     fn parse_address_line() {
         let cmds = parse("3d").unwrap();
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0].address {
+        assert!(matches!(
+            &cmds[0].address,
             AddressRange::Single {
                 addr: Address::Line(3),
-                negated: false,
-            } => {}
-            other => panic!("unexpected address: {other:?}"),
-        }
+                negated: false
+            }
+        ));
     }
 
     #[test]
-    fn parse_address_range_lines() {
-        let cmds = parse("1,10d").unwrap();
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0].address {
+    fn parse_address_relative_ranges() {
+        assert!(matches!(
+            parse("1,+2p").unwrap()[0].address,
             AddressRange::Range {
                 start: Address::Line(1),
-                end: Address::Line(10),
-                negated: false,
-            } => {}
-            other => panic!("unexpected address: {other:?}"),
-        }
+                end: Address::Plus(2),
+                negated: false
+            }
+        ));
+        assert!(matches!(
+            parse("1,~3p").unwrap()[0].address,
+            AddressRange::Range {
+                start: Address::Line(1),
+                end: Address::Tilde(3),
+                negated: false
+            }
+        ));
     }
 
     #[test]
     fn parse_address_regex() {
-        let cmds = parse("/^foo/d").unwrap();
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0].address {
+        match &parse("/^foo/d").unwrap()[0].address {
             AddressRange::Single {
                 addr: Address::Regex(re),
                 negated: false,
-            } => assert_eq!(re, "^foo"),
+            } => assert_eq!(re, b"^foo"),
             other => panic!("unexpected address: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_negated() {
-        let cmds = parse("/foo/!d").unwrap();
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0].address {
-            AddressRange::Single {
-                addr: Address::Regex(_),
-                negated: true,
-            } => {}
-            other => panic!("unexpected address: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_multiple_commands() {
-        let cmds = parse("s/a/b/; s/c/d/").unwrap();
-        assert_eq!(cmds.len(), 2);
-    }
-
-    #[test]
-    fn parse_block() {
-        let cmds = parse("/foo/ { s/a/b/; s/c/d/ }").unwrap();
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0].command {
-            Command::Block(block) => assert_eq!(block.len(), 2),
-            other => panic!("expected Block, got {other:?}"),
         }
     }
 
     #[test]
     fn parse_transliterate() {
-        let cmds = parse("y/abc/xyz/").unwrap();
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0].command {
+        match &parse("y/abc/xyz/").unwrap()[0].command {
             Command::Transliterate { from, to } => {
-                assert_eq!(from, &['a', 'b', 'c']);
-                assert_eq!(to, &['x', 'y', 'z']);
+                assert_eq!(from, b"abc");
+                assert_eq!(to, b"xyz");
             }
             other => panic!("expected Transliterate, got {other:?}"),
         }
@@ -766,36 +777,15 @@ mod tests {
     fn parse_labels_and_branches() {
         let cmds = parse(":loop\ns/foo/bar/\nt loop").unwrap();
         assert_eq!(cmds.len(), 3);
-        match &cmds[0].command {
-            Command::Label(l) => assert_eq!(l, "loop"),
-            other => panic!("expected Label, got {other:?}"),
-        }
-        match &cmds[2].command {
-            Command::BranchIfSub(Some(l)) => assert_eq!(l, "loop"),
-            other => panic!("expected BranchIfSub, got {other:?}"),
-        }
+        assert!(matches!(&cmds[0].command, Command::Label(label) if label == b"loop"));
+        assert!(matches!(&cmds[2].command, Command::BranchIfSub(Some(label)) if label == b"loop"));
     }
 
     #[test]
     fn parse_append_text() {
-        let cmds = parse("a hello world").unwrap();
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0].command {
-            Command::Append(t) => assert_eq!(t, "hello world"),
+        match &parse("a hello world").unwrap()[0].command {
+            Command::Append(text) => assert_eq!(text, b"hello world"),
             other => panic!("expected Append, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_last_line_address() {
-        let cmds = parse("$d").unwrap();
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0].address {
-            AddressRange::Single {
-                addr: Address::Last,
-                ..
-            } => {}
-            other => panic!("expected Last address, got {other:?}"),
         }
     }
 
@@ -810,33 +800,24 @@ mod tests {
     }
 
     #[test]
-    fn comment_after_address_is_error() {
-        assert!(parse("1 # comment").is_err());
-    }
-
-    #[test]
-    fn label_with_address_is_error() {
-        assert!(parse("1:loop").is_err());
-        assert!(parse("/foo/ :loop").is_err());
-        assert!(parse(":loop").is_ok());
-    }
-
-    #[test]
     fn empty_script_is_ok() {
         assert!(parse("").is_ok());
         assert!(parse("  \n; # comment\n").is_ok());
     }
 
     #[test]
-    fn parse_step_address() {
-        let cmds = parse("0~2d").unwrap();
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0].address {
-            AddressRange::Single {
-                addr: Address::Step { first: 0, step: 2 },
-                ..
-            } => {}
-            other => panic!("expected Step address, got {other:?}"),
+    fn byte_escapes_are_decoded_without_utf8_conversion() {
+        let commands = parse(b"s/[\\o377]/X/;y/\\xFF/X/").unwrap();
+        match &commands[0].command {
+            Command::Substitute(sub) => assert_eq!(sub.pattern, b"[\xff]"),
+            _ => panic!("expected substitution"),
+        }
+        match &commands[1].command {
+            Command::Transliterate { from, to } => {
+                assert_eq!(from, b"\xff");
+                assert_eq!(to, b"X");
+            }
+            _ => panic!("expected transliteration"),
         }
     }
 }

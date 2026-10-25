@@ -16,6 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive", "wrap_help"] }
+libc = "0.2"
 onig = { version = "6.5.3", default-features = false }
 tempfile = "3"
 thiserror = "2"

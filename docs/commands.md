@@ -91,11 +91,17 @@ For passive host context and targeted evidence, see [Vzik](vzik.md).
 
 ## Filters and paths
 
-`sed` preserves input bytes, including invalid UTF-8, in stream and in-place
-operation. In-place output is published only after successful input and output
-completion; `-i[SUFFIX]` accepts clustered options and byte-oriented backup
-suffixes. Script and missing-input errors exit with status 2; runtime stream or
-in-place I/O failures exit with status 4.
+`sed` preserves input and script bytes, including invalid UTF-8, in stream and
+in-place operation. `y` is byte-oriented in single-byte locales and
+character-oriented in UTF-8 locales; locale encoding comes from the active C
+library rather than the locale variable name (musl treats unknown locale names
+as UTF-8 when its resolver reports that encoding). In-place output is
+published only after successful input and output completion; `-i[SUFFIX]`
+accepts clustered options and byte-oriented backup suffixes. `w` targets are
+created and truncated once at startup, and `addr1,+N`/`addr1,~N` ranges are
+supported. In-place publication preserves ordinary and sticky mode bits but
+clears set-ID bits. Script and missing-input errors exit with status 2; runtime
+stream or in-place I/O failures exit with status 4.
 
 `awk` preserves bytes in records, string values and file operands. Its program
 source must be UTF-8. Record separators, field splitting, assignments between

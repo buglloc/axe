@@ -21,7 +21,7 @@ pub struct Options {
         value_name = "SCRIPT",
         allow_hyphen_values = true
     )]
-    pub expressions: Vec<String>,
+    pub expressions: Vec<OsString>,
 
     /// Add the contents of script-file to the commands to be executed
     #[arg(
@@ -64,10 +64,14 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn script_and_files(&self) -> crate::Result<(String, Vec<PathBuf>)> {
-        let mut scripts = self.expressions.clone();
+    pub fn script_and_files(&self) -> crate::Result<(Vec<u8>, Vec<PathBuf>)> {
+        let mut scripts = self
+            .expressions
+            .iter()
+            .map(|script| script.as_encoded_bytes().to_vec())
+            .collect::<Vec<_>>();
         for path in &self.script_files {
-            let content = std::fs::read_to_string(path).map_err(|error| {
+            let content = std::fs::read(path).map_err(|error| {
                 crate::Error::Parse(format!(
                     "couldn't read script file '{}': {error}",
                     path.display()
@@ -82,15 +86,22 @@ impl Options {
                     "no script provided. Usage: sed [OPTIONS] SCRIPT [FILE...]".into(),
                 ));
             };
-            let script = first
-                .to_str()
-                .ok_or_else(|| crate::Error::Parse("script is not valid UTF-8".into()))?;
-            Ok((script.to_owned(), rest.iter().map(PathBuf::from).collect()))
-        } else {
             Ok((
-                scripts.join("\n"),
-                self.args.iter().map(PathBuf::from).collect(),
+                first.as_encoded_bytes().to_vec(),
+                rest.iter().map(PathBuf::from).collect(),
             ))
+        } else {
+            let script = scripts
+                .into_iter()
+                .enumerate()
+                .fold(Vec::new(), |mut script, (index, part)| {
+                    if index != 0 {
+                        script.push(b'\n');
+                    }
+                    script.extend(part);
+                    script
+                });
+            Ok((script, self.args.iter().map(PathBuf::from).collect()))
         }
     }
 }

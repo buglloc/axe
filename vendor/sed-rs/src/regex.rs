@@ -1,3 +1,4 @@
+use std::ffi::CStr;
 use std::ops::Range;
 
 use onig::{
@@ -5,7 +6,7 @@ use onig::{
 };
 
 use crate::bre::translate_pattern;
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 struct RegexPair {
     first: Regex,
@@ -46,19 +47,45 @@ pub(crate) struct Matcher<'regex, 'input> {
     finished: bool,
 }
 
+/// Resolve the active character encoding through the C locale API.
+///
+/// Looking only at `LANG`/`LC_ALL` is wrong when a locale is unavailable: in
+/// that case `setlocale` leaves the process in the C locale. This also avoids
+/// guessing from locale names on musl, where locale support is deliberately
+/// smaller than glibc's database.
 pub(crate) fn utf8_locale() -> bool {
-    ["LC_ALL", "LC_CTYPE", "LANG"]
-        .iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .find(|value| !value.is_empty())
-        .is_some_and(|locale| {
-            let locale = locale.to_ascii_lowercase();
-            locale.contains("utf-8") || locale.contains("utf8")
-        })
+    #[cfg(unix)]
+    {
+        let locale = b"\0";
+        // SAFETY: both pointers refer to NUL-terminated static byte strings or
+        // memory owned by libc. `setlocale` and `nl_langinfo` are process-local
+        // C library queries; sed resolves this once before worker threads exist.
+        unsafe {
+            if libc::setlocale(libc::LC_CTYPE, locale.as_ptr().cast()).is_null() {
+                return false;
+            }
+            let codeset = libc::nl_langinfo(libc::CODESET);
+            if codeset.is_null() {
+                return false;
+            }
+            let codeset = CStr::from_ptr(codeset).to_bytes();
+            codeset.eq_ignore_ascii_case(b"UTF-8")
+                || codeset.eq_ignore_ascii_case(b"UTF8")
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 impl PosixRegex {
-    pub(crate) fn new(pattern: &str, extended: bool, ignore_case: bool) -> Result<Self> {
+    pub(crate) fn new(
+        pattern: &[u8],
+        extended: bool,
+        ignore_case: bool,
+        locale_utf8: bool,
+    ) -> Result<Self> {
         let translated = translate_pattern(pattern, extended);
         let mut syntax = *Syntax::gnu_regex();
         syntax.enable_operators(
@@ -73,12 +100,13 @@ impl PosixRegex {
         if ignore_case {
             options |= RegexOptions::REGEX_OPTION_IGNORECASE;
         }
+        // A malformed byte script remains usable in a UTF-8 process in byte
+        // mode. Valid scripts use the active locale's character semantics.
+        let use_utf8 = locale_utf8 && std::str::from_utf8(&translated).is_ok();
         let bytes = RegexPair::new(&translated, options, &syntax, false)?;
-        let utf8 = if utf8_locale() {
-            Some(RegexPair::new(&translated, options, &syntax, true)?)
-        } else {
-            None
-        };
+        let utf8 = use_utf8
+            .then(|| RegexPair::new(&translated, options, &syntax, true))
+            .transpose()?;
         Ok(Self { bytes, utf8 })
     }
 
@@ -106,16 +134,19 @@ impl PosixRegex {
 }
 
 impl RegexPair {
-    fn new(pattern: &str, options: RegexOptions, syntax: &Syntax, utf8: bool) -> Result<Self> {
-        let compile = |options| {
+    fn new(pattern: &[u8], options: RegexOptions, syntax: &Syntax, utf8: bool) -> Result<Self> {
+        let compile = |options| -> Result<Regex> {
             if utf8 {
-                Regex::with_options(pattern, options, syntax)
+                let pattern = std::str::from_utf8(pattern).map_err(|error| {
+                    Error::Parse(format!("UTF-8 regex script is invalid: {error}"))
+                })?;
+                Ok(Regex::with_options(pattern, options, syntax)?)
             } else {
-                Regex::with_options_and_encoding(
-                    EncodedBytes::ascii(pattern.as_bytes()),
+                Ok(Regex::with_options_and_encoding(
+                    EncodedBytes::ascii(pattern),
                     options,
                     syntax,
-                )
+                )?)
             }
         };
         Ok(Self {
@@ -146,13 +177,11 @@ impl Matcher<'_, '_> {
 
     fn search_options(&self, span: &Range<usize>) -> SearchOptions {
         let mut options = SearchOptions::SEARCH_OPTION_NONE;
-        // Oniguruma's buffer anchors also honor NOTBOL/NOTEOL. An invalid-byte
-        // boundary must not become a new beginning or end of the pattern space.
         if span.start != 0 {
-            options |= SearchOptions::SEARCH_OPTION_NOTBOL
+            options |= SearchOptions::SEARCH_OPTION_NOTBOL;
         }
         if span.end != self.input.len() {
-            options |= SearchOptions::SEARCH_OPTION_NOTEOL
+            options |= SearchOptions::SEARCH_OPTION_NOTEOL;
         }
         options
     }
@@ -160,7 +189,7 @@ impl Matcher<'_, '_> {
     fn find_start(&mut self, from: usize) -> Result<Option<usize>> {
         loop {
             if self.current.is_none() {
-                self.current = self.next_valid_span()
+                self.current = self.next_valid_span();
             }
             let Some(span) = &self.current else {
                 return Ok(None);
@@ -188,7 +217,7 @@ impl Matcher<'_, '_> {
         if self.utf8 {
             if let Some(span) = &self.current {
                 while next < span.end && self.input[next] & 0xc0 == 0x80 {
-                    next += 1
+                    next += 1;
                 }
             }
         }
@@ -199,15 +228,12 @@ impl Matcher<'_, '_> {
         let Some(start) = self.find_start(from)? else {
             return Ok(false);
         };
-        let span = self
-            .current
-            .as_ref()
-            .expect("a found match belongs to the current span");
+        let Some(span) = self.current.as_ref() else {
+            return Ok(false);
+        };
         let input = &self.input[span.clone()];
         captures.region.clear();
         captures.base = span.start;
-        // The longest pass is anchored at the earliest start. FIND_LONGEST is
-        // required at call time as well as compilation time by onig_match.
         let options = self.search_options(span)
             | SearchOptions::from_bits_retain(RegexOptions::REGEX_OPTION_FIND_LONGEST.bits());
         Ok(self
