@@ -1,8 +1,8 @@
 # uu_df patches
 
-Source: the `uu_df` 0.12.0 crate from uutils/coreutils, revision
-`dc1efd89948a9ca4c78c3a4b9a6ac891019a8c69`. The package's upstream provenance is
-retained in `.cargo_vcs_info.json` and `Cargo.toml.orig`.
+Source: the `uu_df` 0.12.0 crate from crates.io/uutils/coreutils, upstream
+revision `dc1efd89948a9ca4c78c3a4b9a6ac891019a8c69`. The package's upstream
+provenance is retained in `.cargo_vcs_info.json` and `Cargo.toml.orig`.
 
 - Backport [ea21b107e269928441bd111deacaaf68e18c5750](https://github.com/uutils/coreutils/commit/ea21b107e269928441bd111deacaaf68e18c5750):
   support `-m`, including `--output` and last-option-wins block-size selection.
@@ -14,6 +14,9 @@ retained in `.cargo_vcs_info.json` and `Cargo.toml.orig`.
   [uutils/coreutils#9883](https://github.com/uutils/coreutils/issues/9883).
 - Keep a standalone manifest without benchmarks or their development
   dependencies. The AXE workspace owns dependency resolution and `Cargo.lock`.
+  The upstream test module still references its omitted `tempfile` dev-dependency,
+  so standalone vendored tests do not compile; this is a packaging-only test
+  limitation, not an applet behavior change.
 
 The workspace patches uucore to the unmodified upstream `0.12.0` Git tag. Its
 build script embeds utility locales from `src/uu` in that checkout, including
