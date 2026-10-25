@@ -1,0 +1,37 @@
+.TP
+.B pgrep ssh
+Print PIDs of processes whose \fIcomm\fR contains "ssh" (so this
+matches \fBssh\fR, \fBsshd\fR, \fBssh\-agent\fR, etc.).
+.TP
+.B pgrep \-x ssh
+Match exactly "ssh" — \fBsshd\fR and \fBssh\-agent\fR are excluded.
+.TP
+.B pgrep \-f 'python3 .*manage\\.py'
+Match the full command line. Useful when you need to distinguish
+several processes with the same short name.
+.TP
+.B pgrep \-U 1000
+Match every process owned by real UID 1000. With no pattern, the
+filter alone selects the result set.
+.TP
+.B pgrep \-l \-U 1000
+Same as above but also print the process name on each line.
+.TP
+.B pgrep \-c \-U 1000
+Print just the count of matching processes.
+.TP
+.B pgrep \-P 1
+Match every process whose parent is PID 1 (typically systemd or
+init).
+.TP
+.B pgrep \-d , \-x bash
+Match all \fBbash\fR processes and print their PIDs comma-separated
+on one line, suitable for splicing into another command.
+.TP
+.B kill $(pgrep \-x my\-daemon)
+The traditional pgrep-pipe-kill idiom. Prefer \fBpkill\fR(1) for the
+same effect with one command and atomic-ish semantics.
+.TP
+.B pgrep \-r D
+Match processes currently in uninterruptible sleep (state \fBD\fR) —
+typically blocked on disk I/O.

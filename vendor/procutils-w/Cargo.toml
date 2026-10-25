@@ -1,0 +1,22 @@
+# Vendored from procutils-w 0.2.0; see .cargo_vcs_info.json for upstream provenance.
+# AXE changes: missing utmp is an empty session table; -h suppresses both headings.
+[package]
+name = "procutils-w"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.88.0"
+authors = ["Patrick Elsen <pelsen@xfbs.net>"]
+description = "Show who is logged on and what they are doing"
+homepage = "https://rustutils.gitlab.io/procutils"
+repository = "https://gitlab.com/rustutils/procutils"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4", features = ["derive", "wrap_help"] }
+procfs = "0.18"
+procutils-common = "0.2.0"
+
+[[bin]]
+name = "w"
+path = "src/main.rs"

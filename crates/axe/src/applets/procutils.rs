@@ -146,7 +146,40 @@ fn run_uutil(
 }
 
 fn parse_and_run<A: Parser>(args: Vec<OsString>, run: fn(A) -> ExitCode) -> i32 {
-    let args = match A::try_parse_from(args) {
+    let mut command = A::command();
+    let usage_status = match command.get_name() {
+        "pgrep" | "pkill" | "sysctl" => 2,
+        _ => 1,
+    };
+    let runtime_error_status = if command.get_name() == "killall" {
+        2
+    } else {
+        usage_status
+    };
+    let preserve_pmap_status = command.get_name() == "pmap";
+    let compatibility = match command.get_name() {
+        "top" => Some(
+            "Compatibility: process-only view. Thread mode (-H) and command-line sort (-o) \
+             are not implemented. Interactive P/M/N/T sorting is available.",
+        ),
+        "hugetop" => Some(
+            "Compatibility: AXE hugepage monitor, not the procps-ng hugetop CLI. \
+             -b and -n COUNT select batch snapshots; -n is not the procps NUMA flag. \
+             Per-NUMA, -o/--once and -H/--human are not supported.",
+        ),
+        "tload" => Some(
+            "Compatibility: draws on the current terminal only. \
+             The optional tty pathname operand is not supported.",
+        ),
+        _ => None,
+    };
+    if let Some(compatibility) = compatibility {
+        command = command.after_help(compatibility);
+    }
+    let args = match command
+        .try_get_matches_from_mut(args)
+        .and_then(|matches| A::from_arg_matches(&matches))
+    {
         Ok(args) => args,
         Err(error) => {
             let code = if matches!(
@@ -155,7 +188,7 @@ fn parse_and_run<A: Parser>(args: Vec<OsString>, run: fn(A) -> ExitCode) -> i32 
             ) {
                 0
             } else {
-                2
+                usage_status
             };
             let _ = error.print();
             return code;
@@ -165,8 +198,10 @@ fn parse_and_run<A: Parser>(args: Vec<OsString>, run: fn(A) -> ExitCode) -> i32 
     let status = run(args);
     if status == ExitCode::SUCCESS {
         0
+    } else if preserve_pmap_status && status == ExitCode::from(42) {
+        42
     } else if status == ExitCode::from(2) {
-        2
+        runtime_error_status
     } else if status == ExitCode::from(3) {
         3
     } else {

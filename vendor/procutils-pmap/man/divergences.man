@@ -1,0 +1,14 @@
+.PP
+\fBpmap\fR matches procps-ng's behaviour on the supported flag set —
+default, device (\fB\-d\fR), and extended (\fB\-x\fR) formats; their
+quiet (\fB\-q\fR) variants; and the multi-PID layout. Some procps-ng
+features are not yet implemented:
+.IP \(bu 2
+\fB\-X\fR / \fB\-XX\fR — "extra extended" formats that surface
+arbitrary \fIsmaps\fR fields as columns. The plain \fB\-x\fR format
+covers the common Kbytes/RSS/Dirty case.
+.IP \(bu 2
+\fB\-c\fR / \fB\-C\fR / \fB\-n\fR / \fB\-N\fR — alternate config-file
+selection flags. \fBpmap\fR does not consult a config file.
+.PP
+Error messages for invalid arguments use different wording.

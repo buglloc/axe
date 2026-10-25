@@ -1,0 +1,31 @@
+.SS Execution model
+.PP
+Without \fB\-x\fR, \fBwatch\fR concatenates its trailing arguments
+into a single string and passes them to \fBsh \-c\fR. This is what
+makes shell features (pipes, redirection, globs) work, but it also
+means quoting matters — arguments containing spaces are reflowed.
+With \fB\-x\fR the command is \fBexecvp\fRed directly, with each
+trailing argument passed verbatim and no shell involvement.
+.SS Exit status
+.PP
+\fBwatch\fR exits with status \fB0\fR after \fBq\fR, Ctrl+C,
+\fB\-\-chgexit\fR or \fB\-\-equexit\fR. After a command error,
+\fB\-\-errexit\fR freezes the display until any single key is pressed,
+then exits with status \fB1\fR. A newline is not required.
+.PP
+Keyboard exit and \fBSIGINT\fR, \fBSIGTERM\fR, or \fBSIGHUP\fR
+interrupt a running command and reap it after terminating its process
+group. Terminal input modes and line wrapping are restored before
+returning. These three signals exit with status 0, matching procps-ng.
+.SS Scheduling
+.PP
+By default, the interval starts after a command finishes.
+\fB\-\-precise\fR includes the command's running time in the interval.
+.SS Current behavioural caveats
+.PP
+\fB\-\-color\fR and \fB\-\-no\-color\fR currently affect line
+truncation behaviour under \fB\-\-no\-wrap\fR but do not interpret or
+strip ANSI escape sequences themselves; whatever escape codes the
+command emits will reach the terminal as-is. If your command's output
+should be presented colour-stripped, pipe it through \fBsed\fR or
+\fBansifilter\fR(1) first.

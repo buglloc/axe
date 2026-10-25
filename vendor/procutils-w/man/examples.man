@@ -1,0 +1,30 @@
+.TP
+.B w
+Default view: every logged-in user, full column set.
+.TP
+.B w \-s
+Short view: \fIUSER\fR \fITTY\fR \fIIDLE\fR \fIWHAT\fR only. Useful
+on narrow terminals.
+.TP
+.B w alice
+Show only sessions belonging to user \fIalice\fR.
+.TP
+.B w \-f
+Add the \fIFROM\fR column to see where each session was opened from
+(SSH host, display, or local seat).
+.TP
+.B w \-fi
+Same as \fB\-f\fR but show IP addresses instead of resolved
+hostnames in the \fIFROM\fR column. Faster on hosts where reverse
+DNS is slow.
+.TP
+.B w \-p
+Show the login PID and the foreground PID side by side in the
+\fIWHAT\fR column, in the form \fIloginpid\fR\fB/\fR\fIwhatpid\fR.
+.TP
+.B w \-h | wc \-l
+Count active sessions without the header noise.
+.TP
+.B w \-o
+Old-style output: idle times below one minute show as a blank cell.
+Useful when sub-minute precision is just visual clutter.

@@ -1,0 +1,24 @@
+\fBpmap\fR prints the memory map of one or more running processes —
+the address ranges they have mapped, the size and permissions of
+each region, and what file (if any) backs it. The data is read from
+\fI/proc/[pid]/maps\fR (default and \fB\-d\fR modes) and from
+\fI/proc/[pid]/smaps\fR (extended mode \fB\-x\fR); see
+\fBproc_pid_maps\fR(5) and \fBproc_pid_smaps\fR(5).
+.PP
+Three output formats are available, mutually exclusive:
+.IP \(bu 2
+\fBdefault\fR — address, size, mode, mapping (one mapping per line).
+.IP \(bu 2
+\fB\-x\fR / \fB\-\-extended\fR — adds resident set size (RSS) and
+dirty-page counts per mapping. Requires \fI/proc/[pid]/smaps\fR,
+which is more expensive for the kernel to produce than the default
+\fImaps\fR file.
+.IP \(bu 2
+\fB\-d\fR / \fB\-\-device\fR — adds the file offset and the
+\fImajor\fR\fB:\fR\fIminor\fR device number for each mapping, useful
+for pinning a mapping to a specific block device or filesystem.
+.PP
+A header line with the PID and the process command line is printed
+before each process's map; \fB\-q\fR suppresses the header and the
+summary footer. \fB\-p\fR shows the full path to backing files
+rather than just the basename.

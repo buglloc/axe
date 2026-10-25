@@ -1,0 +1,26 @@
+.TP
+.B pmap 1234
+Default view: map of process 1234.
+.TP
+.B pmap \-x 1234
+Extended view with RSS and dirty-page counts. Useful when you want
+to know which mappings are actually paying for physical memory, not
+just reserving virtual address space.
+.TP
+.B pmap \-d 1234
+Device view: shows the file offset and \fImajor\fR\fB:\fR\fIminor\fR
+device for each mapping.
+.TP
+.B pmap \-p \-x 1234
+Extended view with full paths in the Mapping column. Without
+\fB\-p\fR, only basenames are shown.
+.TP
+.B pmap \-q $(pgrep \-x my\-daemon)
+Print the maps of every process named \fImy\-daemon\fR, with no
+per-process header or footer. The \fB\-q\fR flag plus the
+\fBpgrep\fR(1) substitution make this suitable for piping into
+\fBgrep\fR or other filters.
+.TP
+.B pmap \-x 1234 5678 | sort \-rnk2
+Sort the mappings by size (the \fIKbytes\fR column) to find the
+largest ones across two processes.

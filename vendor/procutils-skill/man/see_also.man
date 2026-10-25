@@ -1,0 +1,2 @@
+\fBpkill\fR(1), \fBkill\fR(1), \fBsnice\fR(1), \fBkill\fR(2),
+\fBsignal\fR(7)

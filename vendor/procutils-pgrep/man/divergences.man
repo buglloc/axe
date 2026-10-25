@@ -1,0 +1,5 @@
+.PP
+\fBpgrep\fR matches procps-ng's behaviour on the supported flag set —
+filter logic, regex semantics, exit codes, output format.
+.PP
+Error messages for invalid arguments use different wording.

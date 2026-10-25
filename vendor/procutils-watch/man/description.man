@@ -1,0 +1,18 @@
+\fBwatch\fR runs a command repeatedly at a fixed interval, displaying
+its output full-screen so you can spot changes as they happen. By
+default the interval is 2 seconds; the command is passed to \fBsh
+\-c\fR for evaluation, so shell metacharacters (pipes, redirections,
+globs, variable expansion) work as expected.
+.PP
+The header line shows \fIEvery Ns: command\fR on the left and the
+current local time on the right; output starts on the next line and
+is truncated to the terminal's height. With \fB\-t\fR the header is
+suppressed and the full terminal is given to the command's output.
+.PP
+Press \fBq\fR to quit immediately. Automatic exit conditions are:
+\fB\-e\fR (\fB\-\-errexit\fR) freezes the display and waits for a
+keypress when the command returns non-zero, \fB\-g\fR
+(\fB\-\-chgexit\fR) exits the moment the command's output differs
+from the previous iteration, and \fB\-q\fR \fIN\fR
+(\fB\-\-equexit\fR \fIN\fR) exits when the output is unchanged for
+\fIN\fR consecutive iterations.

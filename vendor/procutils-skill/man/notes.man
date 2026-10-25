@@ -1,0 +1,43 @@
+.SS Why this tool is obsolete
+.PP
+\fBskill\fR was deprecated in upstream procps-ng in favour of
+\fBpkill\fR(1), which offers regex matching against \fIcomm\fR or
+the full command line, richer filters (parent PID, process group,
+real vs. effective UID, run state, age), inverse matching
+(\fB\-v\fR), and exact matching (\fB\-x\fR). The same use cases
+expressed in \fBskill\fR's filter-only syntax (\fB\-c\fR, \fB\-u\fR,
+\fB\-t\fR, \fB\-p\fR) are all expressible in \fBpkill\fR with
+clearer semantics.
+.PP
+The tool is shipped here for shell-script compatibility; new
+scripts should prefer \fBpkill\fR(1) or \fBkill\fR(1) directly.
+.SS Signal flag placement
+.PP
+The short signal form (\fB\-\fR\fISIG\fR) and the long form
+(\fB\-\-signal\fR \fISIG\fR) are interchangeable. The short form may
+appear at any position; \fBskill \-v \-KILL bash\fR is valid.
+At most one signal flag is honoured per invocation: if multiple
+appear, only the first is used and the others are treated as
+unknown options.
+.PP
+Bare PIDs that begin with a hyphen — for example \fB\-1234\fR to
+mean "process group 1234" in \fBkill\fR(1)'s convention — are not
+accepted here; use \fB\-p\fR \fI1234\fR or invoke \fBkill\fR(1)
+directly.
+.PP
+\fB\-0\fR and \fB\-\-signal 0\fR probe whether each selected process
+exists and may be signalled, without delivering a signal.
+.SS Permissions
+.PP
+\fBskill\fR uses the \fBkill\fR(2) system call. The same rules apply
+as for \fBkill\fR(1) and \fBpkill\fR(1): an unprivileged caller may
+only signal processes whose real or saved set-user-ID matches its
+own, except for \fBSIGCONT\fR (same-session is sufficient).
+Privileged callers have \fBCAP_KILL\fR in the target's user
+namespace.
+.SS Real-time signals
+.PP
+\fB\-l\fR and \fB\-L\fR currently enumerate only the standard
+1..31 signals; the real-time range (\fBSIGRTMIN\fR..\fBSIGRTMAX\fR
+described in \fBsignal\fR(7)) is not listed. They can still be sent
+by number via \fB\-\-signal 34\fR or as a leading \fB\-34\fR.

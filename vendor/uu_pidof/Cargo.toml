@@ -1,0 +1,26 @@
+# Vendored from uutils/procps d318892db47de95ed181aab4270dd9b4a1130c43, src/uu/pidof.
+# AXE changes: executable/argv pathname matching without flattening argument boundaries.
+[package]
+name = "uu_pidof"
+version = "0.0.1"
+edition = "2021"
+authors = ["uutils developers"]
+description = "pidof ~ (uutils) Find the process ID of a running program"
+repository = "https://github.com/uutils/procps/tree/main/src/uu/pidof"
+homepage = "https://github.com/uutils/procps"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4.5.4", features = ["wrap_help", "cargo", "env"] }
+uucore = "=0.7.0"
+uu_pgrep = { git = "https://github.com/uutils/procps", rev = "d318892db47de95ed181aab4270dd9b4a1130c43" }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.2", features = ["fs", "process", "param"] }
+
+[lib]
+path = "src/pidof.rs"
+
+[[bin]]
+name = "pidof"
+path = "src/main.rs"

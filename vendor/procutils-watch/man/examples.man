@@ -1,0 +1,33 @@
+.TP
+.B watch ls
+Refresh a directory listing every two seconds.
+.TP
+.B watch \-n 0.5 free \-h
+Watch memory usage twice per second. \fB\-n\fR accepts fractional
+seconds.
+.TP
+.B watch \-t uptime
+Watch the system's load average without the header line, so the
+single line of output centers nicely.
+.TP
+.B watch 'ls \-la /tmp/incoming | wc \-l'
+Pipe and redirection work because the default execution path is
+\fBsh \-c\fR. Quote the whole command to keep it together.
+.TP
+.B watch \-g 'ls /var/spool/jobs'
+Exit as soon as the directory contents change. Useful for waiting
+on a file to appear or disappear.
+.TP
+.B watch \-q 5 systemctl is\-active foo.service
+Exit successfully once the command's output has been stable for five
+consecutive iterations.
+.TP
+.B watch \-e ./flaky\-script
+Freeze on error: as soon as the script returns non-zero, the display
+stops updating and \fBwatch\fR waits for any single keypress before
+exiting with status 1. Add \fB\-b\fR to beep.
+.TP
+.B watch \-x \-\- env \-i HOME=/root my\-tool \-\-flag
+Skip the shell entirely with \fB\-x\fR; \fBwatch\fR \fBexec\fRs the
+command directly. The \fB\-\-\fR separator prevents \fB\-\-flag\fR
+from being parsed by \fBwatch\fR itself.

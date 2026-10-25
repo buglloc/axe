@@ -1,0 +1,36 @@
+.TP
+.B vmstat
+Print one line of since-boot averages and exit. Useful as a quick
+"how's this machine doing" snapshot.
+.TP
+.B vmstat 1
+Sample once per second, forever, until interrupted with Ctrl+C.
+.TP
+.B vmstat 1 5
+Sample once per second for five iterations, then exit.
+.TP
+.B vmstat 5 \-y
+Sample every five seconds, omitting the misleading first since-boot
+line. Recommended when you want only "current activity".
+.TP
+.B vmstat \-a 1
+Use the active/inactive memory display rather than buffers/cache.
+.TP
+.B vmstat \-S M
+Show memory columns in mebibytes (1024² bytes). \fB\-S m\fR uses
+decimal megabytes.
+.TP
+.B vmstat \-d 1
+Per-disk I/O activity, refreshed every second.
+.TP
+.B vmstat \-s
+Memory and event-counter dump: roughly equivalent to a labelled view
+of \fI/proc/meminfo\fR, \fI/proc/stat\fR and \fI/proc/vmstat\fR
+relevant lines combined.
+.TP
+.B vmstat \-f
+Total processes forked since boot, on a single line.
+.TP
+.B vmstat \-t 2
+Append a wall-clock timestamp to each sample line. Useful when
+piping output to a log.

@@ -1,0 +1,39 @@
+.SS Session count vs. logind
+.PP
+The user count in the header is the number of \fBUSER_PROCESS\fR
+entries in \fI/var/run/utmp\fR. As \fButmp\fR(5) notes, "there may
+be more users currently using the system, because not all programs
+use utmp logging" — so the count can disagree with \fBloginctl
+list\-sessions\fR on systemd hosts in either direction. Stale tmux
+or screen ptys inflate it; session managers that bypass utmp deflate
+it. \fBprocps-ng\fR's \fBw\fR resolves this by linking against
+\fBlibsystemd\fR; \fBprocutils\fR currently reads only utmp.
+.PP
+A missing \fI/var/run/utmp\fR is an empty session table, not a read
+error. Other read failures remain errors. With \fB\-h\fR, both the
+uptime summary and column headings are suppressed.
+.SS Column layout
+.PP
+Default USER and TTY fields are eight columns; TTY names are limited
+to eight characters. The optional FROM field defaults to sixteen
+columns. LOGIN@ occupies eight columns; IDLE, JCPU, and PCPU each
+occupy seven. \fB\-s\fR omits LOGIN@, JCPU, and PCPU without changing
+the remaining column layout.
+.SS Foreground process detection
+.PP
+Without \fB\-u\fR, \fBw\fR identifies each session's foreground
+process by walking \fI/proc\fR for processes whose \fItty_nr\fR
+matches the session's controlling terminal and picking the one
+matching the terminal's \fItpgid\fR. This is best-effort: in
+unusual configurations (multiplexers, processes that detach from
+their controlling tty, very short-lived foreground processes) the
+chosen process may not be the one a user would name. Pass \fB\-u\fR
+to fall back to the utmp entry's own login PID.
+.SS Idle time
+.PP
+\fIIDLE\fR is computed from the modification time of the session's
+tty device file (\fI/dev/<TTY>\fR). It reflects when the device was
+last written to (typically when the user typed something), not when
+the foreground process last did anything. A session running a
+long-lived process that never reads stdin still shows growing idle
+time.

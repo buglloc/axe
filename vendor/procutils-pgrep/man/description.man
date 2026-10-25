@@ -1,0 +1,21 @@
+\fBpgrep\fR scans the running processes and prints the PIDs of those
+that match \fIpattern\fR or the supplied filter criteria. By default,
+the pattern is matched against the kernel's short \fIcomm\fR name for
+each process (see \fI/proc/[pid]/comm\fR in \fBproc_pid_comm\fR(5));
+with \fB\-f\fR, it is matched against the full command line as
+recorded in \fI/proc/[pid]/cmdline\fR.
+.PP
+Filter flags select processes by parent PID (\fB\-P\fR), process group
+(\fB\-g\fR), session (\fB\-s\fR), real or effective user (\fB\-U\fR
+/ \fB\-u\fR), real group (\fB\-G\fR), controlling terminal
+(\fB\-t\fR), or run state (\fB\-r\fR). Filters and a pattern can be
+combined; a process must satisfy every constraint to match. \fB\-v\fR
+inverts the match. \fB\-x\fR requires an exact match against the
+whole \fIcomm\fR (or full command line under \fB\-f\fR) rather than
+treating the pattern as a substring search.
+.PP
+With no flags, output is one PID per line, sorted ascending by PID.
+\fB\-d\fR changes the delimiter, \fB\-l\fR appends the process name
+to each line, \fB\-a\fR appends the full command line, and \fB\-c\fR
+suppresses the listing in favour of a single count. No matches produce
+\fB0\fR followed by a newline and exit status 1.

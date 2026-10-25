@@ -1,0 +1,2 @@
+\fBwho\fR(1), \fBuptime\fR(1), \fBps\fR(1), \fBtop\fR(1),
+\fButmp\fR(5), \fBproc_pid_stat\fR(5)

@@ -1,0 +1,23 @@
+.PP
+The \fIUSED\fR column is \fBMemTotal\fR minus \fBMemAvailable\fR.
+On kernels without \fBMemAvailable\fR, it falls back to total minus
+free, buffers, and cache.
+.PP
+\fICACHE\fR includes \fBSReclaimable\fR (slab pages the kernel can
+reclaim under memory pressure), in addition to the usual page cache.
+Without this addition the \fICACHE\fR column would understate
+reclaimable memory on systems with large dentry / inode caches.
+.PP
+Unit flags fall into two families:
+.IP \(bu 2
+\fB\-\-kilo\fR, \fB\-\-mega\fR, \fB\-\-giga\fR, \fB\-\-tera\fR,
+\fB\-\-peta\fR use SI decimal units (powers of 1000).
+.IP \(bu 2
+\fB\-k\fR, \fB\-m\fR, \fB\-g\fR, \fB\-\-tebi\fR, \fB\-\-pebi\fR use
+binary units (powers of 1024).
+.PP
+With \fB\-h\fR (human-readable), \fB\-\-si\fR switches between the two.
+.PP
+Human-readable values use the first unit whose rounded one-decimal or
+truncated integer representation fits three numeric columns. Thus
+1000 KiB is displayed as \fB1.0Mi\fR, rather than \fB1000Ki\fR.

@@ -1,0 +1,40 @@
+.TP
+.B USER
+Login name from the utmp entry.
+.TP
+.B TTY
+Controlling terminal of the session (\fItty2\fR, \fIpts/0\fR,
+\fIseat0\fR for desktop seat managers, etc.).
+.TP
+.B FROM
+(\fB\-f\fR only) Where the session was initiated from: remote
+hostname or IP address for SSH connections, the display name for
+graphical sessions, "login screen" for the GDM/SDDM greeter slot.
+With \fB\-i\fR, hostnames are replaced by IP addresses verbatim.
+.TP
+.B LOGIN@
+Time the user logged in. Same-day logins are shown as
+\fIHH:MM\fR; older logins use a short weekday format like
+\fITue11\fR. Omitted under \fB\-s\fR.
+.TP
+.B IDLE
+Time since the controlling terminal was last active. Formats vary by
+magnitude: seconds (\fI29.00s\fR), minutes (\fI1:51m\fR), hours
+(\fI17:51m\fR), days (\fI4days\fR), or \fB?\fR if the tty's idle time
+cannot be read. With \fB\-o\fR, idle times below one minute are
+shown as a blank cell instead of seconds.
+.TP
+.B JCPU
+"Job CPU" — total CPU time consumed by every process attached to
+this session's tty, summed across active and ended children.
+Omitted under \fB\-s\fR.
+.TP
+.B PCPU
+"Process CPU" — CPU time consumed by the current foreground process
+on this session. With \fB\-u\fR, this is the login process itself.
+Omitted under \fB\-s\fR.
+.TP
+.B WHAT
+The command line of the session's foreground process. With \fB\-u\fR,
+the login process's command line. With \fB\-p\fR, the values are
+prefixed with \fIloginpid\fR\fB/\fR\fIwhatpid\fR.

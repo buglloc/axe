@@ -1,0 +1,55 @@
+.SS Data sources
+.PP
+\fBvmstat\fR reads from several procfs files (see \fBproc\fR(5)):
+.IP \(bu 2
+\fI/proc/stat\fR — CPU times, total interrupts, context switches,
+fork count
+.IP \(bu 2
+\fI/proc/meminfo\fR — memory and swap totals
+.IP \(bu 2
+\fI/proc/vmstat\fR — paging and swapping rates
+.IP \(bu 2
+\fI/proc/diskstats\fR — per-device I/O counters (\fB\-d\fR / \fB\-D\fR)
+.IP \(bu 2
+\fI/proc/slabinfo\fR — slab allocator state (\fB\-m\fR; root-only,
+gated by the kernel)
+.SS The first line is misleading
+.PP
+The first line of any continuous \fBvmstat\fR run reports averages
+\fIsince system boot\fR, not over the most recent interval. On a
+machine that has been up for weeks, it bears no useful relation to
+"what's happening right now". Use \fB\-y\fR to omit it; the
+subsequent lines are the per-interval values you actually want.
+.SS BI / BO units
+.PP
+\fIBI\fR and \fIBO\fR are computed as the per-interval rate of the
+kernel's \fBpgpgin\fR / \fBpgpgout\fR counters from
+\fI/proc/vmstat\fR. Those counter units are not specified in
+\fBproc_vmstat\fR(5) ("Details can be found by consulting the kernel
+source code"); the column is documented here as "as the kernel
+reports them" rather than tied to a specific block size, and
+\fB\-S\fR's unit selection does not apply.
+.SS Memory and swap units
+.PP
+\fB\-S\fR selects the unit for memory quantities and \fBSI\fR/\fBSO\fR.
+Swap counters in \fI/proc/vmstat\fR count pages; rates are multiplied
+by the system page size before conversion to the selected unit.
+.SS Wide mode
+.PP
+\fB\-w\fR expands the memory columns to twelve characters and the
+process columns to four. Widths are minimums; larger values remain
+visible rather than being truncated.
+.SS Report fields
+.PP
+Numeric values in \fB\-s\fR reports are right-aligned in a minimum of
+13 columns. Page-allocation counts for dma, dma32, high, movable,
+normal, and pages freed remain page counts regardless of \fB\-S\fR;
+a zone counter absent from the kernel is zero.
+.PP
+Rows recover padding from later columns after an earlier value
+overflows its minimum width, without truncating any counter.
+.SS Context switch rate
+.PP
+The first \fBcs\fR value is total context switches divided by uptime;
+later values use interval deltas. The procps-ng 4.0.7 first-row
+calculation using accumulated CPU ticks as divisor is not reproduced.

@@ -1,0 +1,31 @@
+.TP
+.B skill \-KILL \-c bash
+Send \fBKILL\fR to every process whose command name is exactly
+\fBbash\fR. \fB\-KILL\fR and \fB\-\-signal KILL\fR are equivalent
+forms.
+.TP
+.B skill \-\-signal HUP \-u alice
+Send \fBHUP\fR to every process owned by user \fIalice\fR. Common
+idiom for asking a daemon to reload its config.
+.TP
+.B skill \-9 \-t pts/3
+\fBKILL\fR every process attached to the pseudo-terminal
+\fI/dev/pts/3\fR. Hopefully not the one you are on.
+.TP
+.B skill \-n \-c sshd
+No-op: print PIDs that \fIwould\fR be signalled, but don't actually
+signal them. Useful as a dry run before committing to the real
+invocation.
+.TP
+.B skill \-\-signal TERM \-p 1234 \-p 5678
+Equivalent to \fBkill 1234 5678\fR — \fBskill\fR has no advantage
+when targeting raw PIDs, but the flag-driven form is occasionally
+useful in scripts where the PID list is built incrementally.
+.TP
+.B skill \-l
+Print every supported signal name on a single line. Same output as
+\fBkill \-l\fR.
+.TP
+.B skill \-L
+Print the full signal table as eight columns of \fInumber name\fR
+pairs.

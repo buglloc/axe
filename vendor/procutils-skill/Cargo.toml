@@ -1,0 +1,22 @@
+# Vendored from procutils-skill 0.2.0; see .cargo_vcs_info.json for upstream provenance.
+# AXE changes: signal zero performs a process-existence/permission probe.
+[package]
+name = "procutils-skill"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.88.0"
+authors = ["Patrick Elsen <pelsen@xfbs.net>"]
+description = "Send a signal to processes selected by user, tty, pid, or command"
+homepage = "https://rustutils.gitlab.io/procutils"
+repository = "https://gitlab.com/rustutils/procutils"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "wrap_help"] }
+libc = "0.2"
+procutils-common = "0.2.0"
+regex = "1"
+
+[[bin]]
+name = "skill"
+path = "src/main.rs"

@@ -1,0 +1,46 @@
+.PP
+The process table contains the following columns:
+.TP
+.B PID
+Process ID, as listed under /proc.
+.TP
+.B USER
+Effective user name, resolved from /etc/passwd; falls back to the
+numeric uid if the user is not known. A trailing \fB+\fR marks a name
+truncated to the eight-character USER field.
+.TP
+.B PR
+Scheduling priority. "rt" indicates a real-time priority.
+.TP
+.B NI
+Nice value. Higher values lower the process's scheduling priority.
+.TP
+.B VIRT
+Virtual memory size of the process. Batch output keeps KiB integers
+that fit their fields: seven columns for VIRT, six for RES and SHR.
+Larger values use binary \fBm\fR/\fBg\fR/\fBt\fR/\fBp\fR suffixes
+with one decimal place.
+.TP
+.B RES
+Resident set size — non-swapped physical memory in use.
+.TP
+.B SHR
+Resident shared memory.
+.TP
+.B S
+Process state: \fBR\fR (running), \fBS\fR (sleeping), \fBD\fR
+(uninterruptible), \fBT\fR (stopped), \fBZ\fR (zombie), or \fBI\fR
+(idle).
+.TP
+.B %CPU
+Cumulative CPU usage since the process started, expressed as a
+percentage of one CPU's wall-clock time.
+.TP
+.B %MEM
+Resident set size as a percentage of total physical memory.
+.TP
+.B TIME+
+Total CPU time consumed by the process, in MM:SS.cc format.
+.TP
+.B COMMAND
+Command name (default) or full command line (toggle with \fBc\fR).

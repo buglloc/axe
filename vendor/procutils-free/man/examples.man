@@ -1,0 +1,30 @@
+.TP
+.B free
+Print one report in kibibytes (the default unit) and exit.
+.TP
+.B free \-h
+Use human-readable units (Ki, Mi, Gi, …). Combine with \fB\-\-si\fR to
+use SI suffixes (K, M, G, …) and powers of 1000.
+.TP
+.B free \-m
+Display values in mebibytes. \fB\-\-mega\fR uses powers of 1000 instead
+(megabytes).
+.TP
+.B free \-s 1
+Refresh once per second until interrupted. Combine with \fB\-c N\fR to
+repeat exactly \fIN\fR times.
+.TP
+.B free \-w
+Wide mode: split the \fIBUFF/CACHE\fR column into separate \fIbuffers\fR
+and \fIcache\fR columns.
+.TP
+.B free \-L
+Single-line output with labelled \fBSwapUse\fR, \fBCachUse\fR,
+\fBMemUse\fR, and \fBMemFree\fR values.
+.TP
+.B free \-t
+Add a Total row summing physical memory and swap.
+.TP
+.B free \-v
+Append a Comm row showing the kernel's commit limit and currently
+committed memory (\fBCommitLimit\fR and \fBCommitted_AS\fR).

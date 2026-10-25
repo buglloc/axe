@@ -1,0 +1,2 @@
+\fBps\fR(1), \fBtop\fR(1), \fBproc_pid_maps\fR(5),
+\fBproc_pid_smaps\fR(5), \fBproc\fR(5), \fBptrace\fR(2)

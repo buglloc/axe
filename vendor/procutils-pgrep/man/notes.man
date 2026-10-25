@@ -1,0 +1,41 @@
+.SS The 16-character comm limit
+.PP
+Without \fB\-f\fR, \fBpgrep\fR matches against \fIcomm\fR, which the
+Linux kernel truncates to \fBTASK_COMM_LEN\fR (16) characters
+including the terminating NUL — see \fBproc_pid_comm\fR(5). A process
+launched as \fB./my\-very\-long\-program\fR therefore has \fIcomm\fR
+\fBmy\-very\-long\-pr\fR, and \fBpgrep my\-very\-long\-program\fR
+will not match it. Use \fB\-f\fR to match against the full command
+line in such cases.
+.SS Regex flavour
+.PP
+The pattern is a Rust \fBregex\fR-crate expression, which is broadly
+compatible with POSIX extended regular expressions but is not
+identical. Notable differences:
+.IP \(bu 2
+Backreferences (\fB\\1\fR, \fB\\2\fR, ...) are not supported.
+.IP \(bu 2
+The pattern is treated as an unanchored substring match by default;
+use \fB^\fR / \fB$\fR to anchor it explicitly, or pass \fB\-x\fR for
+a whole-string match.
+.IP \(bu 2
+Character classes such as \fB\\d\fR, \fB\\w\fR, \fB\\s\fR are
+recognised in addition to POSIX classes like \fB[[:alpha:]]\fR.
+.PP
+\fB\-i\fR enables case-insensitive matching for the pattern only;
+filter values (user names, terminals, etc.) are always matched
+literally.
+.SS Exit status
+.PP
+\fBpgrep\fR exits with:
+.IP \(bu 2
+\fB0\fR — at least one process matched.
+.IP \(bu 2
+\fB1\fR — no processes matched.
+.IP \(bu 2
+\fB2\fR — invalid invocation (typically: no \fIpattern\fR and no
+filter flags supplied).
+.PP
+Output, when produced, is sorted ascending by PID. This is stable
+across multiple invocations of \fBpgrep\fR against the same set of
+processes.

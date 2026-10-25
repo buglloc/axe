@@ -1,0 +1,13 @@
+.TP
+.B top \-bn1
+Print one batch-mode iteration and exit. Useful for scripting and
+periodic snapshots.
+.TP
+.B top \-p 1234,5678
+Monitor only the processes with PIDs 1234 and 5678.
+.TP
+.B top \-u alice
+Show only processes owned by user \fIalice\fR.
+.TP
+.B top \-d 1
+Refresh every second instead of the default 3-second interval.

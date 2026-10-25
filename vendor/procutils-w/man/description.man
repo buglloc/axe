@@ -1,0 +1,18 @@
+\fBw\fR shows who is logged in to the system and what each user is
+currently doing. The output begins with the same header line as
+\fBuptime\fR(1) (current time, system uptime, user count, load
+averages), followed by one row per active login session.
+.PP
+The session list is built from \fI/var/run/utmp\fR (see \fButmp\fR(5))
+to enumerate logged-in users, then correlated with \fI/proc/[pid]/stat\fR
+(see \fBproc_pid_stat\fR(5)) to identify each session's foreground
+process and its accumulated CPU time. With \fB\-u\fR the foreground
+lookup is skipped and \fBw\fR reports the login process itself rather
+than whatever it ran.
+.PP
+A positional \fIUSER\fR argument restricts the output to one user's
+sessions. \fB\-s\fR collapses the table to just \fIUSER\fR /
+\fITTY\fR / \fIIDLE\fR / \fIWHAT\fR. \fB\-f\fR adds a \fIFROM\fR
+column showing where the session was opened from (remote host,
+display, or "login screen"). \fB\-h\fR omits the header line, useful
+in scripts.

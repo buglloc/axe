@@ -1,0 +1,2 @@
+\fBps\fR(1), \fBtop\fR(1), \fBvmstat\fR(1), \fBslabtop\fR(1),
+\fBproc\fR(5)

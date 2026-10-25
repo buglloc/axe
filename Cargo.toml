@@ -97,6 +97,14 @@ diffutils = { path = "vendor/diffutils" }
 findutils = { path = "vendor/findutils" }
 rust_tree = { path = "vendor/rust_tree" }
 sed-rs = { path = "vendor/sed-rs" }
+procutils-free = { path = "vendor/procutils-free" }
+procutils-pgrep = { path = "vendor/procutils-pgrep" }
+procutils-pmap = { path = "vendor/procutils-pmap" }
+procutils-skill = { path = "vendor/procutils-skill" }
+procutils-top = { path = "vendor/procutils-top" }
+procutils-vmstat = { path = "vendor/procutils-vmstat" }
+procutils-w = { path = "vendor/procutils-w" }
+procutils-watch = { path = "vendor/procutils-watch" }
 procutils-ps = { path = "vendor/procutils-ps" }
 uu_df = { path = "vendor/uu_df" }
 uu_base32 = { path = "vendor/uu_base32" }

@@ -1,0 +1,4 @@
+.PP
+The default report uses procps-style columns and \fBMemAvailable\fR-based
+used-memory accounting. Error messages for invalid arguments use
+different wording.

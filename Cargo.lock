@@ -5687,24 +5687,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "procutils-common"
-version = "0.2.0"
-source = "git+https://gitlab.com/rustutils/procutils?rev=f82f6c72bdeb701c761bb4c0aed05dc7415b972c#f82f6c72bdeb701c761bb4c0aed05dc7415b972c"
-dependencies = [
- "libc",
- "procfs",
- "regex",
- "rustix",
-]
-
-[[package]]
 name = "procutils-free"
 version = "0.2.0"
-source = "git+https://gitlab.com/rustutils/procutils?rev=f82f6c72bdeb701c761bb4c0aed05dc7415b972c#f82f6c72bdeb701c761bb4c0aed05dc7415b972c"
 dependencies = [
  "clap",
  "procfs",
- "procutils-common 0.2.0 (git+https://gitlab.com/rustutils/procutils?rev=f82f6c72bdeb701c761bb4c0aed05dc7415b972c)",
+ "procutils-common",
 ]
 
 [[package]]
@@ -5716,7 +5704,7 @@ dependencies = [
  "clap",
  "crossterm",
  "procfs",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
  "ratatui",
 ]
 
@@ -5729,18 +5717,16 @@ dependencies = [
  "clap",
  "libc",
  "procfs",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
  "regex",
 ]
 
 [[package]]
 name = "procutils-pgrep"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbb09a7a7bbcbe9e6bb0b77fbb8ba44cc7e3ec01178d83587efcf38b47680fdc"
 dependencies = [
  "clap",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
 ]
 
 [[package]]
@@ -5751,19 +5737,16 @@ checksum = "7b5103435681f19ba28d21db9f0d94236903f1edd8896ef0cf50c5b5d70fc4b5"
 dependencies = [
  "clap",
  "libc",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
 ]
 
 [[package]]
 name = "procutils-pmap"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edef0571b2cec57a0ce6d173143ba01b9fc6caec9c452823fa4798b64ad8abb5"
 dependencies = [
  "clap",
- "cols",
  "procfs",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
 ]
 
 [[package]]
@@ -5773,7 +5756,7 @@ dependencies = [
  "clap",
  "libc",
  "procfs",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
  "unicode-width 0.2.2",
 ]
 
@@ -5785,18 +5768,16 @@ checksum = "bbca2ffc38f3371277f50a8e4eaddc5c02d0bb185021b624a0123e59422afa48"
 dependencies = [
  "clap",
  "procfs",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
 ]
 
 [[package]]
 name = "procutils-skill"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6378b5b6b26b1c9e8e24ce7c4d723960ff2853f6fbbfdd6cc854f971fe0cc35"
 dependencies = [
  "clap",
  "libc",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
  "regex",
 ]
 
@@ -5808,7 +5789,7 @@ checksum = "38c8a4ea02e58ee0bdc48d6efb5c6e443b9e6564a6a035f1d008ea13fd451681"
 dependencies = [
  "clap",
  "crossterm",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
  "ratatui",
 ]
 
@@ -5820,7 +5801,7 @@ checksum = "004cfce7a9730965ea9fc9a94ceedee4bb0cebd63a7698b73d55a8e6d41bef5a"
 dependencies = [
  "clap",
  "libc",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
  "regex",
 ]
 
@@ -5831,7 +5812,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c0f3d2527cdedd0adf0eeda3aa7e7039209595742a9b8874e1a4f0e6d031a4d"
 dependencies = [
  "clap",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
  "regex",
 ]
 
@@ -5844,56 +5825,52 @@ dependencies = [
  "clap",
  "crossterm",
  "procfs",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
  "ratatui",
 ]
 
 [[package]]
 name = "procutils-top"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5850baaa0db5f0e01a1f3833cb5272775851186e6780bb2a703f325320c7a95"
 dependencies = [
  "clap",
  "crossterm",
  "procfs",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
  "ratatui",
 ]
 
 [[package]]
 name = "procutils-vmstat"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f0787601ee016af4be550b8dd6c62e20022419306548a485552256179da679f"
 dependencies = [
  "clap",
  "cols",
  "procfs",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
 ]
 
 [[package]]
 name = "procutils-w"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16c2cc0b26f43b3925b2cd5e52451d1e8814cbc7bfbb89f6a019023e801841e0"
 dependencies = [
  "chrono",
  "clap",
  "procfs",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procutils-common",
 ]
 
 [[package]]
 name = "procutils-watch"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e201de4443884db04d5232bccc1758069c5e08306b9c427db39250dd0f51ae09"
 dependencies = [
  "clap",
- "procutils-common 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossterm",
+ "procutils-common",
  "rustix",
+ "signal-hook",
+ "unicode-segmentation",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -8939,7 +8916,6 @@ dependencies = [
 [[package]]
 name = "uu_pidof"
 version = "0.0.1"
-source = "git+https://github.com/uutils/procps?rev=d318892db47de95ed181aab4270dd9b4a1130c43#d318892db47de95ed181aab4270dd9b4a1130c43"
 dependencies = [
  "clap",
  "rustix",

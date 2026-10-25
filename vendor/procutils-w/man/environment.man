@@ -1,0 +1,9 @@
+.TP
+.B PROCPS_USERLEN
+Width of the \fIUSER\fR column, in characters. Defaults to 8. Useful
+when login names are longer than the default and would otherwise be
+truncated.
+.TP
+.B PROCPS_FROMLEN
+Width of the \fIFROM\fR column, in characters. Defaults to 16. Only
+relevant under \fB\-f\fR.

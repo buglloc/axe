@@ -1,0 +1,62 @@
+.SS Common columns (all modes)
+.TP
+.B Address
+The starting virtual address of the mapping, in hex. The mapping
+ends at \fIAddress\fR + \fIKbytes\fR (rounded up to the page size).
+.TP
+.B Kbytes
+Size of the mapping in kibibytes.
+.TP
+.B Mode
+A five-character permission string of the form \fBrwxs\-\fR:
+.RS
+.IP \(bu 2
+positions 1-3: \fBr\fR / \fBw\fR / \fBx\fR if the mapping permits
+read / write / execute, or \fB\-\fR otherwise — see
+\fBproc_pid_maps\fR(5).
+.IP \(bu 2
+position 4: \fBs\fR if the mapping is shared, \fB\-\fR if private.
+.IP \(bu 2
+position 5: always \fB\-\fR. This slot is preserved for compatibility
+with the historical \fBpmap\fR output format and has no current
+meaning.
+.RE
+.TP
+.B Mapping
+The basename of the file backing the mapping (or the full path with
+\fB\-p\fR), or one of the pseudo-mappings listed below.
+.SS Extended-mode columns (\-x)
+.TP
+.B RSS
+Resident set size — how much of this mapping is currently in
+physical memory, in kibibytes. From \fBRss\fR in
+\fI/proc/[pid]/smaps\fR.
+.TP
+.B Dirty
+Modified pages in this mapping that have not been written back, in
+kibibytes. Computed as \fBPrivate_Dirty\fR + \fBShared_Dirty\fR from
+\fI/proc/[pid]/smaps\fR.
+.SS Device-mode columns (\-d)
+.TP
+.B Offset
+Byte offset into the backing file at which this mapping begins.
+\fB0\fR for anonymous mappings.
+.TP
+.B Device
+The block device that holds the backing file, formatted as
+\fImajor\fR\fB:\fR\fIminor\fR in hexadecimal. \fB000:00000\fR for
+anonymous mappings.
+.SS Mapping names
+.PP
+File mappings use the basename, including any \fB(deleted)\fR suffix.
+\fB\-p\fR retains the full pathname. Default anonymous labels have two
+leading spaces: \fB[ anon ]\fR, or \fB[ stack ]\fR for the mapping
+containing the process's starting stack address.
+.PP
+System V shared-memory mappings show \fB[ shmid=0x\fR\fIID\fR\fB ]\fR,
+also preceded by two spaces. The ID is the shared-memory identifier,
+not its key.
+.PP
+\fB\-k\fR preserves kernel bracketed names such as \fB[heap]\fR,
+\fB[vdso]\fR, \fB[vvar]\fR, and \fB[vvar_vclock]\fR. Without
+\fB\-k\fR these non-file mappings use the anonymous or stack label.

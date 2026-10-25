@@ -1,0 +1,8 @@
+.PP
+The default memory/CPU report uses procps-style lowercase column
+headings, grouping labels, and fixed minimum widths. Redirected output
+prints headings once; terminal output repeats them after a screenful,
+unless \fB\-n\fR is given.
+.PP
+Alternate disk and slab reports use data-sized uppercase columns and
+do not emit the procps section-grouping line.

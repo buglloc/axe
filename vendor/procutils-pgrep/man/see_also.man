@@ -1,0 +1,2 @@
+\fBpkill\fR(1), \fBkill\fR(1), \fBps\fR(1), \fBproc_pid_comm\fR(5),
+\fBproc_pid_stat\fR(5)

@@ -1,0 +1,43 @@
+.PP
+While running interactively, the following keys are recognised. They
+are case-sensitive.
+.TP
+.B q
+Quit immediately.
+.TP
+.B "<space>"
+Force an immediate refresh, regardless of the configured delay.
+.TP
+.B P
+Sort processes by descending %CPU (the default).
+.TP
+.B M
+Sort processes by descending %MEM.
+.TP
+.B N
+Sort processes by descending PID.
+.TP
+.B T
+Sort processes by descending cumulative CPU time.
+.TP
+.B R
+Reverse the current sort order.
+.TP
+.B c
+Toggle between the short command name and the full command line in the
+COMMAND column.
+.TP
+.B 1
+Toggle between aggregate "%Cpu(s)" and per-CPU rows in the header.
+.TP
+.B "k, <down>"
+Move the row selection down.
+.TP
+.B "j, <up>"
+Move the row selection up.
+.TP
+.B "<page-up>, <page-down>"
+Scroll the process table by one page.
+.TP
+.B "<home>, <end>"
+Jump to the first or last row of the process table.

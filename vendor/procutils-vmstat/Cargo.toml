@@ -1,0 +1,22 @@
+# Vendored from procutils-vmstat 0.2.0; see .cargo_vcs_info.json for upstream provenance.
+# AXE changes: memory accounting, swap-rate units, and repeated-report headings.
+[package]
+name = "procutils-vmstat"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.88.0"
+authors = ["Patrick Elsen <pelsen@xfbs.net>"]
+description = "Report virtual memory statistics"
+homepage = "https://rustutils.gitlab.io/procutils"
+repository = "https://gitlab.com/rustutils/procutils"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "wrap_help"] }
+cols = { version = "0.3.0", features = ["color", "regex", "derive"] }
+procfs = "0.18"
+procutils-common = "0.2.0"
+
+[[bin]]
+name = "vmstat"
+path = "src/main.rs"

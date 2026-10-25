@@ -1,0 +1,20 @@
+# Vendored from procutils-pgrep 0.2.0; see .cargo_vcs_info.json for upstream provenance.
+# AXE changes: emit the zero count while preserving no-match status.
+[package]
+name = "procutils-pgrep"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.88.0"
+authors = ["Patrick Elsen <pelsen@xfbs.net>"]
+description = "Look up processes based on name and other attributes"
+homepage = "https://rustutils.gitlab.io/procutils"
+repository = "https://gitlab.com/rustutils/procutils"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "wrap_help"] }
+procutils-common = "0.2.0"
+
+[[bin]]
+name = "pgrep"
+path = "src/main.rs"

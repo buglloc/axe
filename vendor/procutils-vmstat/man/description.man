@@ -1,0 +1,22 @@
+\fBvmstat\fR reports system-wide statistics on processes, memory,
+swap, block I/O, traps, and CPU activity. By default it prints a
+single line describing averages since boot, then exits.
+.PP
+With a positional \fIDELAY\fR argument it samples continuously,
+printing one line per interval. \fICOUNT\fR limits the number of
+reports; without it, \fBvmstat\fR runs until interrupted. The first
+line of a continuous run still shows since-boot averages — pass
+\fB\-y\fR to suppress it.
+.PP
+Several alternate report modes are available: \fB\-a\fR replaces the
+\fIBUFF\fR/\fICACHE\fR columns with \fIINACT\fR/\fIACTIVE\fR;
+\fB\-d\fR shows per-disk I/O statistics; \fB\-D\fR a one-line disk
+summary; \fB\-f\fR prints the total fork count since boot; \fB\-m\fR
+dumps slab allocator info (root-only); and \fB\-s\fR prints a
+comprehensive table of memory and event counters in label form.
+Mode flags are mutually exclusive — only the first one given takes
+effect.
+.PP
+Memory quantities and swap-in/out rates use the unit selected by \fB\-S\fR: \fBk\fR =
+1000-byte kilobytes, \fBK\fR = 1024-byte kibibytes (the default),
+\fBm\fR = decimal megabytes, \fBM\fR = mebibytes.

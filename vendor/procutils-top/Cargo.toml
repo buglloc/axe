@@ -1,0 +1,23 @@
+# Vendored from procutils-top 0.2.0; see .cargo_vcs_info.json for upstream provenance.
+# AXE changes: shared-memory units and MemAvailable-based used memory.
+[package]
+name = "procutils-top"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.88.0"
+authors = ["Patrick Elsen <pelsen@xfbs.net>"]
+description = "Display Linux processes in real time"
+homepage = "https://rustutils.gitlab.io/procutils"
+repository = "https://gitlab.com/rustutils/procutils"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "wrap_help"] }
+crossterm = "0.29"
+procfs = "0.18"
+procutils-common = "0.2.0"
+ratatui = "0.30"
+
+[[bin]]
+name = "top"
+path = "src/main.rs"

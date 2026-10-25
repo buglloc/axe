@@ -1,0 +1,10 @@
+The \fBtop\fR program provides a dynamic, real-time view of a running
+system. It displays a header summarizing system load, memory usage, and
+per-CPU utilisation, followed by a table of processes sorted by CPU
+usage. Both views update on a configurable interval until the user
+quits.
+.PP
+By default \fBtop\fR runs interactively, drawing into the terminal with
+full-screen redraws and accepting key commands. Pass \fB\-b\fR (batch
+mode) to print plain output suitable for piping or logging, optionally
+limited to a fixed number of iterations with \fB\-n\fR.

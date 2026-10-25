@@ -1,0 +1,16 @@
+.PP
+\fBskill\fR matches procps-ng's behaviour on the supported flag set —
+selector logic, signal parsing, exit codes, and the \fB\-l\fR /
+\fB\-L\fR signal-listing format. Some procps-ng features are not yet
+implemented:
+.IP \(bu 2
+\fB\-i\fR (interactive), \fB\-f\fR (fast), and \fB\-w\fR (warnings)
+mode flags.
+.IP \(bu 2
+\fB\-\-ns\fR \fIPID\fR and \fB\-\-nslist\fR \fINS\fR\fB,...\fR —
+namespace-based selection.
+.IP \(bu 2
+Real-time signals (\fBSIGRTMIN\fR..\fBSIGRTMAX\fR) cannot be named;
+they are still deliverable by number via \fB\-\-signal\fR \fIN\fR.
+.PP
+Error messages for invalid arguments use different wording.

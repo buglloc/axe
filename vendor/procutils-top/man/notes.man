@@ -1,0 +1,16 @@
+.PP
+\fBtop\fR reads system information exclusively from /proc and from
+utmp at /var/run/utmp. On systems where logged-in sessions are tracked
+through systemd-logind rather than utmp, the user count in the header
+may diverge from what \fBwho\fR(1) or \fBloginctl\fR(1) report.
+.PP
+Used memory is \fBMemTotal\fR minus \fBMemAvailable\fR. Kernels without
+\fBMemAvailable\fR use total minus free, buffers, and reclaimable cache.
+The process \fBSHR\fR value is \fBRssFile\fR plus \fBRssShmem\fR in KiB.
+.PP
+Task summaries count uninterruptible \fBD\fR-state tasks in
+\fBd-sleep\fR, separately from the \fBsleep\fR count.
+.PP
+This is a process-only view: thread mode (\fB\-H\fR) and command-line
+sorting (\fB\-o\fR) are not implemented. Interactive P/M/N/T sorting
+is available.

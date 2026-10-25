@@ -1,0 +1,21 @@
+# Vendored from procutils f82f6c72bdeb701c761bb4c0aed05dc7415b972c, tools/free.
+# AXE changes: procps-compatible human-readable unit selection and rounding.
+[package]
+name = "procutils-free"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.88.0"
+authors = ["Patrick Elsen <pelsen@xfbs.net>"]
+description = "Display amount of free and used memory in the system"
+homepage = "https://rustutils.gitlab.io/procutils"
+repository = "https://gitlab.com/rustutils/procutils"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "wrap_help"] }
+procfs = "0.18"
+procutils-common = "0.2.0"
+
+[[bin]]
+name = "free"
+path = "src/main.rs"

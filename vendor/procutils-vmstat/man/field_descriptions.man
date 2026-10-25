@@ -1,0 +1,70 @@
+.SS procs
+.TP
+.B R
+Number of runnable processes (running or queued for CPU).
+.TP
+.B B
+Number of processes in uninterruptible sleep (typically blocked on
+disk I/O).
+.SS memory
+.TP
+.B SWPD
+Amount of virtual memory currently swapped out, in the chosen unit.
+.TP
+.B FREE
+Amount of idle memory (kernel \fBMemFree\fR).
+.TP
+.B BUFF
+Memory used as kernel buffers. Replaced by \fBINACT\fR under \fB\-a\fR.
+.TP
+.B CACHE
+Page cache plus reclaimable slab memory (\fBCached\fR +
+\fBSReclaimable\fR). Replaced by \fBACTIVE\fR under \fB\-a\fR.
+.TP
+.B INACT
+(\fB\-a\fR only) Inactive memory — pages not recently referenced.
+.TP
+.B ACTIVE
+(\fB\-a\fR only) Active memory — recently-used pages.
+.SS swap
+.TP
+.B SI
+Memory swapped in from disk per second, in the unit selected by \fB\-S\fR.
+.TP
+.B SO
+Memory swapped out to disk per second, in the unit selected by \fB\-S\fR.
+.SS io
+.TP
+.B BI
+Blocks read from block devices per second.
+.TP
+.B BO
+Blocks written to block devices per second.
+.SS system
+.TP
+.B IN
+Interrupts per second, including the timer interrupt.
+.TP
+.B CS
+Context switches per second.
+.SS cpu
+.PP
+The CPU columns are percentages of total CPU time:
+.TP
+.B US
+User-space (non-nice) time.
+.TP
+.B SY
+Kernel-space (system) time.
+.TP
+.B ID
+Idle time, excluding I/O wait.
+.TP
+.B WA
+Time waiting for I/O completion.
+.TP
+.B ST
+Time stolen from this VM by the hypervisor.
+.TP
+.B GU
+Time spent running a guest VM (when this host is the hypervisor).

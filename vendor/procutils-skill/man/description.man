@@ -1,0 +1,30 @@
+\fBskill\fR sends a signal to processes selected by tty, user, PID,
+or command name. It exists primarily for compatibility with shell
+scripts written for the legacy procps tool of the same name; for
+new code, \fBpkill\fR(1) offers a richer matching language and
+clearer flag conventions.
+.PP
+The signal can be specified in three ways:
+.IP \(bu 2
+\fB\-\-signal\fR \fISIG\fR — preferred, unambiguous form.
+\fISIG\fR is a name (\fBKILL\fR, \fBHUP\fR), a name with the
+\fBSIG\fR prefix (\fBSIGKILL\fR), or a number (\fB9\fR).
+.IP \(bu 2
+A short \fB\-\fR\fISIG\fR flag — \fBskill \-KILL bash\fR,
+\fBskill \-9 bash\fR, \fBskill \-SIGKILL bash\fR. The flag may
+appear at any position on the command line; only the first
+recognised signal name or number is consumed as the signal.
+.IP \(bu 2
+Default: \fBTERM\fR (15) when no signal is specified.
+.PP
+Matching uses positive filters: a process must satisfy at least
+one filter, and it must satisfy all of the supplied filter kinds.
+Bare positional PIDs (\fBskill 1234 5678\fR) are also accepted.
+With \fB\-n\fR (\fB\-\-no\-action\fR) \fBskill\fR prints matching
+PIDs instead of signalling — the safe way to vet a destructive
+invocation.
+.PP
+\fB\-l\fR / \fB\-L\fR list the supported signal names (alphabetical
+flat list and a tab-separated number+name table, respectively),
+matching the behaviour of \fBkill\fR(1) so the listings can be
+cross-referenced.

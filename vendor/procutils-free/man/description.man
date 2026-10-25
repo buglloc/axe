@@ -1,0 +1,11 @@
+\fBfree\fR displays the total amount of physical and swap memory in the
+system, as well as the buffers and caches used by the kernel. The
+information is read from /proc/meminfo. By default \fBfree\fR prints one
+report and exits; pass \fB\-s\fR to refresh on an interval.
+.PP
+For most users the \fIAVAILABLE\fR column is the value that matters: it
+estimates how much memory can be allocated without pushing the system
+into swap. The \fIFREE\fR column, by contrast, reports only memory that
+the kernel is not currently using for anything — pages that the kernel
+has reclaimed for buffers or page cache do not count as free even though
+they are immediately reusable.

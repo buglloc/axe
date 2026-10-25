@@ -1,0 +1,29 @@
+.SS Permissions
+.PP
+Reading \fI/proc/[pid]/maps\fR or \fI/proc/[pid]/smaps\fR is gated by
+a \fBPTRACE_MODE_READ_FSCREDS\fR check (see \fBproc_pid_maps\fR(5)
+and \fBptrace\fR(2)). For same-uid processes this typically succeeds.
+Two cases will deny access:
+.IP \(bu 2
+The target's \fBdumpable\fR attribute is 0 — set when a process
+execs a set-user-ID or set-group-ID binary. Files under /proc/[pid]/
+become root-owned and only \fBCAP_SYS_PTRACE\fR can read the maps.
+.IP \(bu 2
+\fI/proc\fR is mounted with \fBhidepid=1\fR or \fBhidepid=2\fR (see
+\fBproc\fR(5), common in container runtimes), which hides
+/proc/[pid] entries owned by other users.
+.SS Why \-x is more expensive
+.PP
+\fI/proc/[pid]/smaps\fR is computed lazily by walking each mapping's
+page tables, so opening it for a large process can take noticeably
+longer than \fI/proc/[pid]/maps\fR. On a process with thousands of
+mappings, \fBpmap \-x\fR can pause the process briefly while the
+kernel populates the file. \fBpmap\fR (default) only reads the
+\fImaps\fR file, which is essentially free.
+.SS Address space and rounding
+.PP
+Mappings are page-aligned by the kernel; the \fIKbytes\fR column is
+\fI(end \- start)\fR / 1024 and is always a multiple of the page
+size (typically 4 KiB on x86_64 / aarch64). Total virtual size is
+shown in a footer line under the default and extended modes; with
+\fB\-q\fR that footer is omitted.

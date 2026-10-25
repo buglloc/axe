@@ -1,0 +1,33 @@
+.PP
+By default \fBfree\fR prints the following columns:
+.TP
+.B TOTAL
+Total installed memory (\fBMemTotal\fR in /proc/meminfo). For the swap
+row, the size of the swap area (\fBSwapTotal\fR).
+.TP
+.B USED
+Memory in use, computed as \fITOTAL\fR \- \fIAVAILABLE\fR, matching
+procps-ng. If the kernel does not provide \fBMemAvailable\fR, the
+fallback is \fITOTAL\fR \- \fIFREE\fR \- \fIBUFFERS\fR \- \fICACHE\fR.
+.TP
+.B FREE
+Memory that is not allocated to anything at all (\fBMemFree\fR). On a
+healthy busy system this number is typically small — the kernel
+prefers to use memory for cache rather than leave it idle.
+.TP
+.B SHARED
+Memory used by tmpfs and shared anonymous mappings (\fBShmem\fR).
+.TP
+.B BUFF/CACHE
+Sum of kernel buffers, page cache, and slab reclaimable memory
+(\fBBuffers\fR + \fBCached\fR + \fBSReclaimable\fR). With \fB\-w\fR
+this is split into separate \fIBUFFERS\fR and \fICACHE\fR columns.
+.TP
+.B AVAILABLE
+Estimate of how much memory is available for starting new applications
+without swapping (\fBMemAvailable\fR, computed by the kernel). This is
+usually the field worth looking at — it accounts for reclaimable page
+cache and slab memory in addition to truly free pages.
+.PP
+The swap row uses the corresponding \fBSwap\fR fields and omits
+\fISHARED\fR, \fIBUFF/CACHE\fR, and \fIAVAILABLE\fR.
