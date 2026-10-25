@@ -1,4 +1,5 @@
-use std::ffi::OsString;
+use std::borrow::Cow;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,10 @@ fn command() -> clap::Command {
     Cli::command()
         .disable_help_flag(true)
         .args_override_self(true)
+        .after_help(
+            "Supports filesystem and --fromfile text listings. JSON (-J), following directory \
+             symlinks (-l), and --charset are not supported.",
+        )
         .mut_arg("human_readable", |arg| arg.short('h'))
         .mut_arg("pattern", |arg| arg.allow_hyphen_values(true))
         .mut_arg("exclude", |arg| arg.allow_hyphen_values(true))
@@ -46,21 +51,24 @@ pub fn tree(args: Vec<OsString>) -> i32 {
         }
     };
 
-    let options = match cli_to_options(&cli) {
+    let mut options = match cli_to_options(&cli) {
         Ok(options) => options,
         Err(error) => {
             eprintln!("tree: {error}");
             return 2;
         }
     };
+    let utf8_names = utf8_locale();
+    options.ascii |= !utf8_names;
 
     let result = if options.from_file {
-        list_directory(&cli.path, &options)
+        list_directory(&cli.path, &options).map(|()| false)
     } else if let Some(path) = &options.output_file {
         fs::File::create(path).and_then(|file| {
             list_filesystem(
                 Path::new(&cli.path),
                 &options,
+                utf8_names,
                 &mut io::BufWriter::new(file),
             )
         })
@@ -68,15 +76,21 @@ pub fn tree(args: Vec<OsString>) -> i32 {
         list_filesystem(
             Path::new(&cli.path),
             &options,
+            utf8_names,
             &mut io::BufWriter::new(io::stdout().lock()),
         )
     };
     match result {
-        Ok(()) => 0,
-        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => 0,
+        Ok(had_errors) => {
+            if had_errors {
+                2
+            } else {
+                0
+            }
+        }
         Err(error) => {
-            eprintln!("tree: {}: {error}", cli.path);
-            1
+            eprintln!("tree: {}: {error}", cli.path.display());
+            2
         }
     }
 }
@@ -91,24 +105,56 @@ struct Entry {
 
 struct Listing<'a> {
     options: &'a TreeOptions,
+    utf8_names: bool,
     icons: IconManager,
     directories: u64,
     files: u64,
+    had_errors: bool,
 }
 
-fn list_filesystem(path: &Path, options: &TreeOptions, writer: &mut impl Write) -> io::Result<()> {
-    let metadata = fs::metadata(path)?;
+fn list_filesystem(
+    path: &Path,
+    options: &TreeOptions,
+    utf8_names: bool,
+    writer: &mut impl Write,
+) -> io::Result<bool> {
     let mut listing = Listing {
         options,
+        utf8_names,
         icons: IconManager::new(),
-        directories: u64::from(metadata.is_dir()),
-        files: u64::from(!metadata.is_dir()),
+        directories: 0,
+        files: 0,
+        had_errors: false,
     };
-    listing.write_metadata(writer, &metadata)?;
-    writeln!(writer, "{}", path.display())?;
-    if metadata.is_dir() {
-        let entries = listing.read_entries(path, 0, false)?;
-        listing.write_entries(writer, entries, &mut Vec::new(), false)?;
+    match fs::metadata(path) {
+        Ok(metadata) => {
+            listing.directories = u64::from(metadata.is_dir());
+            listing.files = u64::from(!metadata.is_dir());
+            listing.write_metadata(writer, &metadata)?;
+            write!(writer, "{}", escaped_name(path.as_os_str(), utf8_names))?;
+            if metadata.is_dir() {
+                match listing.read_entries(path, 0, false) {
+                    Ok(entries) => {
+                        writeln!(writer)?;
+                        listing.write_entries(writer, entries, &mut Vec::new(), false)?;
+                    }
+                    Err(_) => {
+                        listing.had_errors = true;
+                        writeln!(writer, "  [error opening dir]")?;
+                    }
+                }
+            } else {
+                writeln!(writer)?;
+            }
+        }
+        Err(_) => {
+            listing.had_errors = true;
+            writeln!(
+                writer,
+                "{}  [error opening dir]",
+                escaped_name(path.as_os_str(), utf8_names)
+            )?;
+        }
     }
     if !options.no_report {
         write!(
@@ -131,7 +177,8 @@ fn list_filesystem(path: &Path, options: &TreeOptions, writer: &mut impl Write) 
         }
         writeln!(writer)?;
     }
-    writer.flush()
+    writer.flush()?;
+    Ok(listing.had_errors)
 }
 
 impl Listing<'_> {
@@ -165,9 +212,10 @@ impl Listing<'_> {
                 continue;
             }
             let metadata = entry.metadata()?;
-            let is_directory = metadata.is_dir();
+            let is_directory =
+                metadata.is_dir() || (metadata.is_symlink() && entry.path().is_dir());
             if (!is_directory && self.options.dir_only)
-                || (!is_directory
+                || (!metadata.is_dir()
                     && !matched_parent
                     && self
                         .options
@@ -280,12 +328,14 @@ impl Listing<'_> {
             if self.options.icons {
                 write!(writer, "{} ", self.icons.get_icon_for_path(&entry.path))?;
             }
-            let name = if self.options.full_path {
-                entry.path.as_os_str()
-            } else {
-                &entry.name
-            }
-            .to_string_lossy();
+            let name = escaped_name(
+                if self.options.full_path {
+                    entry.path.as_os_str()
+                } else {
+                    &entry.name
+                },
+                self.utf8_names,
+            );
             if self.options.color && !self.options.no_color {
                 write!(writer, "{}", colorize(&entry.entry, &name))?;
             } else {
@@ -294,19 +344,41 @@ impl Listing<'_> {
             if self.options.classify {
                 write!(writer, "{}", classify(&entry.metadata))?;
             }
-            writeln!(writer)?;
-            if entry.metadata.is_dir() {
+            if entry.metadata.is_symlink() {
+                write!(
+                    writer,
+                    " -> {}",
+                    escaped_name(fs::read_link(&entry.path)?.as_os_str(), self.utf8_names)
+                )?;
+            }
+            let children = if entry.metadata.is_dir() {
                 self.directories += 1;
                 let matched = matched_parent || self.directory_matches(&entry);
-                let children = match entry.children.take() {
-                    Some(children) => children,
-                    None => self.read_entries(&entry.path, parents_last.len() + 1, matched)?,
+                let result = match entry.children.take() {
+                    Some(children) => Ok(children),
+                    None => self.read_entries(&entry.path, parents_last.len() + 1, matched),
                 };
+                match result {
+                    Ok(children) => Some((children, matched)),
+                    Err(_) => {
+                        self.had_errors = true;
+                        write!(writer, "  [error opening dir]")?;
+                        None
+                    }
+                }
+            } else {
+                if entry.metadata.is_symlink() && entry.path.is_dir() {
+                    self.directories += 1;
+                } else {
+                    self.files += 1;
+                }
+                None
+            };
+            writeln!(writer)?;
+            if let Some((children, matched)) = children {
                 parents_last.push(last);
                 self.write_entries(writer, children, parents_last, matched)?;
                 parents_last.pop();
-            } else {
-                self.files += 1;
             }
         }
         Ok(())
@@ -353,6 +425,59 @@ impl Listing<'_> {
         }
         write!(writer, "]  ")
     }
+}
+
+fn utf8_locale() -> bool {
+    ["LC_ALL", "LC_CTYPE", "LANG"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .find(|value| !value.is_empty())
+        .is_some_and(|value| {
+            let locale = value.to_string_lossy().to_ascii_lowercase();
+            locale.contains("utf-8") || locale.contains("utf8")
+        })
+}
+
+fn escaped_name(name: &OsStr, utf8: bool) -> Cow<'_, str> {
+    if let Some(name) = name.to_str()
+        && name.chars().all(|character| {
+            !character.is_control()
+                && character != '\\'
+                && character != ' '
+                && (utf8 || character.is_ascii())
+        })
+    {
+        return Cow::Borrowed(name);
+    }
+    let mut escaped = String::new();
+    for chunk in name.as_encoded_bytes().utf8_chunks() {
+        for character in chunk.valid().chars() {
+            match character {
+                '\x07' => escaped.push_str("\\a"),
+                '\x08' => escaped.push_str("\\b"),
+                '\t' => escaped.push_str("\\t"),
+                '\n' => escaped.push_str("\\n"),
+                '\x0b' => escaped.push_str("\\v"),
+                '\x0c' => escaped.push_str("\\f"),
+                '\r' => escaped.push_str("\\r"),
+                '\\' => escaped.push_str("\\\\"),
+                ' ' => escaped.push_str("\\ "),
+                character if character.is_control() || (!utf8 && !character.is_ascii()) => {
+                    use std::fmt::Write as _;
+                    let mut buffer = [0; 4];
+                    for byte in character.encode_utf8(&mut buffer).bytes() {
+                        let _ = write!(escaped, "\\{byte:03o}");
+                    }
+                }
+                character => escaped.push(character),
+            }
+        }
+        for byte in chunk.invalid() {
+            use std::fmt::Write as _;
+            let _ = write!(escaped, "\\{byte:03o}");
+        }
+    }
+    Cow::Owned(escaped)
 }
 
 fn human_size(mut size: u64) -> String {

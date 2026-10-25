@@ -1,4 +1,5 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::io::{self, Write};
 
 use clap::error::ErrorKind;
 use clap::{ArgAction, Parser};
@@ -36,23 +37,53 @@ pub fn which(args: Vec<OsString>) -> i32 {
     };
 
     let mut missing = false;
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
     for command in args.commands {
-        match which::which_all(&command) {
-            Ok(paths) => {
-                let mut found = false;
-                for path in paths {
-                    found = true;
-                    if !args.silent {
-                        println!("{}", path.display());
-                    }
-                    if !args.all {
-                        break;
-                    }
+        let mut found = false;
+        if let Ok(paths) = which::which_all(&command) {
+            for path in paths {
+                found = true;
+                if !args.silent
+                    && let Err(error) = stdout
+                        .write_all(path.as_os_str().as_encoded_bytes())
+                        .and_then(|()| stdout.write_all(b"\n"))
+                {
+                    eprintln!("which: write error: {}", uucore::error::strip_errno(&error));
+                    return 1;
                 }
-                missing |= !found;
+                if !args.all {
+                    break;
+                }
             }
-            Err(_) => missing = true,
         }
+        if !found {
+            missing = true;
+            if !args.silent {
+                let bytes = command.as_encoded_bytes();
+                let (name, paths) = match bytes.iter().rposition(|byte| *byte == b'/') {
+                    Some(index) => (&bytes[index + 1..], &bytes[..index]),
+                    None => (bytes, b"".as_slice()),
+                };
+                let path = std::env::var_os("PATH").unwrap_or_default();
+                let paths = if bytes.contains(&b'/') {
+                    paths
+                } else {
+                    OsStr::new(&path).as_encoded_bytes()
+                };
+                let mut stderr = io::stderr().lock();
+                let _ = stderr
+                    .write_all(b"which: no ")
+                    .and_then(|()| stderr.write_all(name))
+                    .and_then(|()| stderr.write_all(b" in ("))
+                    .and_then(|()| stderr.write_all(paths))
+                    .and_then(|()| stderr.write_all(b")\n"));
+            }
+        }
+    }
+    if let Err(error) = stdout.flush() {
+        eprintln!("which: write error: {}", uucore::error::strip_errno(&error));
+        return 1;
     }
 
     i32::from(missing)

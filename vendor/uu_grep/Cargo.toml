@@ -1,0 +1,27 @@
+# Vendored from uu_grep 0.2.0; see .cargo_vcs_info.json for upstream provenance.
+[package]
+name = "uu_grep"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.88.0"
+autobins = false
+autotests = false
+autobenches = false
+description = "A Rust implementation of GNU Grep"
+homepage = "https://github.com/uutils/grep"
+repository = "https://github.com/uutils/grep"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+test = false
+
+[dependencies]
+clap = { version = "4.5", features = ["wrap_help", "cargo", "color"] }
+glob = "0.3.1"
+memchr = "2.7.2"
+onig = { version = "~6.5.1", default-features = false }
+onig_sys = { version = "69.9.3", default-features = false }
+uucore = "0.10.0"
+walkdir = "2.5"

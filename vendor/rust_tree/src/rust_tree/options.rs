@@ -1,0 +1,30 @@
+use glob::Pattern;
+use std::path::PathBuf;
+
+pub struct TreeOptions {
+    pub all_files: bool,
+    pub level: Option<u32>,
+    pub full_path: bool,
+    pub dir_only: bool,
+    pub no_indent: bool,
+    pub print_size: bool,
+    pub human_readable: bool,
+    pub pattern_glob: Option<Pattern>,
+    pub match_dirs: bool,
+    pub exclude_patterns: Vec<Pattern>,
+    pub color: bool,
+    pub no_color: bool,
+    pub ascii: bool,
+    pub sort_by_time: bool,
+    pub reverse: bool,
+    pub print_mod_date: bool,
+    pub output_file: Option<PathBuf>,
+    pub file_limit: Option<u64>,
+    pub dirs_first: bool,
+    pub classify: bool,
+    pub no_report: bool,
+    pub print_permissions: bool,
+    pub from_file: bool,
+    pub icons: bool,
+    pub prune: bool,
+}

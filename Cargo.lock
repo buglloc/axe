@@ -2704,14 +2704,10 @@ checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
 [[package]]
 name = "findutils"
 version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cd7cce4eddc7d5ffc18857488b396d32285dabecec437d17f1cb29171d60b05"
 dependencies = [
  "argmax",
  "chrono",
- "clap",
  "faccess",
- "itertools 0.15.0",
  "nix 0.31.3",
  "onig",
  "regex",
@@ -6499,8 +6495,6 @@ dependencies = [
 [[package]]
 name = "rust_tree"
 version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0af54dda788e790a8836021fe6871880010a1f7c72044ae013fc0d932f50a6f2"
 dependencies = [
  "ansi_term",
  "clap",
@@ -8563,8 +8557,6 @@ dependencies = [
 [[package]]
 name = "uu_grep"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a18a870d686d45359362ac917b64941f11dbf2d58a3735fa3c96442460b74b40"
 dependencies = [
  "clap",
  "glob",

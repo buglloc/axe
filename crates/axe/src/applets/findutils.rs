@@ -13,23 +13,9 @@ pub fn find(mut args: Vec<OsString>) -> i32 {
         eprintln!("find: {error}");
         return 1;
     }
-    let strings = match args
-        .iter()
-        .map(|arg| arg.to_str().ok_or(arg))
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(strings) => strings,
-        Err(arg) => {
-            eprintln!(
-                "find: argument is not valid UTF-8: {:?}",
-                arg.as_encoded_bytes()
-            );
-            return 2;
-        }
-    };
 
     let deps = findutils::find::StandardDependencies::new();
-    findutils::find::find_main(&strings, &deps)
+    findutils::find::find_main(&args, &deps)
 }
 
 pub fn xargs(args: Vec<OsString>) -> i32 {
@@ -71,6 +57,7 @@ struct Xargs {
     delimiter: Option<u8>,
     max_args: Option<usize>,
     max_lines: Option<usize>,
+    max_chars: Option<usize>,
     max_procs: usize,
     replace: Option<OsString>,
     no_run_if_empty: bool,
@@ -83,6 +70,7 @@ impl Xargs {
         let mut delimiter = None;
         let mut max_args = None;
         let mut max_lines = None;
+        let mut max_chars = None;
         let mut max_procs = 1;
         let mut replace = None;
         let mut no_run_if_empty = false;
@@ -94,80 +82,103 @@ impl Xargs {
                 initial.push(arg);
                 continue;
             }
-            match arg.to_str() {
-                Some("--") => command = iter.next(),
-                Some("-0" | "--null") => delimiter = Some(0),
-                Some("-r" | "--no-run-if-empty") => no_run_if_empty = true,
-                Some("--help") => {
-                    println!(
-                        "Usage: xargs [-0r] [-d DELIM] [-n MAX-ARGS] [-L MAX-LINES] \
-                         [-P MAX-PROCS] [-I REPLACE] [COMMAND [ARG...]]"
-                    );
-                    return Err(XargsFailure::done());
+            let bytes = arg.as_encoded_bytes();
+            if bytes == b"--" {
+                command = iter.next();
+                break;
+            }
+            if !bytes.starts_with(b"-") || bytes == b"-" {
+                command = Some(arg);
+                break;
+            }
+            let (option, attached) = if bytes.starts_with(b"--") {
+                match bytes.iter().position(|byte| *byte == b'=') {
+                    Some(index) => (&bytes[..index], Some(&bytes[index + 1..])),
+                    None => (bytes, None),
                 }
-                Some("--version") => {
-                    println!("xargs (axe) {}", env!("CARGO_PKG_VERSION"));
-                    return Err(XargsFailure::done());
+            } else {
+                (&bytes[..2], (bytes.len() > 2).then_some(&bytes[2..]))
+            };
+            if matches!(
+                option,
+                b"-0" | b"--null" | b"-r" | b"--no-run-if-empty" | b"--help" | b"--version"
+            ) {
+                if attached.is_some() {
+                    return Err(XargsFailure::usage(format!(
+                        "option does not take an argument: {}",
+                        String::from_utf8_lossy(option)
+                    )));
                 }
-                Some("-d" | "--delimiter") => {
-                    let value = iter
-                        .next()
-                        .ok_or_else(|| XargsFailure::usage("option requires an argument: -d"))?;
-                    delimiter = Some(parse_delimiter(&value)?);
+                match option {
+                    b"-0" | b"--null" => delimiter = Some(0),
+                    b"-r" | b"--no-run-if-empty" => no_run_if_empty = true,
+                    b"--help" => {
+                        println!(
+                            "Usage: xargs [-0] [-r] [-d DELIM] [-n MAX-ARGS] [-L MAX-LINES] \
+                             [-s MAX-CHARS] [-P MAX-PROCS] [-I REPLACE] [COMMAND [ARG...]]"
+                        );
+                        return Err(XargsFailure::done());
+                    }
+                    b"--version" => {
+                        println!("xargs (axe) {}", env!("CARGO_PKG_VERSION"));
+                        return Err(XargsFailure::done());
+                    }
+                    _ => unreachable!(),
                 }
-                Some("-n" | "--max-args") => {
-                    let value = iter
-                        .next()
-                        .ok_or_else(|| XargsFailure::usage("option requires an argument: -n"))?;
+                continue;
+            }
+            if !matches!(
+                option,
+                b"-d"
+                    | b"--delimiter"
+                    | b"-n"
+                    | b"--max-args"
+                    | b"-L"
+                    | b"--max-lines"
+                    | b"-s"
+                    | b"--max-chars"
+                    | b"-P"
+                    | b"--max-procs"
+                    | b"-I"
+                    | b"--replace"
+            ) {
+                return Err(XargsFailure::usage(format!(
+                    "unrecognized option {}",
+                    arg.to_string_lossy()
+                )));
+            }
+            let value = match attached {
+                Some(value) => os_string_from_input(value).map_err(XargsFailure::usage)?,
+                None if option == b"--replace" => OsString::from("{}"),
+                None if option == b"--max-lines" => OsString::from("1"),
+                None => iter.next().ok_or_else(|| {
+                    XargsFailure::usage(format!(
+                        "option requires an argument: {}",
+                        String::from_utf8_lossy(option)
+                    ))
+                })?,
+            };
+            match option {
+                b"-d" | b"--delimiter" => delimiter = Some(parse_delimiter(&value)?),
+                b"-n" | b"--max-args" => {
                     max_args = Some(parse_positive(&value, "-n")?);
                     max_lines = None;
                 }
-                Some("-L" | "--max-lines") => {
-                    let value = iter
-                        .next()
-                        .ok_or_else(|| XargsFailure::usage("option requires an argument: -L"))?;
+                b"-L" | b"--max-lines" => {
                     max_lines = Some(parse_positive(&value, "-L")?);
                     max_args = None;
                 }
-                Some("-P" | "--max-procs") => {
-                    let value = iter
-                        .next()
-                        .ok_or_else(|| XargsFailure::usage("option requires an argument: -P"))?;
-                    max_procs = parse_nonnegative(&value, "-P")?;
-                }
-                Some("-I" | "--replace") => {
-                    replace =
-                        Some(iter.next().ok_or_else(|| {
-                            XargsFailure::usage("option requires an argument: -I")
-                        })?);
+                b"-s" | b"--max-chars" => max_chars = Some(parse_positive(&value, "-s")?),
+                b"-P" | b"--max-procs" => max_procs = parse_nonnegative(&value, "-P")?,
+                b"-I" | b"--replace" => {
+                    replace = Some(value);
                     max_lines = Some(1);
                     max_args = None;
                 }
-                Some(text) if text.starts_with("-d") && text.len() > 2 => {
-                    delimiter = Some(parse_delimiter(OsStr::new(&text[2..]))?);
-                }
-                Some(text) if text.starts_with("-n") && text.len() > 2 => {
-                    max_args = Some(parse_positive(OsStr::new(&text[2..]), "-n")?);
-                    max_lines = None;
-                }
-                Some(text) if text.starts_with("-L") && text.len() > 2 => {
-                    max_lines = Some(parse_positive(OsStr::new(&text[2..]), "-L")?);
-                    max_args = None;
-                }
-                Some(text) if text.starts_with("-P") && text.len() > 2 => {
-                    max_procs = parse_nonnegative(OsStr::new(&text[2..]), "-P")?;
-                }
-                Some(text) if text.starts_with("-I") && text.len() > 2 => {
-                    replace = Some(OsString::from(&text[2..]));
-                    max_lines = Some(1);
-                    max_args = None;
-                }
-                Some(text) if text.starts_with('-') => {
-                    return Err(XargsFailure::usage(format!("unrecognized option {text}")));
-                }
-                _ => command = Some(arg),
+                _ => unreachable!(),
             }
         }
+        initial.extend(iter);
 
         Ok(Self {
             command: command.unwrap_or_else(|| OsString::from("echo")),
@@ -175,6 +186,7 @@ impl Xargs {
             delimiter,
             max_args,
             max_lines,
+            max_chars,
             max_procs: if max_procs == 0 {
                 std::thread::available_parallelism()
                     .map_or(1, usize::from)
@@ -195,7 +207,12 @@ impl Xargs {
             ));
         }
         let stdin = io::stdin();
-        let mut records = InputRecords::new(BufReader::new(stdin.lock()), self.delimiter, budget);
+        let mut records = InputRecords::new(
+            BufReader::new(stdin.lock()),
+            self.delimiter,
+            self.replace.is_some(),
+            budget,
+        );
         let mut active = VecDeque::new();
         let mut pending = Vec::new();
         let mut pending_lines = 0_usize;
@@ -263,7 +280,7 @@ impl Xargs {
             if !self.queue_batch(&pending, budget, &mut active, &mut status)? {
                 return Ok(status);
             }
-        } else if !saw_input && !self.no_run_if_empty {
+        } else if !saw_input && !self.no_run_if_empty && self.replace.is_none() {
             self.queue_batch(&[], budget, &mut active, &mut status)?;
         }
         while let Some(child) = active.pop_front() {
@@ -282,12 +299,14 @@ impl Xargs {
             return false;
         }
         let count = self.initial.len() + current.len() + additional.len();
-        let bytes = encoded_size(&self.command)
+        let argument_bytes = encoded_size(&self.command)
             .saturating_add(self.initial.iter().map(encoded_size).sum::<usize>())
             .saturating_add(current.iter().map(encoded_size).sum::<usize>())
-            .saturating_add(additional.iter().map(encoded_size).sum::<usize>())
-            .saturating_add((count + 2).saturating_mul(std::mem::size_of::<usize>()));
+            .saturating_add(additional.iter().map(encoded_size).sum::<usize>());
+        let bytes =
+            argument_bytes.saturating_add((count + 2).saturating_mul(std::mem::size_of::<usize>()));
         bytes <= budget
+            && argument_bytes <= self.max_chars.unwrap_or(DEFAULT_EXECUTION_BUDGET)
             && current
                 .iter()
                 .chain(additional)
@@ -297,10 +316,12 @@ impl Xargs {
     fn arguments_fit(&self, fields: &[OsString], budget: usize) -> bool {
         let args = self.build_args(fields);
         let count = args.len();
-        let bytes = encoded_size(&self.command)
-            .saturating_add(args.iter().map(encoded_size).sum::<usize>())
-            .saturating_add((count + 2).saturating_mul(std::mem::size_of::<usize>()));
+        let argument_bytes = encoded_size(&self.command)
+            .saturating_add(args.iter().map(encoded_size).sum::<usize>());
+        let bytes =
+            argument_bytes.saturating_add((count + 2).saturating_mul(std::mem::size_of::<usize>()));
         bytes <= budget
+            && argument_bytes <= self.max_chars.unwrap_or(DEFAULT_EXECUTION_BUDGET)
             && args
                 .iter()
                 .all(|argument| encoded_size(argument) <= MAX_SINGLE_ARGUMENT)
@@ -434,6 +455,8 @@ enum Quote {
 struct InputRecords<R> {
     input: R,
     delimiter: Option<u8>,
+    replacement: bool,
+    trailing_blank: bool,
     field: Vec<u8>,
     record: Vec<OsString>,
     quote: Quote,
@@ -444,10 +467,12 @@ struct InputRecords<R> {
 }
 
 impl<R: BufRead> InputRecords<R> {
-    fn new(input: R, delimiter: Option<u8>, budget: usize) -> Self {
+    fn new(input: R, delimiter: Option<u8>, replacement: bool, budget: usize) -> Self {
         Self {
             input,
             delimiter,
+            replacement,
+            trailing_blank: false,
             field: Vec::new(),
             record: Vec::new(),
             quote: Quote::None,
@@ -538,19 +563,36 @@ impl<R: BufRead> InputRecords<R> {
                 let mut consumed = 0;
                 for &byte in available {
                     consumed += 1;
+                    let continued_line = self.trailing_blank;
+                    self.trailing_blank = matches!(byte, b' ' | b'\t');
+                    if !self.started
+                        && self.quote == Quote::None
+                        && !self.escaped
+                        && matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'\x0b' | b'\x0c')
+                    {
+                        continue;
+                    }
                     if self.escaped {
-                        if byte != b'\n' {
-                            self.field.push(byte);
-                            self.started = true;
-                        }
+                        self.field.push(byte);
+                        self.started = true;
                         self.escaped = false;
                     } else {
                         match (self.quote, byte) {
+                            (Quote::Single | Quote::Double, b'\n') => {
+                                let quote = if self.quote == Quote::Single {
+                                    "single"
+                                } else {
+                                    "double"
+                                };
+                                return Err(XargsFailure::usage(format!(
+                                    "unmatched {quote} quote; by default quotes are special to xargs \
+                                     unless you use the -0 option"
+                                )));
+                            }
                             (Quote::Single, b'\'') | (Quote::Double, b'"') => {
                                 self.quote = Quote::None;
                             }
                             (Quote::Single, byte) => self.field.push(byte),
-                            (Quote::Double, b'\\') => self.escaped = true,
                             (Quote::Double, byte) => self.field.push(byte),
                             (Quote::None, b'\\') => self.escaped = true,
                             (Quote::None, b'\'') => {
@@ -561,7 +603,12 @@ impl<R: BufRead> InputRecords<R> {
                                 self.quote = Quote::Double;
                                 self.started = true;
                             }
-                            (Quote::None, byte) if byte.is_ascii_whitespace() => {
+                            (Quote::None, b' ' | b'\t') if self.replacement => {
+                                if self.started {
+                                    self.field.push(byte);
+                                }
+                            }
+                            (Quote::None, b' ' | b'\t' | b'\n') => {
                                 if self.started {
                                     let field =
                                         os_string_from_input(&std::mem::take(&mut self.field))
@@ -569,7 +616,10 @@ impl<R: BufRead> InputRecords<R> {
                                     self.record.push(field);
                                     self.started = false;
                                 }
-                                if byte == b'\n' && !self.record.is_empty() {
+                                if byte == b'\n'
+                                    && (self.replacement || !continued_line)
+                                    && !self.record.is_empty()
+                                {
                                     completed = Some(std::mem::take(&mut self.record));
                                     break;
                                 }
@@ -621,7 +671,6 @@ fn execution_budget() -> usize {
             .saturating_sub(environment_bytes)
             .saturating_sub((environment_count + 1).saturating_mul(std::mem::size_of::<usize>()))
             .saturating_sub(2048)
-            .min(DEFAULT_EXECUTION_BUDGET)
     }
     #[cfg(not(unix))]
     DEFAULT_EXECUTION_BUDGET
@@ -672,10 +721,8 @@ fn os_string_from_input(bytes: &[u8]) -> Result<OsString, String> {
 #[cfg(unix)]
 fn replace_bytes(arg: &OsStr, marker: &OsStr, fields: &[OsString]) -> OsString {
     let replacement = fields
-        .iter()
-        .flat_map(|field| field.as_bytes().iter().copied().chain(*b" "))
-        .collect::<Vec<_>>();
-    let replacement = replacement.strip_suffix(b" ").unwrap_or(&replacement);
+        .first()
+        .map_or(b"".as_slice(), |field| field.as_bytes());
 
     let source = arg.as_bytes();
     let needle = marker.as_bytes();
@@ -700,11 +747,10 @@ fn replace_bytes(arg: &OsStr, marker: &OsStr, fields: &[OsString]) -> OsString {
 
 #[cfg(not(unix))]
 fn replace_bytes(arg: &OsStr, marker: &OsStr, fields: &[OsString]) -> OsString {
-    let replacement = fields
-        .iter()
-        .map(|field| field.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let replacement = fields.first().map_or_else(
+        || std::borrow::Cow::Borrowed(""),
+        |field| field.to_string_lossy(),
+    );
     arg.to_string_lossy()
         .replace(&*marker.to_string_lossy(), &replacement)
         .into()
