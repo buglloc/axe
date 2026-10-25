@@ -127,7 +127,9 @@ those bytes. `which` does not parse shell aliases or functions.
 
 `tree -h` prints compact human-readable sizes before names, for example
 `[4.9K]  big`. It accepts clustered and repeated flags; `--help` prints help.
-JSON (`-J`), following directory symlinks (`-l`), and `--charset` are not supported.
+`-N` prints pathname bytes as-is; `-q` replaces non-printable characters with
+`?` in UTF-8 locales. JSON (`-J`), following directory symlinks (`-l`), and
+`--charset` are not supported.
 `hexdump`/`hd` do not implement the custom format languages of `-e` and `-f`.
 
 `file` uses bounded content heuristics, not the complete libmagic database. It

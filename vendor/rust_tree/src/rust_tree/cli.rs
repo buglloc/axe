@@ -171,6 +171,20 @@ pub struct Cli {
     pub prune: bool,
 
     #[arg(
+        short = 'N',
+        long = "no-quote",
+        help = "Print non-printable characters as-is."
+    )]
+    pub no_quote: bool,
+
+    #[arg(
+        short = 'q',
+        long = "quote",
+        help = "Print non-printable characters as '?'."
+    )]
+    pub quote_nonprintable: bool,
+
+    #[arg(
         long = "matchdirs",
         help = "Include directory names in -P pattern matching. Matched directories show all contents."
     )]
@@ -203,6 +217,8 @@ pub fn cli_to_options(cli: &Cli) -> Result<TreeOptions, String> {
         match_dirs: cli.match_dirs,
         exclude_patterns,
         color: cli.color,
+        no_quote: cli.no_quote,
+        quote_nonprintable: cli.quote_nonprintable,
         no_color: cli.no_color,
         ascii: cli.ascii,
         sort_by_time: cli.sort_by_time,

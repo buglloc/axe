@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::ffi::{OsStr, OsString};
+use std::ffi::{CStr, OsStr, OsString};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -17,7 +17,8 @@ fn command() -> clap::Command {
         .disable_help_flag(true)
         .args_override_self(true)
         .after_help(
-            "Supports filesystem and --fromfile text listings. JSON (-J), following directory \
+            "Supports filesystem and --fromfile text listings. -N prints names as-is; \
+             -q prints non-printable characters as '?'. JSON (-J), following directory \
              symlinks (-l), and --charset are not supported.",
         )
         .mut_arg("human_readable", |arg| arg.short('h'))
@@ -131,7 +132,15 @@ fn list_filesystem(
             listing.directories = u64::from(metadata.is_dir());
             listing.files = u64::from(!metadata.is_dir());
             listing.write_metadata(writer, &metadata)?;
-            write!(writer, "{}", escaped_name(path.as_os_str(), utf8_names))?;
+            write_name(
+                writer,
+                escaped_name(
+                    path.as_os_str(),
+                    utf8_names,
+                    options.no_quote,
+                    options.quote_nonprintable,
+                ),
+            )?;
             if metadata.is_dir() {
                 match listing.read_entries(path, 0, false) {
                     Ok(entries) => {
@@ -149,11 +158,16 @@ fn list_filesystem(
         }
         Err(_) => {
             listing.had_errors = true;
-            writeln!(
+            write_name(
                 writer,
-                "{}  [error opening dir]",
-                escaped_name(path.as_os_str(), utf8_names)
+                escaped_name(
+                    path.as_os_str(),
+                    utf8_names,
+                    options.no_quote,
+                    options.quote_nonprintable,
+                ),
             )?;
+            writeln!(writer, "  [error opening dir]")?;
         }
     }
     if !options.no_report {
@@ -335,20 +349,31 @@ impl Listing<'_> {
                     &entry.name
                 },
                 self.utf8_names,
+                self.options.no_quote,
+                self.options.quote_nonprintable,
             );
             if self.options.color && !self.options.no_color {
-                write!(writer, "{}", colorize(&entry.entry, &name))?;
+                if let Ok(text) = std::str::from_utf8(name.as_ref()) {
+                    write!(writer, "{}", colorize(&entry.entry, text))?;
+                } else {
+                    writer.write_all(name.as_ref())?;
+                }
             } else {
-                write!(writer, "{name}")?;
+                writer.write_all(name.as_ref())?;
             }
             if self.options.classify {
                 write!(writer, "{}", classify(&entry.metadata))?;
             }
             if entry.metadata.is_symlink() {
-                write!(
+                write!(writer, " -> ")?;
+                write_name(
                     writer,
-                    " -> {}",
-                    escaped_name(fs::read_link(&entry.path)?.as_os_str(), self.utf8_names)
+                    escaped_name(
+                        fs::read_link(&entry.path)?.as_os_str(),
+                        self.utf8_names,
+                        self.options.no_quote,
+                        self.options.quote_nonprintable,
+                    ),
                 )?;
             }
             let children = if entry.metadata.is_dir() {
@@ -428,56 +453,130 @@ impl Listing<'_> {
 }
 
 fn utf8_locale() -> bool {
-    ["LC_ALL", "LC_CTYPE", "LANG"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .find(|value| !value.is_empty())
-        .is_some_and(|value| {
-            let locale = value.to_string_lossy().to_ascii_lowercase();
-            locale.contains("utf-8") || locale.contains("utf8")
-        })
+    #[cfg(unix)]
+    {
+        // SAFETY: setlocale reads the NUL-terminated locale name.
+        let locale = unsafe { libc::setlocale(libc::LC_CTYPE, c"".as_ptr()) };
+        if locale.is_null() {
+            return false;
+        }
+        // This is the resolved locale returned by libc, not an environment
+        // variable. An invalid requested locale returns null above.
+        let locale = unsafe { CStr::from_ptr(locale) }.to_bytes();
+        locale
+            .windows(5)
+            .any(|part| part.eq_ignore_ascii_case(b"utf-8"))
+            || locale
+                .windows(4)
+                .any(|part| part.eq_ignore_ascii_case(b"utf8"))
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
-fn escaped_name(name: &OsStr, utf8: bool) -> Cow<'_, str> {
-    if let Some(name) = name.to_str()
-        && name.chars().all(|character| {
-            !character.is_control()
-                && character != '\\'
-                && character != ' '
-                && (utf8 || character.is_ascii())
-        })
-    {
-        return Cow::Borrowed(name);
+fn write_name(writer: &mut impl Write, name: Cow<'_, [u8]>) -> io::Result<()> {
+    writer.write_all(name.as_ref())
+}
+
+fn escaped_name(
+    name: &OsStr,
+    utf8: bool,
+    no_quote: bool,
+    quote_nonprintable: bool,
+) -> Cow<'_, [u8]> {
+    let bytes = name.as_encoded_bytes();
+    if no_quote {
+        return Cow::Borrowed(bytes);
     }
-    let mut escaped = String::new();
-    for chunk in name.as_encoded_bytes().utf8_chunks() {
+    let mut escaped = Vec::new();
+    let mut changed = false;
+    for chunk in bytes.utf8_chunks() {
         for character in chunk.valid().chars() {
-            match character {
-                '\x07' => escaped.push_str("\\a"),
-                '\x08' => escaped.push_str("\\b"),
-                '\t' => escaped.push_str("\\t"),
-                '\n' => escaped.push_str("\\n"),
-                '\x0b' => escaped.push_str("\\v"),
-                '\x0c' => escaped.push_str("\\f"),
-                '\r' => escaped.push_str("\\r"),
-                '\\' => escaped.push_str("\\\\"),
-                ' ' => escaped.push_str("\\ "),
-                character if character.is_control() || (!utf8 && !character.is_ascii()) => {
-                    use std::fmt::Write as _;
-                    let mut buffer = [0; 4];
-                    for byte in character.encode_utf8(&mut buffer).bytes() {
-                        let _ = write!(escaped, "\\{byte:03o}");
+            let mut append_octal = |byte: u8| {
+                escaped.extend_from_slice(format!("\\{byte:03o}").as_bytes());
+            };
+            if utf8 {
+                if character.is_control() {
+                    changed = true;
+                    if quote_nonprintable {
+                        escaped.push(b'?');
+                    } else {
+                        for byte in character.encode_utf8(&mut [0; 4]).bytes() {
+                            append_octal(byte);
+                        }
                     }
+                } else {
+                    escaped.extend_from_slice(character.encode_utf8(&mut [0; 4]).as_bytes());
                 }
-                character => escaped.push(character),
+            } else if !character.is_ascii() {
+                changed = true;
+                for byte in character.encode_utf8(&mut [0; 4]).bytes() {
+                    append_octal(byte);
+                }
+            } else {
+                let byte = character as u8;
+                match byte {
+                    b'\\' => {
+                        changed = true;
+                        escaped.extend_from_slice(b"\\\\");
+                    }
+                    b' ' => {
+                        changed = true;
+                        escaped.extend_from_slice(b"\\ ");
+                    }
+                    0x07 => {
+                        changed = true;
+                        escaped.extend_from_slice(b"\\a");
+                    }
+                    0x08 => {
+                        changed = true;
+                        escaped.extend_from_slice(b"\\b");
+                    }
+                    b'\t' => {
+                        changed = true;
+                        escaped.extend_from_slice(if utf8 { b"\\011" } else { b"\\t" });
+                    }
+                    b'\n' => {
+                        changed = true;
+                        escaped.extend_from_slice(if utf8 { b"\\012" } else { b"\\n" });
+                    }
+                    0x0b => {
+                        changed = true;
+                        escaped.extend_from_slice(if utf8 { b"\\013" } else { b"\\v" });
+                    }
+                    0x0c => {
+                        changed = true;
+                        escaped.extend_from_slice(if utf8 { b"\\014" } else { b"\\f" });
+                    }
+                    b'\r' => {
+                        changed = true;
+                        escaped.extend_from_slice(if utf8 { b"\\015" } else { b"\\r" });
+                    }
+                    0..=0x1f | 0x7f => {
+                        changed = true;
+                        append_octal(byte);
+                    }
+                    _ => escaped.push(byte),
+                }
             }
         }
         for byte in chunk.invalid() {
-            use std::fmt::Write as _;
-            let _ = write!(escaped, "\\{byte:03o}");
+            if quote_nonprintable && utf8 {
+                changed = true;
+                escaped.push(b'?');
+            } else {
+                changed = true;
+                escaped.extend_from_slice(format!("\\{byte:03o}").as_bytes());
+            }
         }
     }
-    Cow::Owned(escaped)
+    if changed {
+        Cow::Owned(escaped)
+    } else {
+        Cow::Borrowed(bytes)
+    }
 }
 
 fn human_size(mut size: u64) -> String {
@@ -581,5 +680,28 @@ mod tests {
         ] {
             assert_eq!(human_size(size), expected, "{size}");
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn escaped_names_follow_c_and_utf8_locale_rules() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let name = OsString::from_vec(b"back\\slash\n\x01space \xc3\xa9\xff".to_vec());
+        assert_eq!(
+            escaped_name(&name, false, false, false).as_ref(),
+            b"back\\\\slash\\n\\001space\\ \\303\\251\\377"
+        );
+        assert_eq!(
+            escaped_name(&name, true, false, false).as_ref(),
+            b"back\\slash\\012\\001space \xc3\xa9\\377"
+        );
+        assert_eq!(
+            escaped_name(&name, true, false, true).as_ref(),
+            b"back\\slash??space \xc3\xa9?"
+        );
+        assert_eq!(
+            escaped_name(&name, true, true, true).as_ref(),
+            b"back\\slash\n\x01space \xc3\xa9\xff"
+        );
     }
 }

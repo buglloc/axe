@@ -27,4 +27,6 @@ pub struct TreeOptions {
     pub from_file: bool,
     pub icons: bool,
     pub prune: bool,
+    pub no_quote: bool,
+    pub quote_nonprintable: bool,
 }
