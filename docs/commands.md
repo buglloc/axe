@@ -176,12 +176,17 @@ codec; always check the exit status.
 
 `gzip -dcf` copies non-gzip input to stdout. Force mode does not rename plain
 files during file-to-file decompression, and `-l` still requires gzip data.
+`-S SUF`/`--suffix=SUF` selects an additional compressed-file suffix (and the
+suffix used for compression); `-r`/`--recursive` processes directory trees for
+gzip and XZ. Empty suffixes and suffixes containing `/` are rejected.
 Concatenated members are decoded in order; trailing non-gzip bytes produce status
 2 unless force-to-stdout mode copies them. XZ plaintext passthrough requires
 explicit stdout mode (`-c` or a cat alias), not merely stdin's default output.
 Bzip2 forced plaintext stdin is preserved even where the reference emits none.
-Unsupported options include gzip `-S`, bzip2 `-s`/`-T`, XZ `-e`/`--check`/
-`--single-stream`, and Zstd `-l`; these are rejected, not silently ignored.
+File-to-file outputs preserve source ownership when the operating system permits
+it; ACL and extended-attribute preservation are not promised. Unsupported
+options include bzip2 `-s`/`-T`, XZ `-e`/`--check`/`--single-stream`, and
+Zstd `-l`; these are rejected, not silently ignored.
 
 `tar` accepts old-style clusters such as `tar cfz archive.tgz directory`;
 argument-taking options consume following words, and `-C` is positional.

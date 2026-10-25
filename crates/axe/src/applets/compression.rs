@@ -1,11 +1,18 @@
 use std::borrow::Cow;
+#[cfg(unix)]
+use std::cell::UnsafeCell;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt as _;
 
 use bzip2::bufread::BzDecoder;
 use bzip2::read::BzEncoder;
@@ -33,9 +40,9 @@ impl Format {
 
     fn usage(self) -> &'static str {
         match self {
-            Self::Gzip => "[-cdfkltqv] [-1..-9] [--best|--fast] [FILE ...]",
+            Self::Gzip => "[-cdfkltqvr] [-1..-9] [--best|--fast] [-S SUF] [FILE ...]",
             Self::Bzip2 => "[-cdfktqv] [-1..-9] [FILE ...]",
-            Self::Xz => "[-cdfktlqv] [-T THREADS] [-1..-9] [FILE ...]",
+            Self::Xz => "[-cdfkltqvr] [-T THREADS] [-S SUF] [-1..-9] [FILE ...]",
             Self::Zstd => {
                 "[-cdfktqv] [-o FILE] [-T THREADS] [-1..-19] [--ultra -20..-22] [--fast[=N]] [--rm] [FILE ...]"
             }
@@ -93,10 +100,12 @@ struct Options {
     list: bool,
     quiet: bool,
     verbose: bool,
+    recursive: bool,
     level: i32,
     threads: u32,
     files: Vec<OsString>,
     output: Option<PathBuf>,
+    suffix: Option<OsString>,
     ultra: bool,
 }
 
@@ -122,6 +131,7 @@ impl Options {
             list: false,
             quiet: false,
             verbose: false,
+            recursive: false,
             level: match format {
                 Format::Bzip2 => 9,
                 Format::Zstd => 3,
@@ -130,6 +140,7 @@ impl Options {
             threads: 1,
             files: Vec::new(),
             output: None,
+            suffix: None,
             ultra: false,
         };
 
@@ -152,7 +163,20 @@ impl Options {
                 return Err(done());
             } else if options.long_option(text, &mut args)? {
             } else if text.starts_with('-') && text != "-" {
-                for flag in text[1..].chars() {
+                let mut flags = text[1..].chars();
+                while let Some(flag) = flags.next() {
+                    if flag == 'S' {
+                        if !matches!(format, Format::Gzip | Format::Xz) {
+                            return Err(invalid("unsupported option -S"));
+                        }
+                        let suffix = if flags.as_str().is_empty() {
+                            args.next().ok_or_else(|| invalid("-S requires a suffix"))?
+                        } else {
+                            OsString::from(flags.as_str())
+                        };
+                        options.suffix = Some(suffix);
+                        break;
+                    }
                     options.short_option(flag)?;
                 }
             } else {
@@ -171,6 +195,19 @@ impl Options {
                 options.stdout = true;
                 options.output = None;
             }
+        }
+
+        if let Some(suffix) = options.suffix.as_deref() {
+            let bytes = suffix.as_encoded_bytes();
+            if bytes.is_empty() {
+                return Err(invalid("invalid suffix ''"));
+            }
+            if bytes.contains(&b'/') {
+                return Err(invalid("suffix contains '/'"));
+            }
+        }
+        if options.recursive && !matches!(format, Format::Gzip | Format::Xz) {
+            return Err(invalid("unsupported option --recursive"));
         }
 
         options.decompress |= options.test;
@@ -205,6 +242,21 @@ impl Options {
         text: &str,
         args: &mut impl Iterator<Item = OsString>,
     ) -> io::Result<bool> {
+        if text == "--recursive" {
+            self.recursive = true;
+            return Ok(true);
+        }
+        if text == "--suffix" {
+            self.suffix = Some(
+                args.next()
+                    .ok_or_else(|| invalid("--suffix requires a suffix"))?,
+            );
+            return Ok(true);
+        }
+        if let Some(value) = text.strip_prefix("--suffix=") {
+            self.suffix = Some(OsString::from(value));
+            return Ok(true);
+        }
         if matches!(self.format, Format::Zstd) {
             match text {
                 "--rm" => self.keep = false,
@@ -299,6 +351,7 @@ impl Options {
                 self.test = true;
                 self.decompress = true;
             }
+            (Format::Gzip | Format::Xz, 'r') => self.recursive = true,
             (Format::Gzip, 'n') => {}
             (Format::Gzip, 'q') => self.quiet = true,
             (Format::Gzip, 'v') => self.verbose = true,
@@ -329,8 +382,9 @@ impl Options {
             return self.finish_operand("(stdin)", self.filter_stdin());
         }
 
+        let files = self.input_files()?;
         let mut status = 0;
-        for file in &self.files {
+        for file in &files {
             let result = if file == OsStr::new("-") {
                 self.filter_stdin()
             } else {
@@ -346,6 +400,14 @@ impl Options {
             status = self.merge_status(status, code);
         }
         Ok(status)
+    }
+
+    fn input_files(&self) -> io::Result<Vec<OsString>> {
+        let mut files = Vec::new();
+        for file in &self.files {
+            collect_input_files(Path::new(file), self.recursive, &mut files)?;
+        }
+        Ok(files)
     }
 
     fn merge_status(&self, previous: i32, code: i32) -> i32 {
@@ -492,9 +554,10 @@ impl Options {
         if !self.decompress
             && !self.test
             && (to_file || matches!(self.format, Format::Bzip2))
-            && let Some(suffix) = compressed_suffix(path, self.format)
+            && let Some(suffix) = compressed_suffix(path, self.format, self.suffix.as_deref())
             && !(matches!(self.format, Format::Gzip) && self.force)
         {
+            let suffix = suffix.to_string_lossy();
             return Ok(match self.format {
                 Format::Gzip => self.skip(
                     0,
@@ -520,19 +583,21 @@ impl Options {
         let destination = if to_file {
             Some(match &self.output {
                 Some(output) => Cow::Borrowed(output.as_path()),
-                None => match output_path(path, self.decompress, self.format) {
-                    Ok(output) => Cow::Owned(output),
-                    Err(error) => {
-                        return Ok(self.skip(
-                            if matches!(self.format, Format::Gzip | Format::Xz) {
-                                2
-                            } else {
-                                1
-                            },
-                            error,
-                        ));
+                None => {
+                    match output_path(path, self.decompress, self.format, self.suffix.as_deref()) {
+                        Ok(output) => Cow::Owned(output),
+                        Err(error) => {
+                            return Ok(self.skip(
+                                if matches!(self.format, Format::Gzip | Format::Xz) {
+                                    2
+                                } else {
+                                    1
+                                },
+                                error,
+                            ));
+                        }
                     }
-                },
+                }
             })
         } else {
             None
@@ -565,7 +630,7 @@ impl Options {
             }
             if self.decompress
                 && matches!(self.format, Format::Bzip2)
-                && compressed_suffix(path, self.format).is_none()
+                && compressed_suffix(path, self.format, self.suffix.as_deref()).is_none()
                 && self.output.is_none()
                 && !self.quiet
             {
@@ -877,7 +942,8 @@ impl Options {
             });
             return self.finish_operand("(stdin)", result);
         }
-        for file in &self.files {
+        let files = self.input_files()?;
+        for file in &files {
             let result = if file == OsStr::new("-") {
                 read_stdin()
             } else {
@@ -886,7 +952,7 @@ impl Options {
             .and_then(|bytes| {
                 let name = if matches!(self.format, Format::Gzip) {
                     Cow::Owned(
-                        output_path(Path::new(file), true, self.format)
+                        output_path(Path::new(file), true, self.format, self.suffix.as_deref())
                             .unwrap_or_else(|_| PathBuf::from(file))
                             .display()
                             .to_string(),
@@ -1387,6 +1453,21 @@ fn decode_gzip(input: impl Read, mut output: impl Write, passthrough: bool) -> i
     }
 }
 
+fn collect_input_files(path: &Path, recursive: bool, files: &mut Vec<OsString>) -> io::Result<()> {
+    if !recursive || path == Path::new("-") {
+        files.push(path.as_os_str().to_owned());
+        return Ok(());
+    }
+    if !fs::symlink_metadata(path)?.is_dir() {
+        files.push(path.as_os_str().to_owned());
+        return Ok(());
+    }
+    for entry in fs::read_dir(path)? {
+        collect_input_files(&entry?.path(), true, files)?;
+    }
+    Ok(())
+}
+
 fn read_stdin() -> io::Result<Vec<u8>> {
     let mut compressed = Vec::new();
     io::stdin().read_to_end(&mut compressed)?;
@@ -1419,12 +1500,118 @@ fn same_identity(_left: &Metadata, _right: &Metadata) -> bool {
     false
 }
 
-// Only a finished, synced file is published. A crash can leave a staging file,
-// but cannot expose partial output at the destination or destroy its old inode.
+#[cfg(unix)]
+const CLEANUP_SLOTS: usize = 16;
+#[cfg(unix)]
+const CLEANUP_PATH_MAX: usize = 4096;
+
+#[cfg(unix)]
+struct CleanupSlot {
+    active: AtomicBool,
+    path: UnsafeCell<[u8; CLEANUP_PATH_MAX]>,
+}
+
+#[cfg(unix)]
+impl CleanupSlot {
+    const fn new() -> Self {
+        Self {
+            active: AtomicBool::new(false),
+            path: UnsafeCell::new([0; CLEANUP_PATH_MAX]),
+        }
+    }
+}
+
+#[cfg(unix)]
+// SAFETY: the path is written before active is published and only read by the
+// signal handler while active remains true.
+unsafe impl Sync for CleanupSlot {}
+
+#[cfg(unix)]
+static CLEANUP_SLOTS_STATE: [CleanupSlot; CLEANUP_SLOTS] =
+    [const { CleanupSlot::new() }; CLEANUP_SLOTS];
+#[cfg(unix)]
+static CLEANUP_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+unsafe extern "C" fn cleanup_signal(signal: libc::c_int) {
+    for slot in &CLEANUP_SLOTS_STATE {
+        if slot.active.load(Ordering::Acquire) {
+            // SAFETY: active is published only after a NUL-terminated path is
+            // copied into the fixed-size slot.
+            unsafe {
+                libc::unlink((*slot.path.get()).as_ptr().cast());
+            }
+        }
+    }
+    // SAFETY: signal disposition and process-directed signal delivery are
+    // async-signal-safe.
+    unsafe {
+        libc::signal(signal, libc::SIG_DFL);
+        libc::kill(libc::getpid(), signal);
+        libc::_exit(128 + signal);
+    }
+}
+
+#[cfg(unix)]
+fn install_cleanup_signals() -> io::Result<()> {
+    if CLEANUP_INSTALLED.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+        // SAFETY: cleanup_signal has the C signal-handler ABI and does not
+        // capture state.
+        let result =
+            unsafe { libc::signal(signal, cleanup_signal as *const () as libc::sighandler_t) };
+        if result == libc::SIG_ERR {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    CLEANUP_INSTALLED.store(true, Ordering::Release);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn register_cleanup_path(path: &Path) -> io::Result<usize> {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    if bytes.len() >= CLEANUP_PATH_MAX {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "temporary output path is too long",
+        ));
+    }
+    install_cleanup_signals()?;
+    for (index, slot) in CLEANUP_SLOTS_STATE.iter().enumerate() {
+        if !slot.active.load(Ordering::Acquire) {
+            // SAFETY: no active handler can read this slot until active is
+            // published below, and staging creation is single-threaded.
+            unsafe {
+                let path = &mut *slot.path.get();
+                path[..bytes.len()].copy_from_slice(bytes);
+                path[bytes.len()] = 0;
+            }
+            slot.active.store(true, Ordering::Release);
+            return Ok(index);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::WouldBlock,
+        "too many active temporary outputs",
+    ))
+}
+
+#[cfg(unix)]
+fn unregister_cleanup_path(index: usize) {
+    CLEANUP_SLOTS_STATE[index]
+        .active
+        .store(false, Ordering::Release);
+}
+
 struct PendingOutput {
     path: Option<PathBuf>,
     file: File,
     directory: File,
+    #[cfg(unix)]
+    signal_slot: usize,
 }
 
 impl PendingOutput {
@@ -1457,10 +1644,20 @@ impl PendingOutput {
             }
             match options.open(&path) {
                 Ok(file) => {
+                    #[cfg(unix)]
+                    let signal_slot = match register_cleanup_path(&path) {
+                        Ok(slot) => slot,
+                        Err(error) => {
+                            let _ = fs::remove_file(&path);
+                            return Err(error);
+                        }
+                    };
                     return Ok(Self {
                         path: Some(path),
                         file,
                         directory,
+                        #[cfg(unix)]
+                        signal_slot,
                     });
                 }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -1482,7 +1679,25 @@ impl PendingOutput {
         if let Some(metadata) = metadata {
             #[cfg(unix)]
             {
-                use std::os::unix::fs::PermissionsExt;
+                use std::os::fd::AsRawFd;
+                use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+                // GNU copy_stat ignores EPERM when ownership cannot be
+                // restored, but always strips set-ID bits before chmod so
+                // they cannot be granted to a different owner.
+                let result = unsafe {
+                    libc::fchown(
+                        self.file.as_raw_fd(),
+                        metadata.uid() as libc::uid_t,
+                        metadata.gid() as libc::gid_t,
+                    )
+                };
+                if result == -1 {
+                    let error = io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::EPERM) {
+                        return Err(error);
+                    }
+                }
                 self.file.set_permissions(fs::Permissions::from_mode(
                     metadata.permissions().mode() & 0o777,
                 ))?;
@@ -1515,6 +1730,8 @@ impl PendingOutput {
             fs::remove_file(staging)?;
             self.path = None;
         }
+        #[cfg(unix)]
+        unregister_cleanup_path(self.signal_slot);
         // The caller must not remove its input until the new directory entry is durable.
         self.directory.sync_all()
     }
@@ -1523,7 +1740,7 @@ impl PendingOutput {
         let Some(path) = self.path.take() else {
             return error;
         };
-        match fs::remove_file(&path) {
+        let result = match fs::remove_file(&path) {
             Ok(()) => error,
             Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => error,
             Err(cleanup) => io::Error::new(
@@ -1533,7 +1750,10 @@ impl PendingOutput {
                     path.display()
                 ),
             ),
-        }
+        };
+        #[cfg(unix)]
+        unregister_cleanup_path(self.signal_slot);
+        result
     }
 }
 
@@ -1541,6 +1761,8 @@ impl Drop for PendingOutput {
     fn drop(&mut self) {
         if let Some(path) = &self.path {
             let _ = fs::remove_file(path);
+            #[cfg(unix)]
+            unregister_cleanup_path(self.signal_slot);
         }
     }
 }
@@ -1558,30 +1780,73 @@ fn output_exists(path: &Path) -> io::Error {
     )
 }
 
-fn compressed_suffix(path: &Path, format: Format) -> Option<&'static str> {
+fn os_string_from_bytes(bytes: &[u8]) -> OsString {
+    #[cfg(unix)]
+    {
+        OsString::from_vec(bytes.to_vec())
+    }
+    #[cfg(not(unix))]
+    {
+        OsString::from(String::from_utf8_lossy(bytes).into_owned())
+    }
+}
+
+fn compressed_suffix(path: &Path, format: Format, custom: Option<&OsStr>) -> Option<OsString> {
     let name = path.file_name()?.as_encoded_bytes();
-    let suffixes: &[&str] = match format {
-        Format::Gzip => &[".tgz", ".taz", ".gz", "-gz", ".z", "-z", "_z", ".Z"],
-        Format::Bzip2 => &[".tbz2", ".tbz", ".bz2", ".bz"],
-        Format::Xz => &[".txz", ".xz"],
+    if let Some(suffix) = custom
+        && name.ends_with(suffix.as_encoded_bytes())
+    {
+        return Some(suffix.to_os_string());
+    }
+    let suffixes: &[&[u8]] = match format {
+        Format::Gzip => &[b".tgz", b".taz", b".gz", b"-gz", b".z", b"-z", b"_z", b".Z"],
+        Format::Bzip2 => &[b".tbz2", b".tbz", b".bz2", b".bz"],
+        Format::Xz => &[b".txz", b".xz"],
         Format::Zstd => &[],
     };
     suffixes
         .iter()
-        .copied()
-        .find(|suffix| name.ends_with(suffix.as_bytes()))
+        .find(|suffix| name.ends_with(suffix))
+        .map(|suffix| os_string_from_bytes(suffix))
 }
 
-fn output_path(input: &Path, decompress: bool, format: Format) -> io::Result<PathBuf> {
+fn append_suffix(input: &Path, suffix: &OsStr) -> PathBuf {
+    let mut output = input.as_os_str().to_owned();
+    output.push(suffix);
+    output.into()
+}
+
+fn remove_suffix(input: &Path, suffix: &[u8]) -> Option<PathBuf> {
+    let name = input.file_name()?.as_encoded_bytes();
+    name.ends_with(suffix)
+        .then(|| path_with_file_name(input, &name[..name.len() - suffix.len()]))
+}
+
+fn path_with_file_name(input: &Path, name: &[u8]) -> PathBuf {
+    #[cfg(unix)]
+    {
+        input.with_file_name(OsString::from_vec(name.to_vec()))
+    }
+    #[cfg(not(unix))]
+    {
+        input.with_file_name(String::from_utf8_lossy(name).into_owned())
+    }
+}
+
+fn output_path(
+    input: &Path,
+    decompress: bool,
+    format: Format,
+    custom: Option<&OsStr>,
+) -> io::Result<PathBuf> {
     if !decompress {
-        let mut output = input.as_os_str().to_owned();
-        output.push(match format {
-            Format::Gzip => ".gz",
-            Format::Bzip2 => ".bz2",
-            Format::Xz => ".xz",
-            Format::Zstd => ".zst",
+        let suffix = custom.unwrap_or_else(|| match format {
+            Format::Gzip => OsStr::new(".gz"),
+            Format::Bzip2 => OsStr::new(".bz2"),
+            Format::Xz => OsStr::new(".xz"),
+            Format::Zstd => OsStr::new(".zst"),
         });
-        return Ok(output.into());
+        return Ok(append_suffix(input, suffix));
     }
 
     let unknown = || {
@@ -1599,50 +1864,61 @@ fn output_path(input: &Path, decompress: bool, format: Format) -> io::Result<Pat
     };
     match format {
         Format::Gzip => {
-            let name = input
-                .file_name()
-                .and_then(OsStr::to_str)
-                .unwrap_or_default();
-            let output_name = if let Some(stem) = name
-                .strip_suffix(".tgz")
-                .or_else(|| name.strip_suffix(".taz"))
+            if let Some(suffix) = custom
+                && let Some(output) = remove_suffix(input, suffix.as_encoded_bytes())
             {
-                format!("{stem}.tar")
-            } else if let Some(stem) = [".gz", "-gz", ".z", "-z", "_z", ".Z"]
-                .into_iter()
-                .find_map(|suffix| name.strip_suffix(suffix))
-            {
-                stem.to_owned()
-            } else {
-                return Err(unknown());
-            };
-            Ok(input.with_file_name(output_name))
+                return Ok(output);
+            }
+            for (suffix, tar) in [
+                (b".tgz".as_slice(), true),
+                (b".taz".as_slice(), true),
+                (b".gz".as_slice(), false),
+                (b"-gz".as_slice(), false),
+                (b".z".as_slice(), false),
+                (b"-z".as_slice(), false),
+                (b"_z".as_slice(), false),
+                (b".Z".as_slice(), false),
+            ] {
+                if let Some(output) = remove_suffix(input, suffix) {
+                    return Ok(if tar {
+                        append_suffix(&output, OsStr::new(".tar"))
+                    } else {
+                        output
+                    });
+                }
+            }
+            Err(unknown())
         }
         Format::Bzip2 | Format::Xz | Format::Zstd => {
-            let suffix = input
-                .extension()
-                .and_then(OsStr::to_str)
-                .unwrap_or_default();
-            let accepted = match format {
-                Format::Bzip2 => matches!(suffix, "bz2" | "bz" | "tbz" | "tbz2"),
-                Format::Gzip | Format::Xz => matches!(suffix, "xz" | "txz"),
-                Format::Zstd => matches!(suffix, "zst" | "tzst"),
+            let defaults: &[(&[u8], bool)] = match format {
+                Format::Bzip2 => &[
+                    (b".tbz2", true),
+                    (b".tbz", true),
+                    (b".bz2", false),
+                    (b".bz", false),
+                ],
+                Format::Xz => &[(b".txz", true), (b".xz", false)],
+                Format::Zstd => &[(b".tzst", true), (b".zst", false)],
+                Format::Gzip => unreachable!(),
             };
-            if !accepted {
-                if matches!(format, Format::Bzip2) {
-                    let mut output = input.as_os_str().to_owned();
-                    output.push(".out");
-                    return Ok(output.into());
-                }
-                return Err(unknown());
+            if let Some(suffix) = custom
+                && let Some(output) = remove_suffix(input, suffix.as_encoded_bytes())
+            {
+                return Ok(output);
             }
-            let mut output = input.to_path_buf();
-            output.set_extension(if matches!(suffix, "tbz" | "tbz2" | "txz" | "tzst") {
-                "tar"
-            } else {
-                ""
-            });
-            Ok(output)
+            for (suffix, tar) in defaults {
+                if let Some(output) = remove_suffix(input, suffix) {
+                    return Ok(if *tar {
+                        append_suffix(&output, OsStr::new(".tar"))
+                    } else {
+                        output
+                    });
+                }
+            }
+            if matches!(format, Format::Bzip2) {
+                return Ok(append_suffix(input, OsStr::new(".out")));
+            }
+            Err(unknown())
         }
     }
 }
@@ -1714,22 +1990,22 @@ mod tests {
     #[test]
     fn traditional_suffixes_are_mapped() {
         assert_eq!(
-            output_path(Path::new("archive.tbz2"), true, Format::Bzip2).unwrap(),
+            output_path(Path::new("archive.tbz2"), true, Format::Bzip2, None,).unwrap(),
             PathBuf::from("archive.tar")
         );
         assert_eq!(
-            output_path(Path::new("data.xz"), true, Format::Xz).unwrap(),
+            output_path(Path::new("data.xz"), true, Format::Xz, None).unwrap(),
             PathBuf::from("data")
         );
         assert_eq!(
-            output_path(Path::new("archive.tgz"), true, Format::Gzip).unwrap(),
+            output_path(Path::new("archive.tgz"), true, Format::Gzip, None,).unwrap(),
             PathBuf::from("archive.tar")
         );
     }
 
     #[test]
     fn unknown_decompression_suffix_is_rejected() {
-        assert!(output_path(Path::new("data.bin"), true, Format::Xz).is_err());
-        assert!(output_path(Path::new("data.bz2"), true, Format::Gzip).is_err());
+        assert!(output_path(Path::new("data.bin"), true, Format::Xz, None).is_err());
+        assert!(output_path(Path::new("data.bz2"), true, Format::Gzip, None).is_err());
     }
 }
