@@ -33,6 +33,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `cek` | `containers/cek` | Inspect, copy, and compare files in OCI images without a container runtime | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `curl` | `network/curl` | Transfer data over HTTPS with Mozilla CAs | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `dbus-monitor` | `debugging/dbus-monitor` | Monitor D-Bus messages | `aarch64-linux`, `x86_64-linux` |
+| `difft` | `text/difft` | Compare files with syntax-aware structural diffs | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `dig` | `network/dig` | Query DNS records with the BIND client | `aarch64-linux`, `x86_64-linux` |
 | `dnsx` | `network/dnsx` | Resolve and enumerate DNS records | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `docker` | `containers/docker` | Manage Docker through a remote daemon | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
@@ -107,6 +108,8 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `zdns` | `network/zdns` | Perform high-speed DNS lookups with optional local recursive resolution | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `zellij` | `terminal/zellij` | Manage terminal sessions, panes, and embedded plugins | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `zgrab2` | `network/zgrab2` | Scan application-layer protocols and collect service metadata | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+
+`difft` is Difftastic's syntax-aware structural diff tool; it performs local comparisons without automatic update checks or telemetry.
 
 The `nuclei` package includes pinned `nuclei-templates`; no separate template download is needed on first run.
 

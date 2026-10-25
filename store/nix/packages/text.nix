@@ -19,6 +19,13 @@
     darwinSystemLibraries = ["libz.dylib"];
   };
 
+  difft = mkNixpkgsBinary {
+    name = "difft";
+    synopsis = "Compare files with syntax-aware structural diffs";
+    systems = portableSystems;
+    packageFor = target: targetPkgs: (packageSetFor target targetPkgs).difftastic;
+  };
+
   jq = mkNixpkgsBinary {
     name = "jq";
     synopsis = "Process and transform JSON data";
