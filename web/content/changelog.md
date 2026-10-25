@@ -2,6 +2,43 @@
 title = "Changelog"
 +++
 
+## [v0.8.0](https://github.com/buglloc/axe/releases/tag/v0.8.0) — 2026-10-25
+
+### Highlights
+
+- Added bundled `sdiff` with side-by-side comparison, merge mode, interactive conflict selection, and atomic output publication. `41ccfcc009c4b45c3f34ab57b4c346ddacdefd8`
+- Improved `diff` compatibility with GNU context horizons, `--horizon-lines`, shifted hunk boundaries, missing-final-newline handling, and byte- or display-width-aware side-by-side output. `d500cdef41302380584ccbfbeef3c1e499e9eac1`
+- Added the portable `difft` Store package based on difftastic. `22ba6b29cd7adfaef7c8f79064b68cc4ce5786f6`
+- Updated all vendored Brush crates to upstream revision `e37b3c91`, including fixes for builtin help output, empty-array expansion, and globbing after empty quotes. `741c1f482956058f50bce2817686ac5a49ad4b40`
+- Added portable Store packages for Vim, asciinema, micro, ox, broot, and spf. `a72afa76188f832dd0d47382a865169c99cabe83` `ce45980e8edaf6eba7aef9568b33384267ad079b` `9a17438f663f76fc6cfff1dd74c66d1c157e6752` `89229eabd540f4f46392aab2938be255f59a0d21`
+
+### Changes
+
+- Removed the bundled `diff3` applet because its generic merge implementation misclassified conflicts and could panic on valid input. `4bed2f40d8092427bbdbcccc354fc142686d27ca`
+- `diff` now supports `-E`, `-Z`, `--strip-trailing-cr`, `-d`/`--minimal`, `--unidirectional-new-file`, `-T`, `--left-column`, and `--suppress-common-lines`; its edit scripts use gix-imara-diff with raw-byte line tokenization. `10e3b08e14f9ca141ece7ccce88d344334bda6fb`
+- `tar` now accepts byte-oriented `--files-from` lists, including `-T -`, `--null`, non-UTF-8 names, and in-list `-C`/`--directory` directives. `548cf28f6f5a422f9b0ffb3fdada442ce57f56c6`
+- `gzip` and XZ compression now preserve source ownership where permitted, clean up staging files after termination signals, support `-S`/`--suffix`, and recursively process directories with `-r`. `cf7214d368bfac119f51377f42fa26b9876eea7b`
+- `awk` now skips missing `ARGV` entries and bounds dynamically sized fields and field indices, returning a runtime error instead of hanging or panicking on extreme values. `b16904f92ffc16cfffae4df3136f873a37c56c63`
+- `jq` input handling now preserves a lazy byte stream across files and stdin, validates JSON boundaries, canonicalizes numbers, and aligns `halt_error` status and payload behavior with jq. `3258b2be38e6fb1d32d394f0f0b9f3cba894c264`
+- `sed` now keeps scripts, operands, patterns, replacements, transliteration tables, labels, and filenames byte-oriented; resolves transliteration behavior from the active locale; and opens `w`/`W` and substitution output files at startup. `debc6ee942bfac119f51377f42fa26b9876eea7`
+- `xargs` now supports GNU logical EOF options `-E`, legacy `-e`, and `--eof`, including raw markers and the documented record-boundary behavior. `c89784d302904d9bf4c0faebb918306850b535d8`
+- The release adds a vendored provenance audit and a `vendor-test` target covering vendored packages against the locked workspace dependency graph. `2aa9fbb5a11aab9c851bfbb68786eeeec1530ff3`
+
+### Fixes
+
+- AXE now preserves inherited SIGPIPE behavior across standalone applets, shell builtins, external children, and bundled self-exec children; in-process broken-pipe failures map to shell status 141 without an extra diagnostic. `5036f0478e64d6bd6f6affaac60239e10a5dd7b1`
+- `cmp` now reports stdout write failures with status 2 and flushes its `-l` output before returning. `ffa7e9e8727da6b0bb2aa11ce5a23c4365e686af`
+- `mkdir` restores all special mode bits through a pinned parent-relative descriptor, avoiding pathname substitution races and preserving the sticky bit. `914aba98440ac18c3a3005420c61ca4edc21ab5f`
+- `blkid` now rejects truncated LUKS1 probes and reports swap, LUKS, exFAT, GPT, MBR, FAT12, and partition-table identifiers according to the documented compatibility behavior. `678fa26cab0434c43da27d5b61c4e91a192e1dd9` `7d785f1690afb738939574620920bb2f0ce2616`
+- `stty` now accepts arbitrary Linux `termios2` speeds through BOTHER while retaining standard names and aliases. `a995af5a70aae630c604470bbb37d2ac73cf3d2f`
+- `find` preserves raw Unix pathname bytes in formatters and regular-expression operands, and propagates output write failures instead of panicking. `899ad633700a7217e5955f91e88a1f69a0cfa979`
+- `tree` now supports raw-name and question-mark modes, locale-specific escaping, and `-N`; its `-h` behavior is also aligned with GNU tree. `30fd83be49feb62259f98d70a482e1ae59d7fafd` `237f3bd7cde2dabdeeb3cb5a809975b9082ab7ba`
+- `ps`, `ip`, `arp`, and `ifconfig` received compatibility fixes for field widths, route and address rendering, option bundling, missing-device errors, and broken-pipe handling. `c404ed3ff25cc3531c1b3277607f7a588033b9ae` `d82cb0683f37c57cddbcae7cc27731b6ae3edcdb` `2228565a05765577a107c0944de4c9083324c0f0`
+- `umount` now supports recursive and filtered unmount selection, lazy and forced modes, read-only remount on busy targets, and verbose reporting. `b1492ead8cca02676ebd7d1cf7cc3262942b5e4b`
+- `ping` now includes mean deviation in its `rtt min/avg/max/mdev` summary. `de48a9d3290fa6c21c2a93d8366675d915b14865`
+- `gzip -f` and `zcat -f` now pass non-gzip input through unchanged with status 0; without `-f`, invalid gzip input remains an error. `a4bfcc50fd19d738b827951e47a1ed490d614e4a`
+- `blockdev --report` now lists available block devices when no device is specified, and `--setro`/`--setrw` pass the ioctl argument in the expected form. `ff0a8987371bb7c07afdcb31b6487da335dff281`
+
 ## [v0.7.0](https://github.com/buglloc/axe/releases/tag/v0.7.0) — 2026-10-23
 
 ### Highlights
