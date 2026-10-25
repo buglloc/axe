@@ -963,6 +963,7 @@ impl From<io::Error> for AttachError {
 
 /// The `-t`/fstab type list, else the probed type, else every non-`nodev`
 /// kernel filesystem. A `-t` list with a leading `no` is negated (`-t nonfs,smbfs`).
+/// Ambiguous signatures require an explicit filesystem type.
 fn filesystem_types(
     explicit: Option<&str>,
     pattern: bool,
@@ -984,11 +985,19 @@ fn filesystem_types(
     // Like util-linux, a missing source is not checked up front: the kernel's
     // answer for each candidate type decides the error.
     let path = Path::new(source);
-    if let Ok(Some(signature)) = probe(path)
-        && let Some(fs_type) = signature.fs_type
-        && allowed(fs_type)
-    {
-        return Ok(vec![fs_type.to_owned()]);
+    if let Ok(Some(signature)) = probe(path) {
+        if signature.ambivalent {
+            return Err(failed(format!(
+                "{}: multiple filesystem signatures detected on {}; specify a filesystem type.",
+                target.display(),
+                source.display()
+            )));
+        }
+        if let Some(fs_type) = signature.fs_type
+            && allowed(fs_type)
+        {
+            return Ok(vec![fs_type.to_owned()]);
+        }
     }
     let filesystems = fs::read_to_string(FILESYSTEMS)
         .map_err(|error| failed(format!("{FILESYSTEMS}: {}", strerror(&error))))?;

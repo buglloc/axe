@@ -460,6 +460,7 @@ dependencies = [
  "axe-relay",
  "axe-store-client",
  "base64 0.22.1",
+ "blake2b_simd",
  "brush-coreutils-builtins",
  "brush-shell",
  "bytes",
@@ -510,6 +511,7 @@ dependencies = [
  "sed-rs",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "signal-hook",
  "similar",
  "ssh-key",
@@ -558,6 +560,7 @@ dependencies = [
  "webpki-root-certs",
  "which",
  "whoami",
+ "xxhash-rust",
  "zstd",
 ]
 
@@ -8560,7 +8563,6 @@ dependencies = [
 [[package]]
 name = "uu_hexdump"
 version = "0.0.1"
-source = "git+https://github.com/uutils/util-linux?rev=0cb1f90b9983c504a7f895ba65caa4b0b1f51c20#0cb1f90b9983c504a7f895ba65caa4b0b1f51c20"
 dependencies = [
  "clap",
  "uucore 0.2.2",
@@ -8773,9 +8775,9 @@ dependencies = [
 [[package]]
 name = "uu_mountpoint"
 version = "0.0.1"
-source = "git+https://github.com/uutils/util-linux?rev=0cb1f90b9983c504a7f895ba65caa4b0b1f51c20#0cb1f90b9983c504a7f895ba65caa4b0b1f51c20"
 dependencies = [
  "clap",
+ "libc",
  "uucore 0.2.2",
 ]
 
@@ -10490,6 +10492,12 @@ name = "xmlparser"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "550a2b930b62486a393c52d5c3b84bff264b28aa437ed64694d31e93b1757af7"
 
 [[package]]
 name = "yamux"

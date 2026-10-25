@@ -1,0 +1,19 @@
+# Source: uutils/util-linux 0cb1f90b9983c504a7f895ba65caa4b0b1f51c20.
+# AXE patches: ordinary mountpoint options and byte-preserving paths.
+[package]
+name = "uu_mountpoint"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/uutils/util-linux"
+
+[lib]
+path = "src/mountpoint.rs"
+doctest = false
+
+[dependencies]
+uucore = "=0.2.2"
+clap = { version = "4.4", features = ["wrap_help", "cargo"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
