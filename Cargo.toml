@@ -107,6 +107,7 @@ uu_fmt = { path = "vendor/uu_fmt" }
 uu_fold = { path = "vendor/uu_fold" }
 uu_grep = { path = "vendor/uu_grep" }
 uu_install = { path = "vendor/uu_install" }
+uu_logname = { path = "vendor/uu_logname" }
 uu_ls = { path = "vendor/uu_ls" }
 uu_mkdir = { path = "vendor/uu_mkdir" }
 uu_mkfifo = { path = "vendor/uu_mkfifo" }

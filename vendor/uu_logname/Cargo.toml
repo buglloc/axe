@@ -1,0 +1,26 @@
+# Vendored from uu_logname 0.12.0; upstream provenance is in .cargo_vcs_info.json.
+# AXE changes: use audit loginuid on Linux musl; preserve login name bytes.
+[package]
+name = "uu_logname"
+version = "0.12.0"
+edition = "2024"
+rust-version = "1.88.0"
+description = "logname ~ (uutils) display the login name of the current user"
+homepage = "https://github.com/uutils/coreutils"
+repository = "https://github.com/uutils/coreutils/tree/main/src/uu/logname"
+license = "MIT"
+
+[lib]
+path = "src/logname.rs"
+test = false
+doctest = false
+
+[[bin]]
+name = "logname"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["wrap_help", "cargo", "color"] }
+fluent = "0.17.0"
+libc = "0.2.186"
+uucore = "0.12.0"

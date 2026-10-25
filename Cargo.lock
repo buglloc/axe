@@ -8702,8 +8702,6 @@ dependencies = [
 [[package]]
 name = "uu_logname"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d06a3bbfe74e5b82f297d62f3fde88c0d46d53d6f1eb949c74c5b177a9f0c22b"
 dependencies = [
  "clap",
  "fluent",
