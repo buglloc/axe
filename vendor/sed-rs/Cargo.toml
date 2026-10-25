@@ -1,0 +1,21 @@
+# Vendored from sed-rs 2.0.0; upstream provenance is in .cargo_vcs_info.json.
+[package]
+name = "sed-rs"
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Pegasus Heavy Industries LLC <pegasusheavyindustries@gmail.com>"]
+description = "A GNU-compatible sed implementation in Rust"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pegasusheavy/sed-rs"
+autobins = false
+
+[lib]
+name = "sed_rs"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "wrap_help"] }
+onig = { version = "6.5.3", default-features = false }
+tempfile = "3"
+thiserror = "2"

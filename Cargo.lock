@@ -6768,11 +6768,9 @@ dependencies = [
 [[package]]
 name = "sed-rs"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf04c4dee52cf554352c6e60408d0161d207ad37a3deb5ae2991676088fc5bd4"
 dependencies = [
  "clap",
- "regex",
+ "onig",
  "tempfile",
  "thiserror 2.0.20",
 ]

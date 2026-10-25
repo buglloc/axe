@@ -74,18 +74,7 @@ pub fn grep(args: Vec<OsString>) -> i32 {
 pub fn sed(args: Vec<OsString>) -> i32 {
     use clap::Parser;
 
-    let processed = args.into_iter().map(|arg| {
-        let Some(text) = arg.to_str() else {
-            return arg;
-        };
-        if text == "-i" {
-            OsString::from("--in-place")
-        } else if let Some(suffix) = text.strip_prefix("-i").filter(|_| !text.starts_with("--")) {
-            OsString::from(format!("--in-place={suffix}"))
-        } else {
-            arg
-        }
-    });
+    let processed = sed_rs::cli::preprocess_args(args);
 
     let options = match sed_rs::cli::Options::try_parse_from(processed) {
         Ok(options) => options,
@@ -103,11 +92,6 @@ pub fn sed(args: Vec<OsString>) -> i32 {
             return 2;
         }
     };
-
-    if script.is_empty() {
-        eprintln!("sed: empty script");
-        return 2;
-    }
 
     let commands = match sed_rs::command::parse(&script) {
         Ok(commands) => commands,
@@ -136,10 +120,10 @@ pub fn sed(args: Vec<OsString>) -> i32 {
     };
 
     match result {
-        Ok(()) => 0,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("sed: {error}");
-            2
+            4
         }
     }
 }

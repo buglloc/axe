@@ -9,6 +9,8 @@ members = [
     "crates/axe-store",
     "crates/vzik",
 ]
+# Vendored providers remain dependencies, not additional AXE workspace targets.
+exclude = ["vendor"]
 
 [workspace.metadata.brush-fork]
 # Update all Brush crates together from this immutable upstream revision: the three
@@ -90,6 +92,7 @@ brush-parser = { git = "https://github.com/reubeno/brush", rev = "b562e0586b366d
 brush-interactive = { git = "https://github.com/reubeno/brush", rev = "b562e0586b366d0558b27019276e591856253947" }
 brush-coreutils-builtins = { git = "https://github.com/reubeno/brush", rev = "b562e0586b366d0558b27019276e591856253947" }
 brush-clap-adapter = { git = "https://github.com/reubeno/brush", rev = "b562e0586b366d0558b27019276e591856253947" }
+sed-rs = { path = "vendor/sed-rs" }
 procutils-ps = { path = "vendor/procutils-ps" }
 uu_df = { path = "vendor/uu_df" }
 # uucore embeds utility locales from the complete upstream source tree.
