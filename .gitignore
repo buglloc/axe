@@ -1,4 +1,5 @@
 target/
+*.o
 /.nuclei-config
 /nix/builders.conf
 /keys/
