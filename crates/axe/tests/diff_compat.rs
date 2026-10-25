@@ -53,12 +53,16 @@ impl Drop for Scratch {
 }
 
 fn run(directory: &Path, applet: &str, args: &[&str], input: &[u8]) -> Output {
+    run_locale(directory, applet, args, input, "C")
+}
+
+fn run_locale(directory: &Path, applet: &str, args: &[&str], input: &[u8], locale: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_axe"))
         .arg(applet)
         .arg("--")
         .args(args)
         .current_dir(directory)
-        .env("LC_ALL", "C")
+        .env("LC_ALL", locale)
         .env("TZ", "UTC0")
         .env("PATH", "/nonexistent")
         .stdin(Stdio::piped())
@@ -216,6 +220,75 @@ fn side_by_side_pairs_replacements_and_leaves_real_deletions_unpaired() {
         run(&scratch.0, "diff", &["-y", "-W20", "b", "b"], b""),
         0,
         b"a\ta\nc\tc\n",
+    );
+}
+
+#[test]
+fn side_by_side_width_uses_the_active_locale_and_preserves_bytes() {
+    let scratch = Scratch::new("locale-columns");
+    scratch.write("a", b"\xe7\x95\x8cX\n");
+    scratch.write("b", b"R\n");
+    assert_output(
+        run_locale(
+            &scratch.0,
+            "diff",
+            &["-y", "-t", "-W10", "a", "b"],
+            b"",
+            "C",
+        ),
+        1,
+        b"\xe7\x95\x8c |  R\n",
+    );
+    assert_output(
+        run_locale(
+            &scratch.0,
+            "diff",
+            &["-y", "-t", "-W10", "a", "b"],
+            b"",
+            "C.UTF-8",
+        ),
+        1,
+        b"\xe7\x95\x8cX |  R\n",
+    );
+    scratch.write("a", b"\tX\n");
+    for locale in ["C", "C.UTF-8"] {
+        assert_output(
+            run_locale(&scratch.0, "diff", &["-y", "-W10", "a", "b"], b"", locale),
+            1,
+            b"    |\tR\n",
+        );
+    }
+
+    scratch.write("a", b"a\xffX\n");
+    for locale in ["C", "C.UTF-8"] {
+        assert_output(
+            run_locale(
+                &scratch.0,
+                "diff",
+                &["-y", "-t", "-W10", "a", "b"],
+                b"",
+                locale,
+            ),
+            1,
+            b"a\xffX |  R\n",
+        );
+    }
+}
+
+#[test]
+fn horizon_lines_change_ambiguous_normal_script_placement() {
+    let scratch = Scratch::new("horizon-lines");
+    scratch.write("a", b"a\nc\na\nd\na\nc\ne\nd\nc\ne\nb\n");
+    scratch.write("b", b"a\ne\nb\na\nb\n");
+    assert_output(
+        run(&scratch.0, "diff", &["--horizon-lines=0", "a", "b"], b""),
+        1,
+        b"2,9d1\n< c\n< a\n< d\n< a\n< c\n< e\n< d\n< c\n10a3,4\n> b\n> a\n",
+    );
+    assert_output(
+        run(&scratch.0, "diff", &["--horizon-lines=1", "a", "b"], b""),
+        1,
+        b"2,9d1\n< c\n< a\n< d\n< a\n< c\n< e\n< d\n< c\n11a4,5\n> a\n> b\n",
     );
 }
 
@@ -583,6 +656,12 @@ fn diff_and_sdiff_renderers_preserve_final_newline_markers() {
         2,
         b"1c\nb\n.\n",
     );
+
+    scratch.write("a", b"x");
+    scratch.write("b", b"x\n");
+    assert_output(run(&scratch.0, "diff", &["-e", "a", "b"], b""), 2, b"");
+    scratch.write("a", b"a\n");
+    scratch.write("b", b"b");
     assert_output(
         run(&scratch.0, "diff", &["-y", "-W", "40", "a", "b"], b""),
         1,

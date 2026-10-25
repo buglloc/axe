@@ -1,4 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
+#[cfg(unix)]
+use std::ffi::CStr;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, BufRead, Read, Write};
@@ -9,8 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local};
 use diffutilslib::params::{self, Format};
-use gix_imara_diff::{Algorithm, Diff, Token};
+use gix_imara_diff::{Algorithm, Diff, NoSliderHeuristic, Token};
 use regex::bytes::Regex;
+#[cfg(not(unix))]
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Default)]
@@ -28,6 +31,7 @@ struct DiffOptions {
     strip_trailing_cr: bool,
     ignore_blank_lines: bool,
     minimal: bool,
+    horizon_lines: usize,
     initial_tab: bool,
     left_column: bool,
     suppress_common_lines: bool,
@@ -139,8 +143,11 @@ pub fn sdiff(args: Vec<OsString>) -> i32 {
         &to_lines,
         &changes,
         &options.diff.params,
-        options.diff.left_column,
-        options.diff.suppress_common_lines,
+        SideRenderOptions {
+            left_column: options.diff.left_column,
+            suppress_common_lines: options.diff.suppress_common_lines,
+            locale: side_locale(),
+        },
     );
     write_output(
         "sdiff",
@@ -292,6 +299,7 @@ fn sdiff_merge(
     let mut input = stdin.lock();
     let mut status = 0;
     let mut skipped = false;
+    let locale = side_locale();
     for change in changes {
         while old < change.old.start && new < change.new.start {
             merged.extend_from_slice(from[old]);
@@ -302,6 +310,7 @@ fn sdiff_merge(
                 b' ',
                 &options.params,
                 options.left_column,
+                locale,
             );
             old += 1;
             new += 1;
@@ -318,6 +327,7 @@ fn sdiff_merge(
                 marker,
                 &options.params,
                 options.left_column,
+                locale,
             );
         }
         if change.ignored {
@@ -363,7 +373,45 @@ fn sdiff_merge(
                 status = 2;
                 break;
             }
-            "v" => {}
+            "v" => {
+                io::stdout()
+                    .write_all(b"%")
+                    .map_err(|error| format!("write error: {error}"))?;
+                io::stdout()
+                    .flush()
+                    .map_err(|error| format!("write error: {error}"))?;
+                let mut next = String::new();
+                if input
+                    .read_line(&mut next)
+                    .map_err(|error| error.to_string())?
+                    == 0
+                {
+                    status = 2;
+                    break;
+                }
+                match next.trim() {
+                    "l" | "1" => {
+                        append_lines_bytes(&mut merged, from, &change.old);
+                        status = 1;
+                    }
+                    "r" | "2" => {
+                        append_lines_bytes(&mut merged, to, &change.new);
+                        status = 1;
+                    }
+                    "s" => {
+                        skipped = true;
+                        status = 1;
+                    }
+                    "q" => {
+                        status = 2;
+                        break;
+                    }
+                    _ => {
+                        status = 2;
+                        break;
+                    }
+                }
+            }
             "e" | "eb" => {
                 let left = edit_sdiff_lines(&from[change.old.clone()], "left")?;
                 let right = edit_sdiff_lines(&to[change.new.clone()], "right")?;
@@ -488,7 +536,7 @@ fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
                 .map_or((long, None), |(name, value)| (name, Some(value)));
             let takes_value = matches!(
                 name,
-                "label" | "width" | "tabsize" | "ignore-matching-lines"
+                "label" | "width" | "tabsize" | "horizon-lines" | "ignore-matching-lines"
             );
             let value = if takes_value {
                 Some(match attached {
@@ -521,6 +569,9 @@ fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
                 "strip-trailing-cr" => options.strip_trailing_cr = true,
                 "ignore-blank-lines" => options.ignore_blank_lines = true,
                 "minimal" => options.minimal = true,
+                "horizon-lines" => {
+                    options.horizon_lines = number(value.as_deref().unwrap(), "horizon line count")?
+                }
                 "ignore-matching-lines" => options
                     .ignore_matching
                     .push(ignore_regex(value.as_deref().unwrap())?),
@@ -553,7 +604,7 @@ fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
                         options.params.context_count = number(OsStr::new(value), "context length")?;
                     }
                 }
-                "speed-large-files" | "horizon-lines" | "color" | "palette" => {
+                "speed-large-files" | "color" | "palette" => {
                     return Err(format!("unsupported option '--{name}'"));
                 }
                 _ => return Err(format!("unrecognized option '{text}'")),
@@ -780,8 +831,12 @@ struct Change {
 }
 
 fn comparison_key(line: &[u8], options: &DiffOptions) -> Vec<u8> {
-    let has_newline = line.ends_with(b"\n");
-    let mut content = if has_newline {
+    // GNU's ed comparison includes the virtual newline it adds to an
+    // incomplete final line; the diagnostic/status still reports the missing
+    // newline after rendering.
+    let actual_newline = line.ends_with(b"\n");
+    let has_newline = actual_newline || options.params.format == Format::Ed;
+    let mut content = if actual_newline {
         &line[..line.len() - 1]
     } else {
         line
@@ -878,17 +933,49 @@ fn diff_changes(from: &[&[u8]], to: &[&[u8]], options: &DiffOptions) -> Vec<Chan
         .iter()
         .map(|line| intern(comparison_key(line, options)))
         .collect::<Vec<_>>();
+    let horizon = options.horizon_lines.max(match options.params.format {
+        Format::Unified | Format::Context => options.params.context_count,
+        Format::Normal | Format::Ed | Format::SideBySide => 0,
+    });
+    let (prefix_offset, suffix_offset) = if horizon == 0 {
+        (0, 0)
+    } else {
+        let common_prefix = before
+            .iter()
+            .zip(&after)
+            .take_while(|(left, right)| left == right)
+            .count();
+        let common_suffix = before[common_prefix..]
+            .iter()
+            .rev()
+            .zip(after[common_prefix..].iter().rev())
+            .take_while(|(left, right)| left == right)
+            .count();
+        (
+            common_prefix.saturating_sub(horizon),
+            common_suffix.saturating_sub(horizon),
+        )
+    };
+    let before_end = before.len() - suffix_offset;
+    let after_end = after.len() - suffix_offset;
+    let before_middle = &before[prefix_offset..before_end];
+    let after_middle = &after[prefix_offset..after_end];
     let algorithm = if options.minimal {
         Algorithm::MyersMinimal
     } else {
         Algorithm::Myers
     };
     let mut diff = Diff::default();
-    diff.compute_with(algorithm, &before, &after, tokens.len() as u32);
+    diff.compute_with(algorithm, before_middle, after_middle, tokens.len() as u32);
+    if horizon != 0 {
+        diff.postprocess_with(before_middle, after_middle, NoSliderHeuristic);
+    }
     diff.hunks()
         .map(|hunk| {
-            let old = hunk.before.start as usize..hunk.before.end as usize;
-            let new = hunk.after.start as usize..hunk.after.end as usize;
+            let old = prefix_offset + hunk.before.start as usize
+                ..prefix_offset + hunk.before.end as usize;
+            let new =
+                prefix_offset + hunk.after.start as usize..prefix_offset + hunk.after.end as usize;
             let ignored = from[old.clone()]
                 .iter()
                 .chain(&to[new.clone()])
@@ -944,10 +1031,14 @@ fn compare_diff_files(
             &to_lines,
             &changes,
             params,
-            options.left_column,
-            options.suppress_common_lines,
+            SideRenderOptions {
+                left_column: options.left_column,
+                suppress_common_lines: options.suppress_common_lines,
+                locale: side_locale(),
+            },
         );
     } else if different {
+        let mut trouble = false;
         match params.format {
             Format::Normal => render_normal(
                 &mut output,
@@ -968,9 +1059,22 @@ fn compare_diff_files(
                     options.initial_tab,
                 );
             }
-            Format::Ed => render_ed(&mut output, &from_lines, &to_lines, &changes)?,
+            Format::Ed => {
+                trouble = render_ed(&mut output, &from_lines, &to_lines, &changes, options)
+            }
             Format::SideBySide => unreachable!(),
         }
+        let status = if trouble { 2 } else { 1 };
+        return Ok((output, status, false));
+    }
+    if !different
+        && params.format == Format::Ed
+        && !params.brief
+        && !(options.ignore_all_space || options.ignore_space_change)
+        && (from_lines.last().is_some_and(|line| !line.ends_with(b"\n"))
+            || to_lines.last().is_some_and(|line| !line.ends_with(b"\n")))
+    {
+        return Ok((output, 2, false));
     }
     Ok((output, i32::from(different), false))
 }
@@ -1205,38 +1309,67 @@ fn render_contextual(
         }
     }
 }
-
 fn render_ed(
     output: &mut Vec<u8>,
     from: &[&[u8]],
     to: &[&[u8]],
     changes: &[Change],
-) -> Result<(), String> {
-    if changes.iter().all(|change| change.ignored) {
-        return Ok(());
-    }
-    if from.last().is_some_and(|line| !line.ends_with(b"\n"))
-        || to.last().is_some_and(|line| !line.ends_with(b"\n"))
-    {
-        return Err("No newline at end of file".into());
-    }
+    options: &DiffOptions,
+) -> bool {
+    let final_newline_missing = from.last().is_some_and(|line| !line.ends_with(b"\n"))
+        || to.last().is_some_and(|line| !line.ends_with(b"\n"));
+    let trouble = final_newline_missing
+        && (changes.iter().any(|change| !change.ignored)
+            || !(options.ignore_all_space || options.ignore_space_change));
     for change in changes.iter().rev().filter(|change| !change.ignored) {
-        let command = if change.old.is_empty() {
+        let Some((old, new)) = ed_change_ranges(change, from, to) else {
+            continue;
+        };
+        let command = if old.is_empty() {
             'a'
-        } else if change.new.is_empty() {
+        } else if new.is_empty() {
             'd'
         } else {
             'c'
         };
-        writeln!(output, "{}{command}", line_range(&change.old)).unwrap();
+        writeln!(output, "{}{command}", line_range(&old)).unwrap();
         if command != 'd' {
-            for line in &to[change.new.clone()] {
+            for line in &to[new] {
                 append_ed_line(output, line);
             }
             output.extend_from_slice(b".\n");
         }
     }
-    Ok(())
+    trouble
+}
+
+fn ed_change_ranges(
+    change: &Change,
+    from: &[&[u8]],
+    to: &[&[u8]],
+) -> Option<(Range<usize>, Range<usize>)> {
+    let mut old = change.old.clone();
+    let mut new = change.new.clone();
+    while old.start < old.end
+        && new.start < new.end
+        && ed_final_newline_equal(from[old.start], to[new.start])
+    {
+        old.start += 1;
+        new.start += 1;
+    }
+    while old.start < old.end
+        && new.start < new.end
+        && ed_final_newline_equal(from[old.end - 1], to[new.end - 1])
+    {
+        old.end -= 1;
+        new.end -= 1;
+    }
+    (!old.is_empty() || !new.is_empty()).then_some((old, new))
+}
+
+fn ed_final_newline_equal(left: &[u8], right: &[u8]) -> bool {
+    left.ends_with(b"\n") != right.ends_with(b"\n")
+        && left.strip_suffix(b"\n").unwrap_or(left) == right.strip_suffix(b"\n").unwrap_or(right)
 }
 
 fn append_ed_line(output: &mut Vec<u8>, line: &[u8]) {
@@ -1262,39 +1395,166 @@ fn pad_columns(output: &mut Vec<u8>, mut column: usize, end: usize, params: &par
     }
 }
 
-fn side_half(output: &mut Vec<u8>, line: &[u8], width: usize, params: &params::Params) -> usize {
-    let mut column = 0;
-    for chunk in line.strip_suffix(b"\n").unwrap_or(line).utf8_chunks() {
-        for character in chunk.valid().chars() {
-            if character == '\t' {
-                let next = column + params.tabsize - column % params.tabsize;
-                if next <= width {
-                    if params.expand_tabs {
-                        output.resize(output.len() + next - column, b' ');
-                    } else {
-                        output.push(b'\t');
-                    }
-                    column = next;
-                }
-            } else {
-                let size = character.width().unwrap_or(0);
-                if column + size > width {
-                    return column;
-                }
-                let mut buffer = [0; 4];
-                output.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
-                column += size;
-            }
+#[derive(Clone, Copy)]
+enum SideLocale {
+    Bytes,
+    Utf8,
+}
+
+#[derive(Clone, Copy)]
+struct SideRenderOptions {
+    left_column: bool,
+    suppress_common_lines: bool,
+    locale: SideLocale,
+}
+
+fn side_locale() -> SideLocale {
+    #[cfg(unix)]
+    {
+        // SAFETY: the empty locale name is a valid NUL-terminated string and
+        // asks libc to resolve LC_CTYPE from the process environment.
+        let locale = unsafe { libc::setlocale(libc::LC_CTYPE, c"".as_ptr()) };
+        if locale.is_null() {
+            return SideLocale::Bytes;
         }
-        for &byte in chunk.invalid() {
-            if column == width {
-                return column;
-            }
-            output.push(byte);
-            column += 1;
+        // SAFETY: nl_langinfo returns a process-owned NUL-terminated codeset
+        // string for CODESET after LC_CTYPE has been initialized.
+        let codeset = unsafe { libc::nl_langinfo(libc::CODESET) };
+        if codeset.is_null() {
+            return SideLocale::Bytes;
+        }
+        let codeset = unsafe { CStr::from_ptr(codeset) }.to_bytes();
+        if codeset.eq_ignore_ascii_case(b"UTF-8") || codeset.eq_ignore_ascii_case(b"UTF8") {
+            SideLocale::Utf8
+        } else {
+            SideLocale::Bytes
         }
     }
-    column
+    #[cfg(not(unix))]
+    {
+        SideLocale::Utf8
+    }
+}
+
+fn side_character_width(character: char) -> usize {
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn wcwidth(character: libc::wchar_t) -> libc::c_int;
+        }
+        // SAFETY: character is a valid Unicode scalar value and wcwidth only
+        // reads the active process locale.
+        usize::try_from(unsafe { wcwidth(character as libc::wchar_t) }).unwrap_or_default()
+    }
+    #[cfg(not(unix))]
+    {
+        character.width().unwrap_or(0)
+    }
+}
+
+fn side_character(line: &[u8], offset: usize, locale: SideLocale) -> (usize, usize) {
+    if matches!(locale, SideLocale::Bytes) {
+        return (1, 1);
+    }
+    let chunk = line[offset..].utf8_chunks().next().unwrap();
+    chunk.valid().chars().next().map_or((1, 1), |character| {
+        (character.len_utf8(), side_character_width(character))
+    })
+}
+
+fn side_half(
+    output: &mut Vec<u8>,
+    line: &[u8],
+    width: usize,
+    params: &params::Params,
+    indent: usize,
+    locale: SideLocale,
+) -> usize {
+    let mut in_position = 0;
+    let mut out_position = 0;
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    let mut offset = 0;
+    while offset < line.len() {
+        let start = offset;
+        let byte = line[offset];
+        offset += 1;
+        match byte {
+            b'\t' => {
+                let spaces = params.tabsize - in_position % params.tabsize;
+                let mut tabstop = in_position.saturating_add(spaces);
+                if in_position == out_position {
+                    if params.expand_tabs {
+                        tabstop = tabstop.min(width);
+                        while out_position < tabstop {
+                            output.push(b' ');
+                            out_position += 1;
+                        }
+                    } else if tabstop < width {
+                        output.push(b'\t');
+                        out_position = tabstop;
+                    }
+                }
+                in_position = tabstop;
+            }
+            b'\r' => {
+                output.push(byte);
+                pad_columns(output, 0, indent, params);
+                in_position = 0;
+                out_position = 0;
+            }
+            b'\x08' => {
+                if in_position != 0 {
+                    in_position -= 1;
+                    if in_position < width {
+                        if out_position <= in_position {
+                            while out_position < in_position {
+                                output.push(b' ');
+                                out_position += 1;
+                            }
+                        } else {
+                            out_position = in_position;
+                            output.push(byte);
+                        }
+                    }
+                }
+            }
+            b'\0' | b'\x07' | b'\x0c' | b'\x0b' => {
+                if in_position <= width {
+                    output.push(byte);
+                }
+            }
+            _ => {
+                let (length, character_width) = side_character(line, start, locale);
+                offset = start + length;
+                in_position = in_position.saturating_add(character_width);
+                if in_position <= width {
+                    output.extend_from_slice(&line[start..offset]);
+                    out_position = in_position;
+                }
+            }
+        }
+    }
+    out_position
+}
+
+fn side_marker(left: Option<&[u8]>, right: Option<&[u8]>, ignored: bool) -> u8 {
+    if ignored {
+        return match (left, right) {
+            (Some(_), Some(_)) => b' ',
+            (Some(_), None) => b'(',
+            (None, Some(_)) => b')',
+            (None, None) => b' ',
+        };
+    }
+    match (left, right) {
+        (Some(left), Some(right)) if left.ends_with(b"\n") != right.ends_with(b"\n") => {
+            if left.ends_with(b"\n") { b'/' } else { b'\\' }
+        }
+        (Some(_), Some(_)) => b'|',
+        (Some(_), None) => b'<',
+        (None, Some(_)) => b'>',
+        (None, None) => b' ',
+    }
 }
 
 fn side_row(
@@ -1304,43 +1564,46 @@ fn side_row(
     mut marker: u8,
     params: &params::Params,
     left_column: bool,
+    locale: SideLocale,
 ) {
-    let unaligned = (params.width / 2)
-        .saturating_add((params.tabsize + 3) / 2)
-        .saturating_add(params.width & (params.tabsize + 3) & 1);
-    let offset = unaligned - unaligned % params.tabsize;
-    let width = offset
-        .saturating_sub(3)
-        .min(params.width.saturating_sub(offset));
-    let offset = if width == 0 { params.width } else { offset };
-    let separator = (width + offset).saturating_sub(1) / 2;
-    let column = left.map_or(0, |line| side_half(output, line, width, params));
+    let (width, separator, offset) = if params.expand_tabs {
+        let separator = params.width.saturating_sub(1) / 2;
+        let offset = (params.width / 2 + 2).min(params.width);
+        (separator.saturating_sub(1), separator, offset)
+    } else {
+        let unaligned = (params.width / 2)
+            .saturating_add((params.tabsize + 3) / 2)
+            .saturating_add(params.width & (params.tabsize + 3) & 1);
+        let offset = unaligned - unaligned % params.tabsize;
+        let width = offset
+            .saturating_sub(3)
+            .min(params.width.saturating_sub(offset));
+        let offset = if width == 0 { params.width } else { offset };
+        let separator = (width + offset).saturating_sub(1) / 2;
+        (width, separator, offset)
+    };
+    let column = left.map_or(0, |line| side_half(output, line, width, params, 0, locale));
     if marker == b' ' && left_column {
         right = None;
         marker = b'(';
-    } else if marker == b' '
-        && left.is_some_and(|line| !line.ends_with(b"\n"))
-            != right.is_some_and(|line| !line.ends_with(b"\n"))
-    {
-        marker = if left.is_some_and(|line| line.ends_with(b"\n")) {
-            b')'
-        } else {
-            b'('
-        };
     }
     if marker != b' ' {
         pad_columns(output, column, separator, params);
         output.push(marker);
-        if right.is_some() {
+        if right.is_some_and(|line| line != b"\n") {
             pad_columns(output, separator + 1, offset, params);
         }
     } else if right.is_some_and(|line| line != b"\n") {
         pad_columns(output, column, offset, params);
     }
     if let Some(right) = right {
-        side_half(output, right, width, params);
+        side_half(output, right, width, params, offset, locale);
     }
-    output.push(b'\n');
+    if left.is_some_and(|line| line.ends_with(b"\n"))
+        || right.is_some_and(|line| line.ends_with(b"\n"))
+    {
+        output.push(b'\n');
+    }
 }
 
 fn render_side_by_side(
@@ -1349,21 +1612,21 @@ fn render_side_by_side(
     to: &[&[u8]],
     changes: &[Change],
     params: &params::Params,
-    left_column: bool,
-    suppress_common_lines: bool,
+    render_options: SideRenderOptions,
 ) {
     let mut old = 0;
     let mut new = 0;
     for change in changes {
         while old < change.old.start && new < change.new.start {
-            if !suppress_common_lines {
+            if !render_options.suppress_common_lines {
                 side_row(
                     output,
                     Some(from[old]),
                     Some(to[new]),
                     b' ',
                     params,
-                    left_column,
+                    render_options.left_column,
+                    render_options.locale,
                 );
             }
             old += 1;
@@ -1373,31 +1636,32 @@ fn render_side_by_side(
         for index in 0..count {
             let left = from[change.old.clone()].get(index).copied();
             let right = to[change.new.clone()].get(index).copied();
-            let marker = if change.ignored {
-                b' '
-            } else {
-                match (left, right) {
-                    (Some(_), Some(_)) => b'|',
-                    (Some(_), None) => b'<',
-                    _ => b'>',
-                }
-            };
-            if !(suppress_common_lines && marker == b' ') {
-                side_row(output, left, right, marker, params, left_column);
+            let marker = side_marker(left, right, change.ignored);
+            if !(render_options.suppress_common_lines && marker == b' ') {
+                side_row(
+                    output,
+                    left,
+                    right,
+                    marker,
+                    params,
+                    render_options.left_column,
+                    render_options.locale,
+                );
             }
         }
         old = change.old.end;
         new = change.new.end;
     }
     while old < from.len() && new < to.len() {
-        if !suppress_common_lines {
+        if !render_options.suppress_common_lines {
             side_row(
                 output,
                 Some(from[old]),
                 Some(to[new]),
                 b' ',
                 params,
-                left_column,
+                render_options.left_column,
+                render_options.locale,
             );
         }
         old += 1;

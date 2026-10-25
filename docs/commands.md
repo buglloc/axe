@@ -123,10 +123,12 @@ string payloads raw and terminates non-string JSON payloads with a newline.
 
 `diff` computes raw line edit scripts with Myers; `-d`/`--minimal` selects the
 minimal variant. It supports normal, unified (`-u`/`-U`), context (`-c`/`-C`),
-ed (`-e`), side-by-side (`-y`), ASCII case folding, whitespace modes
-(`-i`, `-w`, `-b`, `-E`, `-Z`), `-B`, `-I`, `--strip-trailing-cr`, labels,
-directory recursion, and `--unidirectional-new-file`. `-x`, `-X`, `-D`, `-F`,
-`-l`, `-p`, `-H`, `--color`, and custom line-format options are rejected.
+ed (`-e`), side-by-side (`-y`), and `--horizon-lines`, ASCII case folding,
+whitespace modes (`-i`, `-w`, `-b`, `-E`, `-Z`), `-B`, `-I`,
+`--strip-trailing-cr`, labels, directory recursion, and
+`--unidirectional-new-file`. Side-by-side widths count bytes in the C locale
+and locale display columns in UTF-8 locales. `-x`, `-X`, `-D`, `-F`, `-l`, `-p`,
+`-H`, `--color`, and custom line-format options are rejected.
 `sdiff` prints side-by-side output and merges interactively with `-o FILE`.
 `diff`, `cmp`, and `sdiff` distinguish differences or merge decisions from
 input errors. Case folding is ASCII-only. `diff -I` accepts a byte-oriented
