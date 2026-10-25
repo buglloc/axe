@@ -40,11 +40,16 @@ pub(crate) fn publish(
     let file = temporary.as_file();
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{MetadataExt, fchown};
+        use std::os::unix::fs::{MetadataExt, PermissionsExt, fchown};
         // An unprivileged owner may be unable to preserve the original group.
-        // Apply the mode after chown, which can clear set-ID bits.
+        // GNU sed never republishes set-ID bits from the source file; sticky
+        // remains part of the ordinary mode and is preserved.
         let _ = fchown(file, Some(metadata.uid()), Some(metadata.gid()));
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(metadata.mode() & !0o6000);
+        file.set_permissions(permissions)?;
     }
+    #[cfg(not(unix))]
     file.set_permissions(metadata.permissions())?;
     file.sync_all()?;
 
