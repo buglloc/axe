@@ -18,7 +18,7 @@ Every successful document is a JSON object containing:
 | Field | Type | Meaning |
 |---|---|---|
 | `schema` | string | Currently `goblin/v1` |
-| `file` | string | Input path as supplied by the shell |
+| `file` | string | Input path for display; invalid Unix filename bytes become U+FFFD, so this is not a round-trip pathname identifier |
 | `format` | string | `elf`, `pe`, `mach-o`, `mach-o-fat`, `archive`, `unknown`, or `unsupported` |
 | `size` | integer | File size where exposed |
 

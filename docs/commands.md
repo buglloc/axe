@@ -89,31 +89,110 @@ For the bundled HTTP applet, see [HTTP requests](http.md).
 
 For passive host context and targeted evidence, see [Vzik](vzik.md).
 
-The bundled `zstd` uses the linked Zstandard codec and keeps input files by default. It supports compression/decompression (`-d`), stdout (`-c`), explicit output (`-o FILE`), integrity checks (`-t`), overwrite (`-f`), input removal (`--rm`), levels 1–19, `--ultra` levels 20–22, `--fast[=N]`, and worker counts (`-T N`; zero selects available CPUs). Compression includes a checksum; decompression accepts concatenated frames. Run `axe zstd -- --help` for its supported CLI options.
+## Filters and paths
 
-`tar` accepts old-style clusters such as `tar cfz archive.tgz directory`; options that take arguments consume the following words. Listings stream as entries are read. `--strip-components=N` affects extraction, not listing, and extraction checks member paths, parent directories, and hardlink targets against the destination. Missing requested members produce an error and exit status 2.
+`sed` preserves input bytes, including invalid UTF-8, in stream and in-place
+operation. In-place output is published only after successful input and output
+completion; `-i[SUFFIX]` accepts clustered options and byte-oriented backup
+suffixes. Script and missing-input errors exit with status 2; runtime stream or
+in-place I/O failures exit with status 4.
 
-`gzip -dcf` copies non-gzip input to stdout. Force mode does not rename plain files during file-to-file decompression, and `-l` still requires gzip data. Concatenated members are decoded in order; trailing non-gzip bytes produce status 2 unless force-to-stdout mode copies them.
+`awk` preserves bytes in records, string values and file operands. Its program
+source must be UTF-8. Record separators, field splitting, assignments between
+files and `getline` share the same input lifecycle. `strtonum` does not accept
+signed IEEE special-value strings such as `+inf` and `+nan`. Fatal input errors
+exit with status 2; stdout write or flush failures exit with status 1.
 
-`tree -h` prints compact human-readable sizes before names, for example `[4.9K]  big`. It accepts clustered and repeated flags; `--help` prints help. `file` supports `-E` for failing status on inspection errors, `-N` to disable name padding, `--mime-encoding`, and `-h`/`--no-dereference`. Empty regular files use `inode/x-empty`; empty stdin uses `application/x-empty`.
+`jq` keeps one execution state across input files. `input_filename` is the current
+input file, `<stdin>` for standard input, and `null` before input is consumed in
+null-input mode. Output uses JSON values and escaping, including ASCII-output
+mode; `halt_error` preserves its requested status and raw stderr payload.
+`--stream` and `--stream-errors` are not supported.
 
 `diff -u` and `diff -c` combine nearby changes into one hunk when their context
 overlaps. Context output marks each line of a replacement block with `!`.
+`diff`, `cmp` and `diff3` distinguish differences or conflicts from input errors.
+Case folding is ASCII-only. `diff -I` accepts a byte-oriented BRE subset and
+rejects unsupported constructs, including backreferences.
 
-`jq` provides `input_filename` for the current input file, `<stdin>` for standard
-input, and `null` before input is consumed in null-input mode.
+NUL-delimited pathname output from `find -print0` and `grep -lZ` preserves Unix
+filename bytes. `stat` filename formats and `which` PATH lookup also preserve
+those bytes. `which` does not parse shell aliases or functions.
+
+`tree -h` prints compact human-readable sizes before names, for example
+`[4.9K]  big`. It accepts clustered and repeated flags; `--help` prints help.
+JSON (`-J`), following directory symlinks (`-l`), and `--charset` are not supported.
+`hexdump`/`hd` do not implement the custom format languages of `-e` and `-f`.
+
+`file` uses bounded content heuristics, not the complete libmagic database. It
+samples at most 64 KiB from a regular file; stdin JSON detection consumes the
+complete input. It supports `-E`, `-N`, `--mime-encoding`, and
+`-h`/`--no-dereference`, but not `-F` or `-k`. Empty regular files use
+`inode/x-empty`; empty stdin uses `application/x-empty`. Valid JSON scalars are
+recognized as JSON. `strings --unicode` is not supported; its JSON output is an
+AXE extension.
+
+## Archives and compression
+
+The bundled `zstd` keeps input files by default. It supports compression and
+decompression (`-d`), stdout (`-c`), explicit output (`-o FILE`), integrity checks
+(`-t`), overwrite (`-f`), input removal (`--rm`), levels 1–19, `--ultra` levels
+20–22, `--fast[=N]`, and worker counts (`-T N`; zero selects available CPUs).
+Compression includes a checksum; decompression accepts concatenated frames.
+Successful `-t` reports the decoded byte count on stderr unless quiet.
+
+File-to-file compression and decompression use private temporary output and
+publish it only after the codec and temporary-file finalization succeed. A failed
+decode retains an existing destination. This does not protect a file truncated
+by shell stdout redirection. ACL, extended-attribute and ownership preservation
+are not promised.
+After a failed decode, the amount of partial stdout can differ from the original
+codec; always check the exit status.
+
+`gzip -dcf` copies non-gzip input to stdout. Force mode does not rename plain
+files during file-to-file decompression, and `-l` still requires gzip data.
+Concatenated members are decoded in order; trailing non-gzip bytes produce status
+2 unless force-to-stdout mode copies them. XZ plaintext passthrough requires
+explicit stdout mode (`-c` or a cat alias), not merely stdin's default output.
+Bzip2 forced plaintext stdin is preserved even where the reference emits none.
+Unsupported options include gzip `-S`, bzip2 `-s`/`-T`, XZ `-e`/`--check`/
+`--single-stream`, and Zstd `-l`; these are rejected, not silently ignored.
+
+`tar` accepts old-style clusters such as `tar cfz archive.tgz directory`;
+argument-taking options consume following words, and `-C` is positional.
+Listings stream as entries are read. `--strip-components=N` affects extraction,
+not listing. Extraction checks member paths, parent directories and hardlink
+targets against the destination. Missing requested members exit with status 2.
+Independent entries continue after a `--keep-old-files` collision; existing
+directories retain their metadata in this mode.
+
+Tar creation uses GNU headers; reading accepts GNU and PAX metadata. `-a`, `-h`,
+`--wildcards`, `--zstd`, and `-m`/`--touch` are supported. `--format`, including
+PAX creation, is not supported. Globs operate on bytes with ASCII character
+classes, not locale collation.
 
 ## Storage reports
 
 `df` supports `-m`, `--output`, and `--type=TYPE`. Without `-a`, it selects one representative mount for each device, including bind aliases. Block-size options follow command-line order.
 
-`blkid -l -t NAME=value` prints the first match; `-L LABEL` and `-U UUID` print only the matching device path. Tokens are case-sensitive. `-p` includes filesystem version metadata. Partition-table metadata is separate from filesystem type detection.
+`blkid -l -t NAME=value` prints the first match; `-L LABEL` and `-U UUID` print
+only the matching device path. Tokens are case-sensitive. `-p` includes
+filesystem version metadata; an ambiguous low-level probe exits with status 8.
+Partition-table metadata is separate from filesystem type detection. A matching
+magic number alone does not identify a truncated or structurally invalid image.
+These are identity probes, not complete filesystem consistency checks.
 
 `blockdev --report` accepts an optional device list. With no devices, `--report` must be the first argument; it reads `/proc/partitions`, skips zero-capacity entries, and continues quietly after device errors. An empty list succeeds; any device failure makes the report unsuccessful.
 
 `mountpoint PATH` exits with status 0 for a mountpoint, 32 for an existing
 non-mountpoint, and 1 when the path cannot be resolved. Linux mount detection
 uses `/proc/self/mountinfo`, including bind mounts on the same filesystem.
+
+`inotifywait` and `inotifywatch` are nonrecursive unless `-r` is requested.
+`@PATH` operands exclude paths. Recursive monitoring installs watches on new
+directories using internal events without emitting or counting those events
+unless requested. Requested event filters also apply to unmount events.
+Filename transport and regular-expression matching are byte-oriented.
 
 ## Mounting filesystems
 
@@ -129,13 +208,23 @@ When the filesystem rejects an option, `mount` prints the kernel's message, for 
 
 Image files mount through loop devices. `mount` attaches one for `-o loop`, `loop=/dev/loopN`, `offset=`, or `sizelimit=`, and for any regular file mounted as a block filesystem. The device detaches after the last unmount. If the same file and range is already attached, `mount` reuses that device. It refuses an overlapping range, and it attaches a write-protected file read-only.
 
+Without an explicit filesystem type, `mount` rejects ambiguous filesystem
+signatures with status 32 before attempting filesystem mounts or helpers.
+Genuinely unidentified sources retain the kernel-filesystem fallback; `-t`
+remains an explicit type selection.
+
 For `mount`, `-o encryption`, `-N`, `-T`, and `-F` are not supported.
 
 ## Process and network compatibility
 
 The bundled `ip` renders tunnel link addresses as IPv4 or IPv6 addresses, matching iproute2 in text and JSON output. Ethernet and other hardware addresses use colon-separated hexadecimal bytes.
 
-`ip` provides read-only inspection with text and JSON output. It accepts `-j`/`-json`, pretty JSON (`-p`), brief (`-br`/`-brief`), oneline (`-o`/`-oneline`), and numeric names (`-N`). `route get` supports device, source, mark, and interface selectors without loading a full route dump. Unsupported mutation verbs, detail/resolve options, and address families are rejected. `arp` displays the kernel's `/proc/net/arp` table with net-tools ATF flags.
+`ip` provides read-only inspection with text and JSON output. It accepts
+`-j`/`-json`, pretty JSON (`-p`), brief (`-br`/`-brief`), oneline (`-o`/`-oneline`),
+and numeric names (`-N`). `route get` accepts `from`, `mark`, `uid`, `dev` and
+`oif` selectors without loading a full route dump; `iif` is not supported.
+Mutation verbs, detail/resolve options and unsupported address families are
+rejected. `arp` displays the kernel's `/proc/net/arp` table with net-tools ATF flags.
 
 The bundled `ps` accepts BSD option clusters such as `aux` and `auxww`. `a` selects processes with a terminal, `x` selects the current user's processes including those without a terminal, and `ax` or `aux` selects all processes visible through `/proc`, including other users' processes without a terminal.
 
@@ -156,12 +245,72 @@ axe ps axk-rss,pid
 
 Output width comes from `COLUMNS` or the terminal. Redirected output without `COLUMNS` has no screen-width bound, but retains a 128 KiB output-buffer limit. `w` or `-w` widens bounded output to at least 132 columns; two occurrences, including `ww`, `-ww`, or `w -w`, remove the width bound. `--cols`, `--columns`, and `--width` set an explicit width; the last value wins, then `w` options apply. Command fields are clipped without splitting UTF-8; fixed fields and headers survive narrow widths.
 
-`RSS` is in KiB; `%MEM` truncates to one decimal place. `%CPU` is a lifetime average, not recent utilization: it truncates to one decimal below 100%, then prints whole percentages without capping multicore usage. Use `top` for recent CPU activity.
+`RSS` is in KiB; `%MEM` truncates to one decimal place. `%CPU` is a lifetime average, not recent utilization: it truncates to one decimal below 100%, then prints whole percentages without capping multicore usage. Use interval samples from `top` for recent CPU activity.
 
 Command text supports C and UTF-8 locales. Newlines in command-line arguments become spaces; other control characters become `?`, including terminal escape sequences. Legacy non-UTF-8 character sets are not emulated.
 
-`killall` sends a signal to every process with an exact Linux kernel command name (`comm`, limited to 15 bytes), not a command-line substring or regular expression. The default signal is `TERM`. Supported options are `-s SIGNAL`, `-SIGNAL`, `-NUM`, `-I` for case-insensitive names, `-u USER` for a real-UID filter, `-l` to list signals, `-q`, and `-v`. No match or a failed signal delivery exits with status 1; invalid arguments exit with status 2. It does not support signal 0, full-length executable-name matching, process-group signaling, interactive confirmation, waiting, or the regex, age, namespace, and SELinux filters from psmisc `killall`.
+`killall` sends a signal to every process with an exact Linux kernel command name (`comm`, limited to 15 bytes), not a command-line substring or regular expression. The default signal is `TERM`. Supported options are `-s SIGNAL`, `-SIGNAL`, `-NUM`, `-I` for case-insensitive names, `-u USER` for a real-UID filter, `-l` to list signals, `-q`, and `-v`. No match, failed signal delivery or an unknown option exits with status 1; missing names and invalid signals exit with status 2. It does not support signal 0, full-length executable-name matching, process-group signaling, interactive confirmation, waiting, or the regex, age, namespace, and SELinux filters from psmisc `killall`.
 
 `free` reports used memory as `MemTotal - MemAvailable`, with the legacy
 free/buffers/cache calculation on kernels without `MemAvailable`. Its columns
 use procps-style headings and widths.
+
+`vmstat` uses memory values from `/proc/meminfo`, including reclaimable slab in
+cache, and scales swap rates to the selected unit. Its first context-switch rate
+uses elapsed uptime; it does not reproduce procps 4.0.7's CPU-tick divisor.
+`top` reports processes, not a `-H` thread view, and does not implement `-o`
+ordering. Its first CPU display is cumulative; later samples use interval deltas.
+Its `RES` and `%MEM` use resident KiB from `/proc/PID/status`; `SHR` is
+`RssFile + RssShmem` in KiB, without another page-size conversion.
+`hugetop` has an AXE interface: `-b` selects batch mode and `-n COUNT`
+sets the sample count; it does not emulate procps NUMA, once or human-size modes.
+`tload` uses the current terminal, not a TTY pathname operand.
+
+`lsof` inspects visible `/proc` cwd, root, executable and descriptor entries, not
+memory mappings. `-a` intersects requested selection classes; otherwise they are
+unioned. It supports
+the `-F` field subset `p`, `c`, `f`, `n`, `t`, `u`, `L`, `i`, `D`, `s`, `P`,
+`a`, `o`, `r` and the NUL terminator selector `0`; other fields are rejected.
+
+`iostat` uses uptime for the first interval and interval deltas thereafter.
+Extended `-x` output is limited to device, `await`, `aqu-sz` and `%util` fields;
+`-o JSON` is not supported. `lspci` uses visible sysfs entries, not `/proc`
+fallback or PCI configuration-space reads; `-mm` and full verbose capabilities
+are not supported. `lsscsi` does not implement host, address-filter, NVMe or
+transport modes. `ipcs -b` and `--human` are not supported.
+
+`ping` reports reply TTL/hop-limit data from received packets. `traceroute`
+matches actual replies and error-queue messages to its probes; unresponsive
+hops remain `*`. `host` and `nslookup` retain the responding DNS server's
+provenance and retry truncated UDP replies over TCP.
+
+`ipcalc` supports numeric IPv4/IPv6 information and validation, not DNS, GeoIP,
+random-network generation, splitting or deaggregation.
+
+## Compatibility boundaries
+
+Bundled applets are not a universal GNU/Linux drop-in replacement. Supported
+standard fields and layouts matter even when their numeric data agrees.
+Help/version identity, free-form diagnostics, vendor databases, terminal
+wrapping and generic CLI-error statuses can differ. In particular, awk/sed
+generic usage failures use status 2; tar CLI failures use 2 rather than GNU 64.
+The Linux musl artifact reports `Linux` for `uname -o`, not `GNU/Linux`.
+
+`logname` does not use `LOGNAME` or `USER` as login identity. Linux musl builds
+resolve the audit UID from `/proc/self/loginuid` through the passwd database;
+missing, unset or unresolved login identity exits with status 1. Other targets
+use the native login lookup.
+
+`printf` floating-point conversion follows the target C `long double` ABI,
+including its precision and range; it is not arbitrary-precision decimal
+arithmetic. `more` copies input without a terminal; its interactive layout and
+`stty -a` wrapping are not exact replicas of the reference.
+`stty -g` preserves active control characters and independent Linux baud rates.
+Linux `BOTHER` saves append numeric input/output speeds; GNU builds that omit
+these fields cannot round-trip arbitrary rates.
+
+Safe divergences are retained: compression preserves existing output after a
+failed decode, `strings` reports stdout failures, and valid JSON scalars remain
+JSON even where libmagic chooses text. Custom commands such as HTTP, Vzik and
+Goblin retain their own interfaces. Goblin's JSON path display is not a lossless
+Unix pathname transport; see its [output schema](../skills/axe/references/goblin-output-schema.md).
