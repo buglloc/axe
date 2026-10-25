@@ -94,7 +94,6 @@ inotify.workspace = true
 linux-raw-sys.workspace = true
 netlink-packet-route.workspace = true
 rtnetlink.workspace = true
-surge-ping.workspace = true
 procps-uucore = { package = "uucore", version = "=0.7.0" }
 procutils-free = { version = "=0.2.0" }
 procutils-hugetop = { version = "=0.2.0" }
