@@ -443,10 +443,10 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 [[package]]
 name = "awk-rs"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "665b310c81a287c8f5d4a6d1d8ed0b0ab7ce8c0ab1a1853d0064e96a7e620db9"
 dependencies = [
- "regex",
+ "bstr",
+ "onig",
+ "regex-automata",
  "thiserror 2.0.20",
 ]
 

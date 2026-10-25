@@ -1,0 +1,20 @@
+# Vendored from awk-rs 0.2.0; upstream revision is recorded in .cargo_vcs_info.json.
+[package]
+name = "awk-rs"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.86"
+description = "AWK interpreter with AXE byte-input and POSIX compatibility fixes"
+repository = "https://github.com/quinnjr/rawk"
+license = "MIT OR Apache-2.0"
+autobins = false
+
+[lib]
+name = "awk_rs"
+path = "src/lib.rs"
+
+[dependencies]
+bstr = { version = "1.13", default-features = false, features = ["std"] }
+onig = { version = "6.5.3", default-features = false }
+regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "nfa-thompson", "unicode"] }
+thiserror = "2"
