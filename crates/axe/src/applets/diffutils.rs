@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read, Write};
@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local};
 use diffutilslib::params::{self, Format};
+use gix_imara_diff::{Algorithm, Diff, Token};
 use regex::bytes::Regex;
-use similar::{Algorithm, DiffTag, capture_diff_slices};
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Default)]
@@ -16,11 +16,19 @@ struct DiffOptions {
     params: params::Params,
     recursive: bool,
     new_file: bool,
+    unidirectional_new_file: bool,
     text: bool,
     ignore_case: bool,
     ignore_all_space: bool,
     ignore_space_change: bool,
+    ignore_tab_expansion: bool,
+    ignore_trailing_space: bool,
+    strip_trailing_cr: bool,
     ignore_blank_lines: bool,
+    minimal: bool,
+    initial_tab: bool,
+    left_column: bool,
+    suppress_common_lines: bool,
     ignore_matching: Vec<Regex>,
     labels: Vec<OsString>,
     command_options: Vec<OsString>,
@@ -41,7 +49,7 @@ pub fn diff(args: Vec<OsString>) -> i32 {
     let to_metadata = fs::metadata(to);
     let from_directory = from_metadata.as_ref().is_ok_and(fs::Metadata::is_dir);
     let to_directory = to_metadata.as_ref().is_ok_and(fs::Metadata::is_dir);
-    let from_missing = options.new_file
+    let from_missing = (options.new_file || options.unidirectional_new_file)
         && from != Path::new("-")
         && from_metadata
             .as_ref()
@@ -67,7 +75,6 @@ pub fn diff(args: Vec<OsString>) -> i32 {
         }
     }
 }
-
 fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
     let mut options = DiffOptions::default();
     let mut files = Vec::new();
@@ -117,12 +124,17 @@ fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
             match name {
                 "recursive" => options.recursive = true,
                 "new-file" => options.new_file = true,
+                "unidirectional-new-file" => options.unidirectional_new_file = true,
                 "text" => options.text = true,
                 "binary" => {}
                 "ignore-case" => options.ignore_case = true,
                 "ignore-all-space" => options.ignore_all_space = true,
                 "ignore-space-change" => options.ignore_space_change = true,
+                "ignore-tab-expansion" => options.ignore_tab_expansion = true,
+                "ignore-trailing-space" => options.ignore_trailing_space = true,
+                "strip-trailing-cr" => options.strip_trailing_cr = true,
                 "ignore-blank-lines" => options.ignore_blank_lines = true,
+                "minimal" => options.minimal = true,
                 "ignore-matching-lines" => options
                     .ignore_matching
                     .push(ignore_regex(value.as_deref().unwrap())?),
@@ -136,6 +148,9 @@ fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
                 "report-identical-files" => options.params.report_identical_files = true,
                 "brief" => options.params.brief = true,
                 "expand-tabs" => options.params.expand_tabs = true,
+                "initial-tab" => options.initial_tab = true,
+                "left-column" => options.left_column = true,
+                "suppress-common-lines" => options.suppress_common_lines = true,
                 "normal" => set_format(&mut format, Format::Normal)?,
                 "ed" => set_format(&mut format, Format::Ed)?,
                 "side-by-side" => set_format(&mut format, Format::SideBySide)?,
@@ -151,6 +166,9 @@ fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
                     if let Some(value) = attached {
                         options.params.context_count = number(OsStr::new(value), "context length")?;
                     }
+                }
+                "speed-large-files" | "horizon-lines" | "color" | "palette" => {
+                    return Err(format!("unsupported option '--{name}'"))
                 }
                 _ => return Err(format!("unrecognized option '{text}'")),
             }
@@ -176,10 +194,14 @@ fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
                     'i' => options.ignore_case = true,
                     'w' => options.ignore_all_space = true,
                     'b' => options.ignore_space_change = true,
+                    'E' => options.ignore_tab_expansion = true,
+                    'Z' => options.ignore_trailing_space = true,
                     'B' => options.ignore_blank_lines = true,
+                    'd' => options.minimal = true,
                     's' => options.params.report_identical_files = true,
                     'q' => options.params.brief = true,
                     't' => options.params.expand_tabs = true,
+                    'T' => options.initial_tab = true,
                     'u' | 'c' => {
                         set_format(
                             &mut format,
@@ -227,6 +249,12 @@ fn parse_diff(args: Vec<OsString>) -> Result<Option<DiffOptions>, String> {
                             _ => unreachable!(),
                         }
                         break;
+                    }
+                    'l' | 'D' | 'F' | 'p' | 'H' | 'h' => {
+                        return Err(format!("unsupported option -- '{flag}'"))
+                    }
+                    'x' | 'X' => {
+                        return Err(format!("unsupported option -- '{flag}'"))
                     }
                     _ => return Err(format!("invalid option -- '{flag}'")),
                 }
@@ -368,70 +396,126 @@ struct Change {
 }
 
 fn comparison_key(line: &[u8], options: &DiffOptions) -> Vec<u8> {
-    let newline =
-        line.ends_with(b"\n") && !options.ignore_all_space && !options.ignore_space_change;
-    let line = line.strip_suffix(b"\n").unwrap_or(line);
-    let mut key = Vec::with_capacity(line.len() + usize::from(newline));
-    let mut space = false;
-    for &byte in line {
-        if byte.is_ascii_whitespace() && (options.ignore_all_space || options.ignore_space_change) {
-            space = true;
+    let has_newline = line.ends_with(b"\n");
+    let mut content = if has_newline {
+        &line[..line.len() - 1]
+    } else {
+        line
+    };
+    if options.strip_trailing_cr && content.ends_with(b"\r") {
+        content = &content[..content.len() - 1];
+    }
+
+    let mut key = Vec::with_capacity(content.len() + usize::from(has_newline));
+    let mut column = 0;
+    let mut whitespace = false;
+    let mut trailing = Vec::new();
+    for &byte in content {
+        if (options.ignore_trailing_space || options.ignore_space_change)
+            && byte.is_ascii_whitespace()
+        {
+            trailing.push(byte);
             continue;
         }
-        if space && options.ignore_space_change && !options.ignore_all_space {
-            key.push(b' ');
+        if !trailing.is_empty() {
+            for byte in trailing.drain(..) {
+                append_comparison_byte(
+                    &mut key,
+                    byte,
+                    options,
+                    &mut column,
+                    &mut whitespace,
+                );
+            }
         }
-        space = false;
-        key.push(if options.ignore_case {
-            byte.to_ascii_lowercase()
-        } else {
-            byte
-        });
+        append_comparison_byte(&mut key, byte, options, &mut column, &mut whitespace);
     }
-    if newline {
+    if !options.ignore_trailing_space && !options.ignore_space_change {
+        for byte in trailing {
+            append_comparison_byte(&mut key, byte, options, &mut column, &mut whitespace);
+        }
+    }
+    if has_newline && !options.ignore_all_space && !options.ignore_space_change {
         key.push(b'\n');
     }
     key
 }
 
+fn append_comparison_byte(
+    key: &mut Vec<u8>,
+    byte: u8,
+    options: &DiffOptions,
+    column: &mut usize,
+    whitespace: &mut bool,
+) {
+    if options.ignore_tab_expansion && byte == b'\t' {
+        let count = 8 - *column % 8;
+        for _ in 0..count {
+            append_comparison_byte(key, b' ', options, column, whitespace);
+        }
+        return;
+    }
+    if options.ignore_all_space && byte.is_ascii_whitespace() {
+        *whitespace = true;
+        return;
+    }
+    if options.ignore_space_change && byte.is_ascii_whitespace() {
+        if !*whitespace {
+            key.push(b' ');
+        }
+        *whitespace = true;
+        *column += 1;
+        return;
+    }
+    *whitespace = false;
+    key.push(if options.ignore_case {
+        byte.to_ascii_lowercase()
+    } else {
+        byte
+    });
+    *column += 1;
+}
+
+fn line_is_ignored(line: &[u8], options: &DiffOptions) -> bool {
+    let content = line.strip_suffix(b"\n").unwrap_or(line);
+    let content = content.strip_suffix(b"\r").unwrap_or(content);
+    (options.ignore_blank_lines && content.iter().all(u8::is_ascii_whitespace))
+        || options
+            .ignore_matching
+            .iter()
+            .any(|pattern| pattern.is_match(content))
+}
+
 fn diff_changes(from: &[&[u8]], to: &[&[u8]], options: &DiffOptions) -> Vec<Change> {
-    let operations =
-        if options.ignore_case || options.ignore_all_space || options.ignore_space_change {
-            let left = from
-                .iter()
-                .map(|line| comparison_key(line, options))
-                .collect::<Vec<_>>();
-            let right = to
-                .iter()
-                .map(|line| comparison_key(line, options))
-                .collect::<Vec<_>>();
-            capture_diff_slices(Algorithm::Myers, &left, &right)
-        } else {
-            capture_diff_slices(Algorithm::Myers, from, to)
-        };
-    operations
-        .into_iter()
-        .filter_map(|operation| {
-            let (tag, old, new) = operation.as_tag_tuple();
-            if tag == DiffTag::Equal {
-                return None;
-            }
+    let mut tokens = HashMap::<Vec<u8>, Token>::new();
+    let mut intern = |key: Vec<u8>| {
+        let next = tokens.len() as u32;
+        *tokens.entry(key).or_insert(Token(next))
+    };
+    let before = from
+        .iter()
+        .map(|line| intern(comparison_key(line, options)))
+        .collect::<Vec<_>>();
+    let after = to
+        .iter()
+        .map(|line| intern(comparison_key(line, options)))
+        .collect::<Vec<_>>();
+    let algorithm = if options.minimal {
+        Algorithm::MyersMinimal
+    } else {
+        Algorithm::Myers
+    };
+    let mut diff = Diff::default();
+    diff.compute_with(algorithm, &before, &after, tokens.len() as u32);
+    diff.hunks()
+        .map(|hunk| {
+            let old = hunk.before.start as usize..hunk.before.end as usize;
+            let new = hunk.after.start as usize..hunk.after.end as usize;
             let ignored = from[old.clone()]
                 .iter()
                 .chain(&to[new.clone()])
-                .all(|line| {
-                    let blank = options.ignore_blank_lines
-                        && if options.ignore_all_space || options.ignore_space_change {
-                            line.iter().all(u8::is_ascii_whitespace)
-                        } else {
-                            *line == b"\n"
-                        };
-                    blank
-                        || options.ignore_matching.iter().any(|pattern| {
-                            pattern.is_match(line.strip_suffix(b"\n").unwrap_or(line))
-                        })
-                });
-            Some(Change { old, new, ignored })
+                .all(|line| line_is_ignored(line, options));
+            Change { old, new, ignored }
         })
         .collect()
 }
@@ -441,7 +525,10 @@ fn compare_diff_files(
     from_name: &OsStr,
     to_name: &OsStr,
 ) -> Result<(Vec<u8>, i32, bool), String> {
-    let from = read_diff_operand(from_name, options.new_file)?;
+    let from = read_diff_operand(
+        from_name,
+        options.new_file || options.unidirectional_new_file,
+    )?;
     let to_bytes = if from_name == "-" && to_name == "-" {
         None
     } else {
@@ -473,13 +560,35 @@ fn compare_diff_files(
             append_names(&mut output, from_name, to_name, b" differ\n");
         }
     } else if params.format == Format::SideBySide {
-        render_side_by_side(&mut output, &from_lines, &to_lines, &changes, params);
+        render_side_by_side(
+            &mut output,
+            &from_lines,
+            &to_lines,
+            &changes,
+            params,
+            options.left_column,
+            options.suppress_common_lines,
+        );
     } else if different {
         match params.format {
-            Format::Normal => render_normal(&mut output, &from_lines, &to_lines, &changes, params),
+            Format::Normal => render_normal(
+                &mut output,
+                &from_lines,
+                &to_lines,
+                &changes,
+                params,
+                options.initial_tab,
+            ),
             Format::Unified | Format::Context => {
                 render_headers(&mut output, options, from_name, to_name);
-                render_contextual(&mut output, &from_lines, &to_lines, &changes, params);
+                render_contextual(
+                    &mut output,
+                    &from_lines,
+                    &to_lines,
+                    &changes,
+                    params,
+                    options.initial_tab,
+                );
             }
             Format::Ed => render_ed(&mut output, &from_lines, &to_lines, &changes)?,
             Format::SideBySide => unreachable!(),
@@ -503,8 +612,23 @@ fn line_range(range: &Range<usize>) -> String {
     }
 }
 
-fn append_diff_line(output: &mut Vec<u8>, prefix: &[u8], line: &[u8], params: &params::Params) {
-    output.extend_from_slice(prefix);
+fn append_diff_line(
+    output: &mut Vec<u8>,
+    prefix: &[u8],
+    line: &[u8],
+    params: &params::Params,
+    initial_tab: bool,
+) {
+    if initial_tab {
+        if prefix.last() == Some(&b' ') {
+            output.extend_from_slice(&prefix[..prefix.len() - 1]);
+        } else {
+            output.extend_from_slice(prefix);
+        }
+        output.push(b'\t');
+    } else {
+        output.extend_from_slice(prefix);
+    }
     let content = line.strip_suffix(b"\n").unwrap_or(line);
     let mut column = 0;
     for &byte in content {
@@ -529,6 +653,7 @@ fn render_normal(
     to: &[&[u8]],
     changes: &[Change],
     params: &params::Params,
+    initial_tab: bool,
 ) {
     for change in changes.iter().filter(|change| !change.ignored) {
         let command = if change.old.is_empty() {
@@ -546,13 +671,13 @@ fn render_normal(
         )
         .unwrap();
         for line in &from[change.old.clone()] {
-            append_diff_line(output, b"< ", line, params);
+            append_diff_line(output, b"< ", line, params, initial_tab);
         }
         if command == 'c' {
             output.extend_from_slice(b"---\n");
         }
         for line in &to[change.new.clone()] {
-            append_diff_line(output, b"> ", line, params);
+            append_diff_line(output, b"> ", line, params, initial_tab);
         }
     }
 }
@@ -609,6 +734,7 @@ fn render_contextual(
     to: &[&[u8]],
     changes: &[Change],
     params: &params::Params,
+    initial_tab: bool,
 ) {
     let context = params.context_count;
     let mut index = 0;
@@ -647,18 +773,18 @@ fn render_contextual(
             let mut cursor = old.start;
             for change in changes {
                 for line in &from[cursor..change.old.start] {
-                    append_diff_line(output, b" ", line, params);
+                    append_diff_line(output, b" ", line, params, initial_tab);
                 }
                 for line in &from[change.old.clone()] {
-                    append_diff_line(output, b"-", line, params);
+                    append_diff_line(output, b"-", line, params, initial_tab);
                 }
                 for line in &to[change.new.clone()] {
-                    append_diff_line(output, b"+", line, params);
+                    append_diff_line(output, b"+", line, params, initial_tab);
                 }
                 cursor = change.old.end;
             }
             for line in &from[cursor..old.end] {
-                append_diff_line(output, b" ", line, params);
+                append_diff_line(output, b" ", line, params, initial_tab);
             }
         } else {
             output.extend_from_slice(b"***************\n");
@@ -680,7 +806,7 @@ fn render_contextual(
                 for change in changes {
                     let changed = if right { &change.new } else { &change.old };
                     for line in &lines[cursor..changed.start] {
-                        append_diff_line(output, b"  ", line, params);
+                        append_diff_line(output, b"  ", line, params, initial_tab);
                     }
                     let marker = if !change.old.is_empty() && !change.new.is_empty() {
                         b"! "
@@ -690,12 +816,12 @@ fn render_contextual(
                         b"- "
                     };
                     for line in &lines[changed.clone()] {
-                        append_diff_line(output, marker, line, params);
+                        append_diff_line(output, marker, line, params, initial_tab);
                     }
                     cursor = changed.end;
                 }
                 for line in &lines[cursor..range.end] {
-                    append_diff_line(output, b"  ", line, params);
+                    append_diff_line(output, b"  ", line, params, initial_tab);
                 }
             }
         }
@@ -796,9 +922,10 @@ fn side_half(output: &mut Vec<u8>, line: &[u8], width: usize, params: &params::P
 fn side_row(
     output: &mut Vec<u8>,
     left: Option<&[u8]>,
-    right: Option<&[u8]>,
+    mut right: Option<&[u8]>,
     mut marker: u8,
     params: &params::Params,
+    left_column: bool,
 ) {
     let unaligned = (params.width / 2)
         .saturating_add((params.tabsize + 3) / 2)
@@ -810,7 +937,10 @@ fn side_row(
     let offset = if width == 0 { params.width } else { offset };
     let separator = (width + offset).saturating_sub(1) / 2;
     let column = left.map_or(0, |line| side_half(output, line, width, params));
-    if marker == b' '
+    if marker == b' ' && left_column {
+        right = None;
+        marker = b'(';
+    } else if marker == b' '
         && left.is_some_and(|line| !line.ends_with(b"\n"))
             != right.is_some_and(|line| !line.ends_with(b"\n"))
     {
@@ -841,12 +971,23 @@ fn render_side_by_side(
     to: &[&[u8]],
     changes: &[Change],
     params: &params::Params,
+    left_column: bool,
+    suppress_common_lines: bool,
 ) {
     let mut old = 0;
     let mut new = 0;
     for change in changes {
         while old < change.old.start && new < change.new.start {
-            side_row(output, Some(from[old]), Some(to[new]), b' ', params);
+            if !suppress_common_lines {
+                side_row(
+                    output,
+                    Some(from[old]),
+                    Some(to[new]),
+                    b' ',
+                    params,
+                    left_column,
+                );
+            }
             old += 1;
             new += 1;
         }
@@ -863,13 +1004,24 @@ fn render_side_by_side(
                     _ => b'>',
                 }
             };
-            side_row(output, left, right, marker, params);
+            if !(suppress_common_lines && marker == b' ') {
+                side_row(output, left, right, marker, params, left_column);
+            }
         }
         old = change.old.end;
         new = change.new.end;
     }
     while old < from.len() && new < to.len() {
-        side_row(output, Some(from[old]), Some(to[new]), b' ', params);
+        if !suppress_common_lines {
+            side_row(
+                output,
+                Some(from[old]),
+                Some(to[new]),
+                b' ',
+                params,
+                left_column,
+            );
+        }
         old += 1;
         new += 1;
     }
@@ -901,7 +1053,7 @@ fn compare_directory(
     ancestors: &mut BTreeSet<(PathBuf, PathBuf)>,
 ) -> i32 {
     let mut names = BTreeSet::new();
-    for root in [left_root, right_root] {
+    for (is_left, root) in [(true, left_root), (false, right_root)] {
         match fs::read_dir(root) {
             Ok(entries) => {
                 for entry in entries {
@@ -916,7 +1068,9 @@ fn compare_directory(
                     }
                 }
             }
-            Err(error) if options.new_file && error.kind() == io::ErrorKind::NotFound => {}
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    && (options.new_file || (options.unidirectional_new_file && is_left)) => {}
             Err(error) => {
                 eprintln!("diff: {}: {error}", root.display());
                 return 2;
@@ -929,7 +1083,9 @@ fn compare_directory(
         let right = right_root.join(&name);
         let left_exists = left.exists();
         let right_exists = right.exists();
-        if (!left_exists || !right_exists) && !options.new_file {
+        let compare_missing =
+            options.new_file || (options.unidirectional_new_file && !left_exists && right_exists);
+        if (!left_exists || !right_exists) && !compare_missing {
             let root = if left_exists { left_root } else { right_root };
             let mut output = b"Only in ".to_vec();
             output.extend_from_slice(root.as_os_str().as_encoded_bytes());
@@ -948,27 +1104,32 @@ fn compare_directory(
                 } else {
                     (&right, &left)
                 };
-                println!(
-                    "File {} is a directory while file {} is a regular file",
-                    directory.display(),
-                    file.display()
-                );
-                status = status.max(1);
+                let mut output = b"File ".to_vec();
+                output.extend_from_slice(directory.as_os_str().as_encoded_bytes());
+                output.extend_from_slice(b" is a directory while file ");
+                output.extend_from_slice(file.as_os_str().as_encoded_bytes());
+                output.extend_from_slice(b" is a regular file\n");
+                status = status.max(write_output("diff", &output, 1));
             } else if options.recursive {
                 status = status.max(directory_diff(options, &left, &right, ancestors));
             } else if left_exists && right_exists {
-                println!(
-                    "Common subdirectories: {} and {}",
-                    left.display(),
-                    right.display()
-                );
+                let mut output = b"Common subdirectories: ".to_vec();
+                output.extend_from_slice(left.as_os_str().as_encoded_bytes());
+                output.extend_from_slice(b" and ");
+                output.extend_from_slice(right.as_os_str().as_encoded_bytes());
+                output.push(b'\n');
+                status = status.max(write_output("diff", &output, 0));
             } else {
-                println!(
-                    "Only in {}: {}",
-                    if left_exists { left_root } else { right_root }.display(),
-                    name.to_string_lossy()
-                );
-                status = status.max(1);
+                let mut output = b"Only in ".to_vec();
+                output.extend_from_slice(if left_exists {
+                    left_root.as_os_str().as_encoded_bytes()
+                } else {
+                    right_root.as_os_str().as_encoded_bytes()
+                });
+                output.extend_from_slice(b": ");
+                output.extend_from_slice(name.as_encoded_bytes());
+                output.push(b'\n');
+                status = status.max(write_output("diff", &output, 1));
             }
             continue;
         }
@@ -1195,9 +1356,4 @@ fn read_operand(path: &OsStr) -> io::Result<Vec<u8>> {
     } else {
         fs::read(path)
     }
-}
-
-fn file_error(program: &str, path: &OsStr, error: io::Error) -> i32 {
-    eprintln!("{program}: {}: {error}", path.to_string_lossy());
-    2
 }

@@ -36,7 +36,7 @@ goblin.workspace = true
 jaq-all.workspace = true
 memmap2 = "0.9"
 sed-rs = { version = "2.0.0" }
-similar.workspace = true
+gix-imara-diff.workspace = true
 tar.workspace = true
 serde_json.workspace = true
 serde.workspace = true

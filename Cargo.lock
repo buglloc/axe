@@ -473,6 +473,7 @@ dependencies = [
  "findutils",
  "flate2",
  "futures-util",
+ "gix-imara-diff",
  "goblin",
  "hickory-resolver",
  "inotify",
@@ -513,7 +514,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "signal-hook",
- "similar",
  "ssh-key",
  "tar",
  "testcontainers",
@@ -3040,6 +3040,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "gix-imara-diff"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7518b930f6aeb75e871d32ce873c2ae46e35cef19b5a0b039d4337f651d897cd"
+dependencies = [
+ "bstr",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -7002,12 +7012,6 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
-
-[[package]]
-name = "similar"
-version = "2.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "siphasher"

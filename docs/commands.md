@@ -121,11 +121,15 @@ replaced with U+FFFD, and output is valid JSON. `--tab`, `--indent`, `--seq`,
 string payloads raw and terminates non-string JSON payloads with a newline.
 `--stream` and `--stream-errors` are not supported.
 
-`diff -u` and `diff -c` combine nearby changes into one hunk when their context
-overlaps. Context output marks each line of a replacement block with `!`.
-`diff` and `cmp` distinguish differences from input errors.
-Case folding is ASCII-only. `diff -I` accepts a byte-oriented BRE subset and
-rejects unsupported constructs, including backreferences.
+`diff` computes raw line edit scripts with Myers; `-d`/`--minimal` selects the
+minimal variant. It supports normal, unified (`-u`/`-U`), context (`-c`/`-C`),
+ed (`-e`), side-by-side (`-y`), ASCII case folding, whitespace modes
+(`-i`, `-w`, `-b`, `-E`, `-Z`), `-B`, `-I`, `--strip-trailing-cr`, labels,
+directory recursion, and `--unidirectional-new-file`. `-x`, `-X`, `-D`, `-F`,
+`-l`, `-p`, `-H`, `--color`, and custom line-format options are rejected.
+`diff` and `cmp` distinguish differences from input errors. Case folding is
+ASCII-only. `diff -I` accepts a byte-oriented BRE subset and rejects
+unsupported constructs, including backreferences.
 
 NUL-delimited pathname output from `find -print0` and `grep -lZ` preserves Unix
 filename bytes. `stat` filename formats and `which` PATH lookup also preserve
