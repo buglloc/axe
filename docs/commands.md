@@ -158,11 +158,13 @@ mode.
 
 `file` uses bounded content heuristics, not the complete libmagic database. It
 samples at most 64 KiB from a regular file; stdin JSON detection consumes the
-complete input. It supports `-E`, `-N`, `--mime-encoding`, and
-`-h`/`--no-dereference`, but not `-F` or `-k`. Empty regular files use
+complete input. ELF descriptions include the header class, byte order, machine,
+link mode, ABI note, build ID, debug information, and symbol-table stripping
+when those metadata are available. It supports `-E`, `-N`, `--mime-encoding`,
+and `-h`/`--no-dereference`, but not `-F` or `-k`. Empty regular files use
 `inode/x-empty`; empty stdin uses `application/x-empty`. Valid JSON scalars are
-recognized as JSON. `strings --unicode` is not supported; its JSON output is an
-AXE extension.
+recognized as JSON. `strings --unicode` is not supported; its JSON output is
+an AXE extension.
 
 ## Archives and compression
 

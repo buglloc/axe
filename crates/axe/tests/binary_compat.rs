@@ -199,6 +199,12 @@ fn elf_header(file_type: u16, interpreter: bool, big_endian: bool) -> Vec<u8> {
         };
         bytes[offset..offset + 2].copy_from_slice(&value);
     };
+    let value = if big_endian {
+        1u32.to_be_bytes()
+    } else {
+        1u32.to_le_bytes()
+    };
+    bytes[20..24].copy_from_slice(&value);
     write16(&mut bytes, 16, file_type);
     write16(&mut bytes, 18, 62);
     write16(&mut bytes, 52, 64);
@@ -243,6 +249,16 @@ fn file_elf_mime_distinguishes_objects_executables_libraries_and_pie() {
             );
         }
     }
+}
+
+#[test]
+fn file_description_includes_elf_header_details() {
+    let scratch = Scratch::new("elf-description");
+    let bytes = elf_header(2, false, false);
+    assert_output(
+        run(&scratch.0, "file", &["-b", "-"], &bytes),
+        b"ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked\n",
+    );
 }
 
 #[test]

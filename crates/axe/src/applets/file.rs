@@ -1,11 +1,19 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, Cursor, Read, Write};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use clap::error::ErrorKind;
 use clap::{ArgAction, Parser};
 use file_format::FileFormat;
+use goblin::elf::header::{
+    EI_CLASS, EI_DATA, EI_OSABI, EM_386, EM_AARCH64, EM_ARM, EM_MIPS, EM_PPC, EM_PPC64, EM_RISCV,
+    EM_S390, EM_X86_64, ET_CORE, ET_DYN, ET_EXEC, ET_NONE, ET_REL,
+};
+use goblin::elf::note::{ELF_NOTE_OS_FREEBSD, ELF_NOTE_OS_GNU, ELF_NOTE_OS_LINUX, NT_GNU_ABI_TAG};
+use goblin::elf::program_header::PT_DYNAMIC;
+use goblin::elf::section_header::SHT_SYMTAB;
+use goblin::options::ParseOptions;
 
 use super::errno::strerror;
 
@@ -183,6 +191,7 @@ enum Kind {
         format: FileFormat,
         sample: Vec<u8>,
         complete: bool,
+        description: Option<String>,
     },
 }
 
@@ -246,6 +255,7 @@ impl Kind {
                 format,
                 sample,
                 complete,
+                description,
             } => {
                 let charset = content_charset(sample, *complete);
                 let plain_text = *format == FileFormat::PlainText
@@ -253,6 +263,11 @@ impl Kind {
                 let json = plain_text
                     && *complete
                     && serde_json::from_slice::<serde_json::Value>(sample).is_ok();
+                if mode == MimeMode::Description
+                    && let Some(description) = description
+                {
+                    return description.clone();
+                }
                 let media_type = if json {
                     "application/json"
                 } else if let Some(media_type) = elf_media_type(sample) {
@@ -335,6 +350,7 @@ fn describe(path: &Path, dereference: bool, mode: MimeMode, hard: bool) -> Resul
         let format = FileFormat::from_reader(Cursor::new(&sample)).map_err(Failure::Open)?;
         return Ok(Kind::Content {
             format,
+            description: elf_description(&sample, None),
             sample,
             complete: true,
         });
@@ -393,6 +409,7 @@ fn describe(path: &Path, dereference: bool, mode: MimeMode, hard: bool) -> Resul
     sample.truncate(TEXT_SAMPLE_LIMIT as usize);
     Ok(Kind::Content {
         format,
+        description: elf_description(&sample, elf_section_info(path, &sample)),
         sample,
         complete,
     })
@@ -456,6 +473,263 @@ fn content_charset(sample: &[u8], complete: bool) -> &'static str {
         "iso-8859-1"
     } else {
         "binary"
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ElfSectionInfo {
+    debug_info: bool,
+    symbols: bool,
+}
+
+fn elf_description(sample: &[u8], sections: Option<ElfSectionInfo>) -> Option<String> {
+    use std::fmt::Write as _;
+    if !sample.starts_with(b"\x7fELF") {
+        return None;
+    }
+
+    let elf = goblin::elf::Elf::parse_with_opts(sample, &ParseOptions::permissive()).ok()?;
+    let class = match elf.header.e_ident[EI_CLASS] {
+        1 => 32,
+        2 => 64,
+        _ => return None,
+    };
+    let byte_order = match elf.header.e_ident[EI_DATA] {
+        1 => "LSB",
+        2 => "MSB",
+        _ => return None,
+    };
+    let dynamic = elf
+        .program_headers
+        .iter()
+        .any(|header| header.p_type == PT_DYNAMIC)
+        || elf.dynamic.is_some();
+    let pie = elf.header.e_type == ET_DYN
+        && (elf.interpreter.is_some()
+            || elf.dynamic.as_ref().is_some_and(|dynamic| {
+                dynamic.dyns.iter().any(|entry| {
+                    entry.d_tag == goblin::elf::dynamic::DT_FLAGS_1
+                        && entry.d_val & goblin::elf::dynamic::DF_1_PIE != 0
+                })
+            }));
+    let kind = match elf.header.e_type {
+        ET_NONE => "unknown",
+        ET_REL => "relocatable",
+        ET_EXEC => "executable",
+        ET_DYN if pie => "pie executable",
+        ET_DYN => "shared object",
+        ET_CORE => "core file",
+        _ => "unknown",
+    };
+    let mut description = format!(
+        "ELF {class}-bit {byte_order} {kind}, {}, version {} ({})",
+        elf_machine_name(elf.header.e_machine),
+        elf.header.e_version,
+        elf_abi_name(elf.header.e_ident[EI_OSABI]),
+    );
+
+    if matches!(elf.header.e_type, ET_EXEC | ET_DYN) {
+        if dynamic {
+            description.push_str(", dynamically linked");
+            if let Some(interpreter) = elf.interpreter {
+                let _ = write!(description, ", interpreter {interpreter}");
+            }
+        } else {
+            description.push_str(", statically linked");
+        }
+    }
+
+    let mut abi = None;
+    let mut build_id = None;
+    if let Some(notes) = elf.iter_note_headers(sample) {
+        for note in notes.flatten() {
+            if note.name != "GNU" {
+                continue;
+            }
+            if note.n_type == NT_GNU_ABI_TAG && note.desc.len() >= 16 {
+                let read_u32 = |offset: usize| {
+                    let bytes = note.desc.get(offset..offset + 4)?;
+                    Some(if elf.little_endian {
+                        u32::from_le_bytes(bytes.try_into().ok()?)
+                    } else {
+                        u32::from_be_bytes(bytes.try_into().ok()?)
+                    })
+                };
+                let os = match read_u32(0)? {
+                    ELF_NOTE_OS_LINUX => "GNU/Linux",
+                    ELF_NOTE_OS_GNU => "GNU",
+                    ELF_NOTE_OS_FREEBSD => "FreeBSD",
+                    _ => continue,
+                };
+                abi = Some((os, read_u32(4)?, read_u32(8)?, read_u32(12)?));
+            } else if note.n_type == goblin::elf::note::NT_GNU_BUILD_ID {
+                build_id = Some(note.desc);
+            }
+        }
+    }
+    if let Some((os, major, minor, patch)) = abi {
+        let _ = write!(description, ", for {os} {major}.{minor}.{patch}");
+    }
+    if let Some(build_id) = build_id {
+        let algorithm = match build_id.len() {
+            16 => "md5",
+            20 => "sha1",
+            32 => "md5",
+            _ => "unknown",
+        };
+        description.push_str(", BuildID[");
+        description.push_str(algorithm);
+        description.push_str("]=");
+        for byte in build_id {
+            let _ = write!(description, "{byte:02x}");
+        }
+    }
+    let sections = sections.or_else(|| {
+        (!elf.section_headers.is_empty()).then(|| ElfSectionInfo {
+            debug_info: elf.section_headers.iter().any(|section| {
+                matches!(
+                    elf.shdr_strtab.get_at(section.sh_name),
+                    Some(".debug_info" | ".zdebug_info")
+                )
+            }),
+            symbols: !elf.syms.is_empty(),
+        })
+    });
+    if sections.is_some_and(|sections| sections.debug_info) {
+        description.push_str(", with debug_info");
+    }
+    if let Some(sections) = sections {
+        description.push_str(if sections.symbols {
+            ", not stripped"
+        } else {
+            ", stripped"
+        });
+    }
+    Some(description)
+}
+
+fn elf_section_info(path: &Path, sample: &[u8]) -> Option<ElfSectionInfo> {
+    const MAX_SECTION_TABLE: usize = 1024 * 1024;
+    const MAX_STRING_TABLE: usize = 1024 * 1024;
+
+    if !sample.starts_with(b"\x7fELF") {
+        return None;
+    }
+    let header = goblin::elf::Elf::parse_header(sample).ok()?;
+    let is_64 = header.e_ident[EI_CLASS] == 2;
+    let little_endian = match header.e_ident[EI_DATA] {
+        1 => true,
+        2 => false,
+        _ => return None,
+    };
+    let count = usize::from(header.e_shnum);
+    let entry_size = usize::from(header.e_shentsize);
+    let minimum_entry_size = if is_64 { 64 } else { 40 };
+    if count == 0 || count > 16_384 || entry_size < minimum_entry_size {
+        return None;
+    }
+    let table_size = count.checked_mul(entry_size)?;
+    if table_size > MAX_SECTION_TABLE {
+        return None;
+    }
+
+    let file_length = fs::metadata(path).ok()?.len();
+    let mut file = fs::File::open(path).ok()?;
+    let mut read_range = |offset: u64, size: u64, limit: usize| {
+        if size > limit as u64 || offset > file_length || size > file_length - offset {
+            return None;
+        }
+        let mut bytes = vec![0; usize::try_from(size).ok()?];
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        file.read_exact(&mut bytes).ok()?;
+        Some(bytes)
+    };
+    let table = read_range(header.e_shoff, table_size as u64, MAX_SECTION_TABLE)?;
+    let read_integer = |bytes: &[u8]| -> Option<u64> {
+        match bytes.len() {
+            4 if little_endian => Some(u64::from(u32::from_le_bytes(bytes.try_into().ok()?))),
+            4 => Some(u64::from(u32::from_be_bytes(bytes.try_into().ok()?))),
+            8 if little_endian => Some(u64::from_le_bytes(bytes.try_into().ok()?)),
+            8 => Some(u64::from_be_bytes(bytes.try_into().ok()?)),
+            _ => None,
+        }
+    };
+    let section = |index: usize| -> Option<(usize, u32, u64, u64)> {
+        let start = index.checked_mul(entry_size)?;
+        let bytes = table.get(start..start.checked_add(entry_size)?)?;
+        let name = usize::try_from(read_integer(bytes.get(..4)?)?).ok()?;
+        let kind = u32::try_from(read_integer(bytes.get(4..8)?)?).ok()?;
+        let (offset, size) = if is_64 {
+            (
+                read_integer(bytes.get(24..32)?)?,
+                read_integer(bytes.get(32..40)?)?,
+            )
+        } else {
+            (
+                read_integer(bytes.get(16..20)?)?,
+                read_integer(bytes.get(20..24)?)?,
+            )
+        };
+        Some((name, kind, offset, size))
+    };
+
+    let symbols =
+        (0..count).any(|index| section(index).is_some_and(|section| section.1 == SHT_SYMTAB));
+    let mut info = ElfSectionInfo {
+        debug_info: false,
+        symbols,
+    };
+    let string_index = usize::from(header.e_shstrndx);
+    let Some((_, _, string_offset, string_size)) = section(string_index) else {
+        return Some(info);
+    };
+    let strings = read_range(string_offset, string_size, MAX_STRING_TABLE)?;
+    for index in 0..count {
+        let Some((name_offset, _, _, _)) = section(index) else {
+            continue;
+        };
+        let Some(name) = strings.get(name_offset..).and_then(|bytes| {
+            bytes
+                .split(|byte| *byte == 0)
+                .next()
+                .filter(|name| !name.is_empty())
+        }) else {
+            continue;
+        };
+        if matches!(name, b".debug_info" | b".zdebug_info") {
+            info.debug_info = true;
+            break;
+        }
+    }
+    Some(info)
+}
+
+fn elf_machine_name(machine: u16) -> &'static str {
+    match machine {
+        EM_386 => "Intel i386",
+        EM_X86_64 => "x86-64",
+        EM_ARM => "ARM",
+        EM_AARCH64 => "ARM aarch64",
+        EM_MIPS => "MIPS",
+        EM_PPC => "PowerPC",
+        EM_PPC64 => "PowerPC64",
+        EM_RISCV => "RISC-V",
+        EM_S390 => "IBM S/390",
+        _ => "unknown",
+    }
+}
+
+fn elf_abi_name(abi: u8) -> &'static str {
+    match abi {
+        0 => "SYSV",
+        1 => "HP-UX",
+        2 => "NetBSD",
+        3 => "GNU/Linux",
+        6 => "Solaris",
+        9 => "FreeBSD",
+        12 => "OpenBSD",
+        255 => "standalone",
+        _ => "unknown",
     }
 }
 
