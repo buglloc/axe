@@ -1419,6 +1419,64 @@ impl Drop for Running {
 }
 
 #[test]
+fn grep_flushes_terminal_output_before_eof() {
+    let scratch = Scratch::new();
+    let mut pty = Pty::new();
+    let mut command = applet(scratch.path(), "grep");
+    command
+        .arg("--color=never")
+        .arg(".")
+        .stdin(Stdio::piped())
+        .stdout(pty.slave.try_clone().unwrap())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let mut input = child.stdin.take().unwrap();
+    input.write_all(b"first\n").unwrap();
+    let mut running = Running(Some(child));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut received = Vec::new();
+    loop {
+        let mut poll = libc::pollfd {
+            fd: pty.master.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: poll references exactly one initialized pollfd and waits at most 50ms.
+        let ready = unsafe { libc::poll(&mut poll, 1, 50) };
+        assert!(ready >= 0);
+        if ready > 0 && poll.revents & libc::POLLIN != 0 {
+            let mut bytes = [0; 4096];
+            let read = pty.master.read(&mut bytes).unwrap();
+            received.extend_from_slice(&bytes[..read]);
+            if received
+                .windows(b"first".len())
+                .any(|window| window == b"first")
+            {
+                break;
+            }
+        }
+        assert!(
+            running.0.as_mut().unwrap().try_wait().unwrap().is_none(),
+            "grep exited before flushing terminal output: {:?}",
+            String::from_utf8_lossy(&received)
+        );
+        assert!(
+            Instant::now() < deadline,
+            "grep did not flush terminal output before EOF: {:?}",
+            String::from_utf8_lossy(&received)
+        );
+    }
+    drop(input);
+    let output = running.0.take().unwrap().wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "grep failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn more_keeps_the_real_tty_pager_and_accepts_quit() {
     let scratch = Scratch::new();
     let root = scratch.path();

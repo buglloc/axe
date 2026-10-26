@@ -36,6 +36,7 @@ pub(crate) mod util_linux;
 mod which;
 
 use std::ffi::OsString;
+use std::io::IsTerminal;
 
 pub use awk::awk;
 pub use commands::commands;
@@ -75,10 +76,15 @@ pub(crate) fn in_process_io_status(result: std::io::Result<()>, error_status: i3
     }
 }
 
-pub fn grep(args: Vec<OsString>) -> i32 {
+pub fn grep(mut args: Vec<OsString>) -> i32 {
+    if !args.is_empty()
+        && std::io::stdout().is_terminal()
+        && !args.iter().skip(1).any(|arg| arg == "--line-buffered")
+    {
+        args.insert(1, OsString::from("--line-buffered"));
+    }
     uu_grep::uumain(args.into_iter())
 }
-
 pub fn sed(args: Vec<OsString>) -> i32 {
     use clap::Parser;
 
