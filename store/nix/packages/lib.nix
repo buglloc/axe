@@ -44,6 +44,88 @@
 
   targetStrip = packageSet: "${packageSet.stdenv.cc.targetPrefix}strip";
 
+  portableTerminals = [
+    "alacritty"
+    "ansi"
+    "contour"
+    "foot"
+    "foot-direct"
+    "kitty"
+    "linux"
+    "rxvt"
+    "rxvt-256color"
+    "screen"
+    "screen-256color"
+    "screen.xterm-256color"
+    "st"
+    "st-256color"
+    "tmux"
+    "tmux-256color"
+    "tmux-direct"
+    "vt100"
+    "vt220"
+    "vte"
+    "vte-256color"
+    "wezterm"
+    "xterm"
+    "xterm-256color"
+    "xterm-ghostty"
+    "xterm-kitty"
+    "xterm-direct"
+  ];
+
+  ghosttyTerminfo =
+    buildPkgs.runCommand "ghostty-terminfo-${buildPkgs.ghostty.version}" {
+      nativeBuildInputs = [buildPkgs.zig_0_15];
+      passAsFile = ["generator"];
+      generator = ''
+        const std = @import("std");
+        const ghostty = @import("ghostty.zig").ghostty;
+
+        pub fn main() !void {
+            var buffer: [1024]u8 = undefined;
+            var writer = std.fs.File.stdout().writer(&buffer);
+            try ghostty.encode(&writer.interface);
+            try writer.end();
+        }
+      '';
+    } ''
+      cp ${buildPkgs.ghostty.src}/src/terminfo/{ghostty.zig,Source.zig} .
+      cp "$generatorPath" main.zig
+      zig run main.zig -O ReleaseSafe \
+        --cache-dir "$TMPDIR/zig-cache" \
+        --global-cache-dir "$TMPDIR/zig-global-cache" > "$out"
+    '';
+
+  # Static ncurses with compiled-in descriptions of common terminals, for
+  # hosts without a usable terminfo database.
+  portableNcurses = packageSet:
+    (packageSet.ncurses.override {
+      enableStatic = true;
+      withCxx = false;
+    }).overrideAttrs (old: {
+      nativeBuildInputs = (old.nativeBuildInputs or []) ++ [buildPkgs.ncurses];
+      postPatch =
+        (old.postPatch or "")
+        + ''
+          substituteInPlace ncurses/tinfo/MKfallback.sh \
+            --replace-fail '"$tic_path" -o $tmp_info -x "$terminfo_src" >&2' \
+              '"$tic_path" -o $tmp_info -x "$terminfo_src" >&2
+          "$tic_path" -o $tmp_info -x "${buildPkgs.kitty.src}/terminfo/kitty.terminfo" >&2 || exit 1
+          "$tic_path" -o $tmp_info -x "${ghosttyTerminfo}" >&2 || exit 1'
+        '';
+      configureFlags =
+        (old.configureFlags or [])
+        ++ [
+          "--with-fallbacks=${lib.concatStringsSep "," portableTerminals}"
+          "--with-tic-path=${buildPkgs.ncurses}/bin/tic"
+          "--with-infocmp-path=${buildPkgs.ncurses}/bin/infocmp"
+          "--with-default-terminfo-dir=/usr/share/terminfo"
+          "--disable-db-install"
+          "--without-tests"
+        ];
+    });
+
   # Build pure-Go Darwin binaries on the Linux builder. Starting from the
   # Linux package keeps the derivation's build system x86_64-linux; changing
   # GOOS/GOARCH on a native Darwin derivation would still require a Mac.
@@ -338,6 +420,7 @@ in {
     staticSetFor
     packageSetFor
     targetStrip
+    portableNcurses
     goDarwin
     disableCdncheckIPv6Probe
     mkPackageSet

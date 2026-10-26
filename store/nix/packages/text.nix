@@ -1,6 +1,8 @@
 {
   mkNixpkgsBinary,
+  linuxSystems,
   portableSystems,
+  portableNcurses,
   packageSetFor,
   staticSetFor,
   goDarwin,
@@ -17,6 +19,26 @@
     packageFor = system: pkgs: (staticSetFor system pkgs).sqlite;
     rewriteBuildConfigurationPaths = true;
     darwinSystemLibraries = ["libz.dylib"];
+  };
+
+  less = mkNixpkgsBinary {
+    name = "less";
+    synopsis = "Page through files and command output";
+    systems = linuxSystems;
+    packageFor = system: pkgs: let
+      packageSet = staticSetFor system pkgs;
+    in
+      (packageSet.less.override {
+        ncurses = portableNcurses packageSet;
+      }).overrideAttrs {
+        outputs = ["out"];
+        # Compile host paths instead of /nix/store ones. Globbing uses glob(3),
+        # so the unshipped lessecho helper is never needed.
+        buildFlags = [
+          "bindir=/usr/bin"
+          "libexecdir=/usr/libexec"
+        ];
+      };
   };
 
   difft = mkNixpkgsBinary {

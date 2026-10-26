@@ -58,6 +58,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `katana` | `security/katana` | Crawl web applications and discover URLs and endpoints | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `kubectl` | `containers/kubectl` | Manage Kubernetes clusters | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `layerx` | `containers/layerx` | Inspect container image layers in a terminal UI or CI | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `less` | `text/less` | Page through files and command output | `aarch64-linux`, `x86_64-linux` |
 | `lsns` | `containers/lsns` | Show Linux namespaces and processes | `aarch64-linux`, `x86_64-linux` |
 | `ltrace` | `debugging/ltrace` | Trace Linux library calls | `aarch64-linux`, `x86_64-linux` |
 | `masscan` | `network/masscan` | Scan large networks quickly | `aarch64-linux`, `x86_64-linux` |
