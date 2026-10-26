@@ -2,6 +2,23 @@
 title = "Changelog"
 +++
 
+## [v0.9.0](https://github.com/buglloc/axe/releases/tag/v0.9.0) — 2026-10-26
+
+### Highlights
+
+- Added `usql` to the AXE Store for `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux`. It supports PostgreSQL, MySQL, SQLite, and ClickHouse databases. `204620842df00e584b455610db53a09588ffd572`
+- Added `valkey-cli` to the AXE Store for `aarch64-linux` and `x86_64-linux`. It connects to Valkey and Redis-compatible servers with TLS support. `204620842df00e584b455610db53a09588ffd572`
+
+### Changes
+
+- `usql` embeds the AXE CA bundle and uses it for PostgreSQL connections with `sslmode=verify-full` when no explicit root certificate is provided. `204620842df00e584b455610db53a09588ffd572`
+- `valkey-cli` embeds the AXE CA bundle and uses it for TLS certificate verification when no external CA path is configured. `204620842df00e584b455610db53a09588ffd572`
+- Refreshed the signed Store bootstrap index and inventory to include `usql` version `0.21.6` and `valkey-cli` version `9.1.2`. `7486bf188f3583188a75e3720fa2722989367c84`
+
+### Fixes
+
+- The supplied evidence does not identify a separate user-facing fix in this release.
+
 ## [v0.8.1](https://github.com/buglloc/axe/releases/tag/v0.8.1) — 2026-10-26
 
 ### Highlights
