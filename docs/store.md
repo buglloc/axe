@@ -99,6 +99,8 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `tmux` | `terminal/tmux` | Multiplex terminal sessions and windows | `aarch64-linux`, `x86_64-linux` |
 | `tshark` | `network/tshark` | Analyze packet captures from the CLI | `aarch64-linux`, `x86_64-linux` |
 | `unshare` | `containers/unshare` | Run a program in new Linux namespaces | `aarch64-linux`, `x86_64-linux` |
+| `usql` | `network/usql` | Query PostgreSQL, MySQL, SQLite, and ClickHouse databases | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `valkey-cli` | `network/valkey-cli` | Connect to Valkey and Redis-compatible servers | `aarch64-linux`, `x86_64-linux` |
 | `vim` | `text/vim` | Edit text with Vim and its standard runtime | `aarch64-linux`, `x86_64-linux` |
 | `websocat` | `network/websocat` | Relay data between WebSockets and streams | `aarch64-linux`, `x86_64-linux` |
 | `xh` | `network/xh` | Interactive-friendly HTTP client | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
@@ -143,6 +145,10 @@ Uploads and remote streams are explicit network operations and use host TLS trus
 `zellij` embeds its terminal plugins and assets. Its Linux libcurl includes CA roots; explicit CA overrides still apply. The optional browser client loads Google Fonts.
 
 `dig` includes CA roots for certificate-verified DNS-over-TLS and HTTPS queries. Use `+tls-ca` to enable verification, or `+tls-ca=FILE` for an explicit CA file.
+
+`usql` includes PostgreSQL, MySQL, SQLite, and ClickHouse drivers in a CGO-free static profile. PostgreSQL connections using `sslmode=verify-full` use the selected edition's embedded CA bundle when `sslrootcert` is not specified; an explicit `sslrootcert` remains authoritative.
+
+`valkey-cli` is a Linux static build with OpenSSL TLS support. With `--tls`, it uses the selected edition's embedded CA bundle when neither `--cacert` nor `--cacertdir` is specified; explicit CA options remain authoritative.
 
 `rclone` embeds CA roots and timezone data. Release checks, self-update, the GUI downloader, and cloud SDK telemetry are disabled or removed. Azure Blob inherits disabled SDK telemetry from the shared Azure authentication client options while retaining its gzip request policy. The authenticated RC API and explicit `--rc-files` remain available. Cgo-based mounting is excluded; Go FUSE mounts require host FUSE support and its mount helper.
 

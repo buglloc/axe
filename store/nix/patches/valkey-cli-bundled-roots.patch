@@ -1,0 +1,51 @@
+diff --git a/src/cli_common.c b/src/cli_common.c
+--- a/src/cli_common.c
++++ b/src/cli_common.c
+@@ -43,5 +43,7 @@
+ #ifdef USE_OPENSSL
+ #include <openssl/ssl.h>
+ #include <openssl/err.h>
++#include <openssl/pem.h>
++#include <openssl/x509_vfy.h>
+ #include <valkey/tls.h>
+ #endif
+@@ -53,0 +54,5 @@
++#ifdef USE_OPENSSL
++static const unsigned char axe_ca_bundle[] = {
++#include "axe-ca-bundle.inc"
++};
++#endif
+@@ -79,6 +84,31 @@
+         } else {
+-            if (!SSL_CTX_set_default_verify_paths(ssl_ctx)) {
+-                *err = "Failed to use default CA paths";
++            BIO *ca_bundle = BIO_new_mem_buf(axe_ca_bundle, sizeof(axe_ca_bundle));
++            X509 *cert;
++            int cert_count = 0;
++
++            if (ca_bundle == NULL) {
++                *err = "Failed to create embedded CA bundle";
+                 goto error;
+             }
++
++            ERR_clear_error();
++            while ((cert = PEM_read_bio_X509(ca_bundle, NULL, NULL, NULL)) != NULL) {
++                if (!X509_STORE_add_cert(SSL_CTX_get_cert_store(ssl_ctx), cert)) {
++                    X509_free(cert);
++                    BIO_free(ca_bundle);
++                    *err = "Failed to load embedded CA bundle";
++                    goto error;
++                }
++                X509_free(cert);
++                cert_count++;
++            }
++
++            unsigned long pem_error = ERR_peek_last_error();
++            BIO_free(ca_bundle);
++            if (cert_count == 0 || ERR_GET_LIB(pem_error) != ERR_LIB_PEM ||
++                ERR_GET_REASON(pem_error) != PEM_R_NO_START_LINE) {
++                *err = "Invalid embedded CA bundle";
++                goto error;
++            }
++            ERR_clear_error();
+         }

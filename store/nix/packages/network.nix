@@ -138,6 +138,78 @@
       postInstall = "";
       postFixup = "";
     });
+  usqlTags = ["no_base" "postgres" "mysql" "moderncsqlite" "clickhouse"];
+  usqlPackageFor = target: targetPkgs: let
+    packageSet = packageSetFor target targetPkgs;
+  in
+    (
+      if target == "aarch64-darwin"
+      then
+        goDarwin {
+          package = "usql";
+          subPackage = ".";
+        }
+      else packageSet.usql
+    ).overrideAttrs (old: {
+      outputs = ["out"];
+      buildInputs = [];
+      env =
+        (old.env or {})
+        // {
+          CGO_ENABLED = 0;
+          GO_EXTLINK_ENABLED = 0;
+          GOFLAGS = "-tags=${buildPkgs.lib.concatStringsSep "," usqlTags}";
+        };
+      tags = usqlTags;
+      subPackages = ["."];
+      ldflags = (old.ldflags or []) ++ ["-linkmode=internal"];
+      patches = (old.patches or []) ++ [../patches/usql-bundled-roots.patch];
+      postPatch =
+        (old.postPatch or "")
+        + ''
+          cp ${axePortableCaBundle} drivers/postgres/axe-ca-bundle.pem
+        '';
+      postInstall = "";
+      postFixup =
+        (old.postFixup or "")
+        + ''
+          ${buildPkgs.removeReferencesTo}/bin/remove-references-to \
+            -t ${packageSet.buildPackages.go} "$out/bin/usql"
+          sed -i 's|/nix/store/|/non/store/|g' "$out/bin/usql"
+        '';
+      doCheck = false;
+      doInstallCheck = false;
+      nativeInstallCheckInputs = [];
+    });
+
+  valkeyCliMinimal = staticSet:
+    (staticSet.valkey.override {
+      tlsSupport = true;
+      withSystemd = false;
+      openssl = portableOpenSsl staticSet;
+    }).overrideAttrs (old: {
+      outputs = ["out"];
+      nativeBuildInputs = (old.nativeBuildInputs or []) ++ [buildPkgs.xxd];
+      makeFlags = (old.makeFlags or []) ++ ["BUILD_TLS=yes" "USE_SYSTEMD=no"];
+      patches = (old.patches or []) ++ [../patches/valkey-cli-bundled-roots.patch];
+      postPatch =
+        (old.postPatch or "")
+        + ''
+          xxd -i < ${axePortableCaBundle} > src/axe-ca-bundle.inc
+        '';
+      installPhase = ''
+        runHook preInstall
+        install -Dm755 src/valkey-cli "$out/bin/valkey-cli"
+        ${targetStrip staticSet} -s "$out/bin/valkey-cli"
+        runHook postInstall
+      '';
+      postInstall = "";
+      postFixup = "";
+      doCheck = false;
+      doInstallCheck = false;
+      nativeCheckInputs = [];
+      nativeInstallCheckInputs = [];
+    });
 
   ssMinimal = staticSet:
     buildPkgs.runCommand "ss-${buildPkgs.iproute2.version}"
@@ -660,7 +732,6 @@ in {
     synopsis = "Add OpenSSH private keys to an authentication agent";
     systems = portableSystems;
     rewriteBuildConfigurationPaths = true;
-    darwinSystemLibraries = darwinOpenSshLibraries;
     packageFor = opensshPackageFor;
   };
 
@@ -796,6 +867,21 @@ in {
           patches = (old.patches or []) ++ [../patches/dnsx-disable-automatic-update-check.patch];
         })
       );
+  };
+
+  usql = mkNixpkgsBinary {
+    name = "usql";
+    synopsis = "Query PostgreSQL, MySQL, SQLite, and ClickHouse databases";
+    systems = portableSystems;
+    rewriteBuildConfigurationPaths = true;
+    packageFor = usqlPackageFor;
+  };
+
+  valkey-cli = mkNixpkgsBinary {
+    name = "valkey-cli";
+    synopsis = "Connect to Valkey and Redis-compatible servers";
+    systems = linuxSystems;
+    packageFor = target: targetPkgs: valkeyCliMinimal (staticSetFor target targetPkgs);
   };
 
   yc = mkUpstreamBinaries {

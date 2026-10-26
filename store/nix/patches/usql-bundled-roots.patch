@@ -1,0 +1,30 @@
+diff --git a/drivers/postgres/postgres.go b/drivers/postgres/postgres.go
+--- a/drivers/postgres/postgres.go
++++ b/drivers/postgres/postgres.go
+@@ -10,0 +11,3 @@
++	"crypto/tls"
++	"crypto/x509"
++	_ "embed"
+@@ -26,0 +27,11 @@
++//go:embed axe-ca-bundle.pem
++var axeCABundle []byte
++
++var axeCAPool = func() *x509.CertPool {
++	pool := x509.NewCertPool()
++	if !pool.AppendCertsFromPEM(axeCABundle) {
++		panic("usql: invalid embedded AXE CA bundle")
++	}
++	return pool
++}()
++
+@@ -59,0 +60,10 @@
++			if query := u.Query(); query.Get("sslmode") == "verify-full" && query.Get("sslrootcert") == "" {
++				if err := pq.RegisterTLSConfig("axe", &tls.Config{
++					RootCAs:    axeCAPool,
++					ServerName: u.Hostname(),
++				}); err != nil {
++					return nil, err
++				}
++				query.Set("sslmode", "pqgo-axe")
++				u.RawQuery = query.Encode()
++			}
