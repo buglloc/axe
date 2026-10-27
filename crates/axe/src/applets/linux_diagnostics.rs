@@ -1605,8 +1605,7 @@ fn lock_json_value(record: &LockRecord, column: &str, options: &LocksOptions) ->
         "SIZE" if options.bytes => record.file_size.map_or(JsonValue::Null, JsonValue::from),
         "SIZE" => record
             .file_size
-            .map_or_else(|| JsonValue::from("-"), JsonValue::from)
-            .into(),
+            .map_or_else(|| JsonValue::from("-"), JsonValue::from),
         "INODE" => record.inode.into(),
         "MAJ:MIN" => format!("{}:{}", record.major, record.minor).into(),
         "MODE" => record.mode.clone().into(),
