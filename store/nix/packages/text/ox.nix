@@ -29,6 +29,11 @@ mkNixpkgsBinary {
             ${targetStrip packageSet} -s "$out/bin/ox"
           '';
         doInstallCheck = false;
+        postConfigure =
+          (old.postConfigure or "")
+          + ''
+            patch -p1 < ${../../patches/ox-axe-defaults.patch}
+          '';
         nativeInstallCheckInputs = [];
       });
 }
