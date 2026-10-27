@@ -2,6 +2,24 @@
 title = "Changelog"
 +++
 
+## [v0.9.1](https://github.com/buglloc/axe/releases/tag/v0.9.1) — 2026-10-27
+
+### Highlights
+
+- Added bundled `fsnotifywait` and `fsnotifywatch` applets for waiting on filesystem events and collecting fanotify event statistics. `49051c485f779cfd4dc886a95467794896aa167b`
+- Added fanotify selection and scope options to `inotifywait` and `inotifywatch`, including `--fanotify`, `--inotify`, `--filesystem`, and `--mount`. `49051c485f779cfd4dc886a95467794896aa167b`
+
+### Changes
+
+- `file` now reports more ELF details, including class, byte order, file type, machine, version, ABI, linkage, interpreter, build ID, debug information, and stripped status when available. `a325a23701ba82d39e10e71292f3316155853c28`
+- Recursive inotify setup now skips inaccessible subtrees while continuing to watch accessible paths. `49051c485f779cfd4dc886a95467794896aa167b`
+- Refreshed the AXE Store bootstrap index. `269096b8ff174868e1f0990d39e1c492165843e1`
+
+### Fixes
+
+- `grep` now enables line buffering when its output is a terminal, unless `--line-buffered` was already specified, so matching output is available before the process exits. `13544bd768af8ca45d2ba4921d69488111c5133f`
+- `ox` no longer starts the configuration assistant solely because the user has no configuration file. The assistant runs only with `--config-assist`, and bootstrap now tolerates an unset `HOME`. `4b6beb0da8f169ea3fed35be7afb31378aefbf5e`
+
 ## [v0.9.0](https://github.com/buglloc/axe/releases/tag/v0.9.0) — 2026-10-26
 
 ### Highlights
