@@ -606,6 +606,20 @@ pub fn build(
     commands.extend_bundled(crate::applets::linux_inspect::commands());
     #[cfg(target_os = "linux")]
     commands.extend_bundled(crate::applets::linux_diagnostics::commands());
+    #[cfg(target_os = "linux")]
+    {
+        commands.insert_bundled("host", None, crate::applets::host as BundledFn);
+        commands.insert_bundled("nslookup", None, crate::applets::nslookup as BundledFn);
+        commands.insert_bundled("ping", None, crate::applets::ping as BundledFn);
+        commands.insert_bundled("ping6", None, crate::applets::ping6 as BundledFn);
+        commands.insert_bundled("traceroute", None, crate::applets::traceroute as BundledFn);
+        commands.insert_bundled(
+            "traceroute6",
+            None,
+            crate::applets::traceroute6 as BundledFn,
+        );
+        commands.extend_bundled(crate::applets::linux_network::commands());
+    }
     {
         commands.insert_bundled(
             "fsnotifywait",
