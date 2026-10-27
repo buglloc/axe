@@ -13,6 +13,9 @@ use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use regex::bytes::{Regex, RegexBuilder};
 
 pub fn inotifywait(args: Vec<OsString>) -> i32 {
+    if super::fanotify_tools::uses_fanotify(&args) {
+        return super::fanotify_tools::fanotifywait(args);
+    }
     match WaitOptions::parse(args).and_then(run_wait) {
         Ok(WaitOutcome::Event) => 0,
         Ok(WaitOutcome::Timeout) => 2,
@@ -25,6 +28,9 @@ pub fn inotifywait(args: Vec<OsString>) -> i32 {
 }
 
 pub fn inotifywatch(args: Vec<OsString>) -> i32 {
+    if super::fanotify_tools::uses_fanotify(&args) {
+        return super::fanotify_tools::fanotifywatch(args);
+    }
     match WatchOptions::parse(args).and_then(run_watch) {
         Ok(()) => 0,
         Err(error) if error.is_empty() => 0,
@@ -149,6 +155,7 @@ impl WaitOptions {
         };
         while let Some(value) = iter.next() {
             match value.to_str().unwrap_or_default() {
+                "-I" | "--inotify" => {}
                 "-m" | "--monitor" => options.monitor = true,
                 "-r" | "--recursive" => options.common.recursive = true,
                 "-P" | "--no-dereference" => options.common.no_dereference = true,
@@ -199,7 +206,7 @@ impl WaitOptions {
                 }
                 "-h" | "--help" => {
                     println!(
-                        "Usage: inotifywait [-cmrPq] [-e EVENT] [-t SECONDS] [--format FMT] FILE ..."
+                        "Usage: inotifywait [-cmrPq] [-e EVENT] [-t SECONDS] [--format FMT] [-I|-F|-S|-M] FILE ..."
                     );
                     return Err(String::new());
                 }
@@ -345,6 +352,7 @@ impl WatchOptions {
         };
         while let Some(value) = iter.next() {
             match value.to_str().unwrap_or_default() {
+                "-I" | "--inotify" => {}
                 "-r" | "--recursive" => options.common.recursive = true,
                 "-P" | "--no-dereference" => options.common.no_dereference = true,
                 "-z" | "--zero" => options.zero = true,
@@ -377,7 +385,7 @@ impl WatchOptions {
                 }
                 "-h" | "--help" => {
                     println!(
-                        "Usage: inotifywatch [-vzrP] [-e EVENT] [-t SECONDS] [-a|-d EVENT] FILE ..."
+                        "Usage: inotifywatch [-vzrP] [-e EVENT] [-t SECONDS] [-a|-d EVENT] [-I|-F|-S|-M] FILE ..."
                     );
                     return Err(String::new());
                 }
@@ -631,7 +639,15 @@ fn add_tree(
         std::fs::metadata(root)
     } {
         Ok(metadata) => metadata,
-        Err(error) if missing_ok && error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error)
+            if missing_ok
+                && matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                ) =>
+        {
+            return Ok(());
+        }
         Err(error) => return Err(format!("{}: {error}", root.display())),
     };
     let mut watch_mask = common.mask;
@@ -643,7 +659,15 @@ fn add_tree(
     }
     let descriptor = match inotify.watches().add(root, watch_mask) {
         Ok(descriptor) => descriptor,
-        Err(error) if missing_ok && error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error)
+            if missing_ok
+                && matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                ) =>
+        {
+            return Ok(());
+        }
         Err(error) => return Err(format!("{}: {error}", root.display())),
     };
     watches.insert(descriptor, root.to_path_buf());
@@ -658,7 +682,15 @@ fn add_tree(
         if directory != root {
             let descriptor = match inotify.watches().add(&directory, watch_mask) {
                 Ok(descriptor) => descriptor,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error)
+                    if (missing_ok || directory != root)
+                        && matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                        ) =>
+                {
+                    continue;
+                }
                 Err(error) => return Err(format!("{}: {error}", directory.display())),
             };
             watches.insert(descriptor, directory.clone());
@@ -667,7 +699,10 @@ fn add_tree(
             Ok(entries) => entries,
             Err(error)
                 if (missing_ok || directory != root)
-                    && error.kind() == std::io::ErrorKind::NotFound =>
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                    ) =>
             {
                 continue;
             }

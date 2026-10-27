@@ -71,7 +71,7 @@ Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-sty
 
 | Category | Bundled commands |
 | --- | --- |
-| `files` — Files & search | `basename`, `cp`, `dir`, `dirname`, `find`, `inotifywait`, `inotifywatch`, `install`, `link`, `ln`, `ls`, `mkdir`, `mkfifo`, `mknod`, `mktemp`, `mv`, `pathchk`, `pwd`, `readlink`, `realpath`, `rm`, `rmdir`, `stat`, `touch`, `tree`, `truncate`, `unlink`, `vdir` |
+| `files` — Files & search | `basename`, `cp`, `dir`, `dirname`, `find`, `fsnotifywait`, `fsnotifywatch`, `inotifywait`, `inotifywatch`, `install`, `link`, `ln`, `ls`, `mkdir`, `mkfifo`, `mknod`, `mktemp`, `mv`, `pathchk`, `pwd`, `readlink`, `realpath`, `rm`, `rmdir`, `stat`, `touch`, `tree`, `truncate`, `unlink`, `vdir` |
 | `text` — Text & data | `awk`, `b2sum`, `base32`, `base64`, `basenc`, `cat`, `cksum`, `cmp`, `comm`, `csplit`, `cut`, `diff`, `expand`, `factor`, `fmt`, `fold`, `grep`, `egrep`, `fgrep`, `rgrep`, `head`, `hexdump`, `hd`, `join`, `jq`, `md5sum`, `nl`, `numfmt`, `od`, `paste`, `pr`, `ptx`, `sdiff`, `sed`, `seq`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, `shuf`, `sort`, `split`, `sum`, `tac`, `tail`, `tee`, `tr`, `tsort`, `unexpand`, `uniq`, `wc` |
 | `archives` — Archives & compression | `tar`, `gzip`, `gunzip`, `zcat`, `gzcat`, `bzip2`, `bunzip2`, `bzcat`, `xz`, `unxz`, `xzcat`, `zstd` |
 | `storage` — Storage & backup | `blkid`, `blockdev`, `dd`, `df`, `du`, `iostat`, `mount`, `mountpoint`, `sync`, `umount` |
@@ -233,11 +233,14 @@ These are identity probes, not complete filesystem consistency checks.
 non-mountpoint, and 1 when the path cannot be resolved. Linux mount detection
 uses `/proc/self/mountinfo`, including bind mounts on the same filesystem.
 
-`inotifywait` and `inotifywatch` are nonrecursive unless `-r` is requested.
-`@PATH` operands exclude paths. Recursive monitoring installs watches on new
+`inotifywait` and `inotifywatch` use inotify. `fsnotifywait` and
+`fsnotifywatch` use fanotify and support `-S`/`--filesystem` and `-M`/`--mount`
+scopes. All four are nonrecursive unless `-r` is requested. `@PATH` operands
+exclude paths. Recursive monitoring installs watches or marks on new
 directories using internal events without emitting or counting those events
-unless requested. Requested event filters also apply to unmount events.
-Filename transport and regular-expression matching are byte-oriented.
+unless requested. Inaccessible or vanished subdirectories are skipped during
+recursive setup. Requested event filters also apply to unmount events where the
+backend provides them.
 
 ## Mounting filesystems
 

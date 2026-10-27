@@ -3276,3 +3276,49 @@ fn inotifywait_reports_created_file() {
     );
     assert_eq!(output.stdout, b"CREATE:created\n");
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fsnotify_applets_are_bundled_and_report_fanotify_failures() {
+    for applet in ["fsnotifywait", "fsnotifywatch"] {
+        let help = Command::new(env!("CARGO_BIN_EXE_axe"))
+            .args(["--applet", applet, "--", "--help"])
+            .env("PATH", "/nonexistent")
+            .env("AXE_STORE_MODE", "off")
+            .output()
+            .expect("run fsnotify help");
+        assert!(help.status.success(), "{applet}: {:?}", help.stderr);
+        assert!(
+            String::from_utf8_lossy(&help.stdout).contains(applet),
+            "{applet}: {:?}",
+            help.stdout
+        );
+    }
+
+    let scratch = Scratch::new("fsnotifywait-fanotify");
+    let output = Command::new(env!("CARGO_BIN_EXE_axe"))
+        .args([
+            "--applet",
+            "fsnotifywait",
+            "--",
+            "-q",
+            "-t",
+            "1",
+            "-e",
+            "create",
+        ])
+        .arg(scratch.path())
+        .env("PATH", "/nonexistent")
+        .env("AXE_STORE_MODE", "off")
+        .output()
+        .expect("run fsnotifywait");
+    assert!(
+        matches!(output.status.code(), Some(1) | Some(2)),
+        "{output:?}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("unknown bundled command"),
+        "{:?}",
+        output.stderr
+    );
+}

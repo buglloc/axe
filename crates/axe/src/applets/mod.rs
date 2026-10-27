@@ -7,6 +7,8 @@ mod diffutils;
 mod dns;
 mod doctor;
 pub(crate) mod errno;
+#[cfg(target_os = "linux")]
+mod fanotify_tools;
 mod file;
 mod findutils;
 mod goblin;
@@ -45,6 +47,8 @@ pub use diffutils::{cmp, diff, sdiff};
 #[cfg(target_os = "linux")]
 pub use dns::{host, nslookup};
 pub use doctor::{doctor, doctor_builtin};
+#[cfg(target_os = "linux")]
+pub use fanotify_tools::{fsnotifywait, fsnotifywatch};
 pub use file::file;
 pub use findutils::{find, xargs};
 pub use goblin::goblin;

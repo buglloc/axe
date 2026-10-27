@@ -316,10 +316,10 @@ impl RegistryBuilder {
 
 fn bundled_category(name: &str) -> &'static str {
     match name {
-        "basename" | "cp" | "dir" | "dirname" | "find" | "inotifywait" | "inotifywatch"
-        | "install" | "link" | "ln" | "ls" | "mkdir" | "mkfifo" | "mknod" | "mktemp" | "mv"
-        | "pathchk" | "pwd" | "readlink" | "realpath" | "rm" | "rmdir" | "stat" | "touch"
-        | "tree" | "truncate" | "unlink" | "vdir" => "files",
+        "basename" | "cp" | "dir" | "dirname" | "find" | "fsnotifywait" | "fsnotifywatch"
+        | "inotifywait" | "inotifywatch" | "install" | "link" | "ln" | "ls" | "mkdir"
+        | "mkfifo" | "mknod" | "mktemp" | "mv" | "pathchk" | "pwd" | "readlink" | "realpath"
+        | "rm" | "rmdir" | "stat" | "touch" | "tree" | "truncate" | "unlink" | "vdir" => "files",
         "awk" | "b2sum" | "base32" | "base64" | "basenc" | "cat" | "cksum" | "cmp" | "comm"
         | "csplit" | "cut" | "diff" | "expand" | "factor" | "fmt" | "fold" | "grep" | "head"
         | "hexdump" | "join" | "jq" | "md5sum" | "nl" | "numfmt" | "od" | "paste" | "pr"
@@ -410,6 +410,8 @@ fn bundled_synopsis(name: &str) -> &'static str {
         "hugetop" => "Report huge page usage by process",
         "id" => "Print user and group identifiers",
         "ifconfig" => "Inspect and configure network interfaces",
+        "fsnotifywait" => "Wait for filesystem events with fanotify",
+        "fsnotifywatch" => "Collect fanotify event statistics",
         "inotifywait" => "Wait for filesystem events",
         "inotifywatch" => "Collect filesystem event statistics",
         "install" => "Copy files while setting attributes",
@@ -613,6 +615,16 @@ pub fn build(
     commands.extend_bundled(crate::applets::linux_inspect::commands());
     #[cfg(target_os = "linux")]
     {
+        commands.insert_bundled(
+            "fsnotifywait",
+            None,
+            crate::applets::fsnotifywait as BundledFn,
+        );
+        commands.insert_bundled(
+            "fsnotifywatch",
+            None,
+            crate::applets::fsnotifywatch as BundledFn,
+        );
         commands.insert_bundled(
             "inotifywait",
             None,

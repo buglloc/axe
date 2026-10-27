@@ -5,7 +5,8 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -38,7 +39,24 @@ struct Watching {
 
 impl Watching {
     fn start(applet: &str, args: &[&str], operands: &[OsString]) -> Self {
-        let child = Command::new(env!("CARGO_BIN_EXE_axe"))
+        Self::start_with_binary(
+            Path::new(env!("CARGO_BIN_EXE_axe")),
+            applet,
+            args,
+            operands,
+            false,
+        )
+    }
+
+    fn start_with_binary(
+        binary: &Path,
+        applet: &str,
+        args: &[&str],
+        operands: &[OsString],
+        drop_dac: bool,
+    ) -> Self {
+        let mut command = Command::new(binary);
+        command
             .args(["--applet", applet, "--"])
             .args(args)
             .args(operands)
@@ -46,9 +64,23 @@ impl Watching {
             .env("AXE_STORE_MODE", "off")
             .env("LC_ALL", "C")
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("start inotify applet");
+            .stderr(Stdio::piped());
+        if drop_dac {
+            // SAFETY: the closure only changes the child process credentials before exec.
+            unsafe {
+                command.pre_exec(|| {
+                    let mut header = [0u32; 2];
+                    header[0] = 0x2008_0522;
+                    let mut data = [0u32; 6];
+                    if libc::syscall(libc::SYS_capset, header.as_mut_ptr(), data.as_mut_ptr()) == -1
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        let child = command.spawn().expect("start inotify applet");
         let mut watcher = Self {
             child: Some(child),
             setup: Vec::new(),
@@ -212,6 +244,50 @@ fn nonrecursive_wait_and_watch_never_install_child_directory_watches() {
             assert!(!output.stderr.is_empty(), "{:?}", output.stderr);
         }
     }
+}
+
+#[test]
+fn recursive_wait_skips_inaccessible_subtrees() {
+    let scratch = Scratch::new("inaccessible");
+    fs::set_permissions(&scratch.0, fs::Permissions::from_mode(0o755))
+        .expect("make scratch searchable");
+    let inaccessible = scratch.0.join("inaccessible");
+    let accessible = scratch.0.join("accessible");
+    fs::create_dir_all(inaccessible.join("nested")).expect("create inaccessible subtree");
+    fs::create_dir(&accessible).expect("create accessible subtree");
+    fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o000))
+        .expect("make subtree inaccessible");
+    let binary = Path::new(env!("CARGO_BIN_EXE_axe"));
+    let drop_dac = unsafe { libc::geteuid() } == 0;
+    let watcher = Watching::start_with_binary(
+        binary,
+        "inotifywait",
+        &["-r", "-e", "close_write", "-t", "2", "--format", "%f"],
+        &[scratch.0.clone().into_os_string()],
+        drop_dac,
+    );
+    let watches = watcher.watched_inodes();
+    assert!(
+        watches.contains(
+            &fs::metadata(&accessible)
+                .expect("accessible metadata")
+                .ino()
+        )
+    );
+    assert!(
+        !watches.contains(
+            &fs::metadata(&inaccessible)
+                .expect("inaccessible metadata")
+                .ino()
+        )
+    );
+
+    fs::write(accessible.join("accepted"), b"accepted").expect("write accepted event");
+    let output = watcher.finish();
+    fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o755))
+        .expect("restore subtree permissions");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(output.stdout, b"accepted\n");
 }
 
 #[test]
