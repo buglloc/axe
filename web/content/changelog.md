@@ -2,6 +2,24 @@
 title = "Changelog"
 +++
 
+## [v0.10.0](https://github.com/buglloc/axe/releases/tag/v0.10.0) — 2026-10-27
+
+### Highlights
+
+- Added five bundled Linux diagnostic applets: `namei`, `fuser`, `lslocks`, `pstree`, and `lsblk`. `7549d6933f5bc56bc3ff1664b5c5bb0d2341e688`
+
+### Changes
+
+- Added `namei` support for resolving pathname components, displaying symbolic links, and reporting modes, owners, mount points, and resolution errors. `7549d6933f5bc56bc3ff1664b5c5bb0d2341e688`
+- Added `fuser` support for identifying processes using files, filesystems, and TCP or UDP sockets, with user, verbose, namespace, filtering, and signal options. `7549d6933f5bc56bc3ff1664b5c5bb0d2341e688`
+- Added `lslocks` support for listing locks from `/proc/locks` with configurable columns, PID filtering, raw and byte output, and JSON output. `7549d6933f5bc56bc3ff1664b5c5bb0d2341e688`
+- Added `pstree` support for displaying the process hierarchy from `/proc`, including PID or user selection, arguments, process groups, threads, namespace information, UID changes, and security contexts. `7549d6933f5bc56bc3ff1664b5c5bb0d2341e688`
+- Added `lsblk` support for discovering Linux block devices from sysfs, showing device relationships, mount points, filesystem information, topology, discard data, and JSON or key-value output. `7549d6933f5bc56bc3ff1664b5c5bb0d2341e688`
+
+### Fixes
+
+The supplied source range does not provide evidence of bug fixes.
+
 ## [v0.9.1](https://github.com/buglloc/axe/releases/tag/v0.9.1) — 2026-10-27
 
 ### Highlights
