@@ -17,6 +17,8 @@ mod http;
 mod inotify_tools;
 mod jq;
 #[cfg(target_os = "linux")]
+pub(crate) mod linux_diagnostics;
+#[cfg(target_os = "linux")]
 pub(crate) mod linux_inspect;
 #[cfg(target_os = "linux")]
 pub(crate) mod linux_network;

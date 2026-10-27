@@ -34,6 +34,11 @@ Commands:
   zstd [-cdfkt] [FILE ...]          Zstandard compression; keeps input files by default
   diff [OPTIONS] FILE1 FILE2      compare files line by line
   sdiff [OPTIONS] FILE1 FILE2     side-by-side comparison or interactive merge
+  namei [OPTIONS] PATH...          resolve pathname components and symbolic links
+  fuser [OPTIONS] RESOURCE...      identify processes using files or sockets
+  lslocks [OPTIONS]                list Linux file locks
+  pstree [OPTIONS] [PID|USER]      display the Linux process hierarchy
+  lsblk [OPTIONS] [DEVICE...]      list Linux block devices
   killall [OPTIONS] NAME ...        Linux bundled exact-name process signalling
                                    -s/-SIGNAL/-NUM, -I, -u, -l, -q, -v;
                                    names use the kernel's 15-byte comm field

@@ -318,8 +318,9 @@ fn bundled_category(name: &str) -> &'static str {
     match name {
         "basename" | "cp" | "dir" | "dirname" | "find" | "fsnotifywait" | "fsnotifywatch"
         | "inotifywait" | "inotifywatch" | "install" | "link" | "ln" | "ls" | "mkdir"
-        | "mkfifo" | "mknod" | "mktemp" | "mv" | "pathchk" | "pwd" | "readlink" | "realpath"
-        | "rm" | "rmdir" | "stat" | "touch" | "tree" | "truncate" | "unlink" | "vdir" => "files",
+        | "mkfifo" | "mknod" | "mktemp" | "mv" | "namei" | "pathchk" | "pwd" | "readlink"
+        | "realpath" | "rm" | "rmdir" | "stat" | "touch" | "tree" | "truncate" | "unlink"
+        | "vdir" => "files",
         "awk" | "b2sum" | "base32" | "base64" | "basenc" | "cat" | "cksum" | "cmp" | "comm"
         | "csplit" | "cut" | "diff" | "expand" | "factor" | "fmt" | "fold" | "grep" | "head"
         | "hexdump" | "join" | "jq" | "md5sum" | "nl" | "numfmt" | "od" | "paste" | "pr"
@@ -329,11 +330,11 @@ fn bundled_category(name: &str) -> &'static str {
         "bunzip2" | "bzcat" | "bzip2" | "gzip" | "tar" | "unxz" | "xz" | "xzcat" | "zstd" => {
             "archives"
         }
-        "blkid" | "blockdev" | "dd" | "df" | "du" | "iostat" | "mount" | "mountpoint" | "sync"
-        | "umount" => "storage",
-        "hugetop" | "kill" | "killall" | "lsof" | "nice" | "nohup" | "pgrep" | "pidof"
-        | "pidwait" | "pkill" | "pmap" | "ps" | "pwdx" | "skill" | "snice" | "timeout" | "top"
-        | "watch" | "xargs" => "process",
+        "blkid" | "blockdev" | "dd" | "df" | "du" | "iostat" | "lsblk" | "lslocks" | "mount"
+        | "mountpoint" | "sync" | "umount" => "storage",
+        "fuser" | "hugetop" | "kill" | "killall" | "lsof" | "nice" | "nohup" | "pgrep"
+        | "pidof" | "pidwait" | "pkill" | "pmap" | "ps" | "pstree" | "pwdx" | "skill" | "snice"
+        | "timeout" | "top" | "watch" | "xargs" => "process",
         "arch" | "date" | "dmesg" | "free" | "hostid" | "hostname" | "ipcs" | "last"
         | "logname" | "lsmod" | "lspci" | "lsscsi" | "lsusb" | "modinfo" | "nproc" | "pinky"
         | "slabtop" | "sysctl" | "tload" | "uname" | "uptime" | "users" | "vmstat" | "vzik"
@@ -412,6 +413,11 @@ fn bundled_synopsis(name: &str) -> &'static str {
         "ifconfig" => "Inspect and configure network interfaces",
         "fsnotifywait" => "Wait for filesystem events with fanotify",
         "fsnotifywatch" => "Collect fanotify event statistics",
+        "fuser" => "Identify processes using files, filesystems, or sockets",
+        "lsblk" => "List Linux block devices and their relationships",
+        "lslocks" => "List Linux file locks",
+        "namei" => "Resolve pathname components and symbolic links",
+        "pstree" => "Display the Linux process hierarchy",
         "inotifywait" => "Wait for filesystem events",
         "inotifywatch" => "Collect filesystem event statistics",
         "install" => "Copy files while setting attributes",
@@ -595,25 +601,11 @@ pub fn build(
         commands.insert_bundled("zstd", None, crate::applets::zstd as BundledFn);
     }
     commands.insert_bundled("http", None, crate::applets::http as BundledFn);
-    #[cfg(target_os = "linux")]
-    {
-        commands.extend_bundled(crate::applets::linux_network::commands());
-        commands.insert_bundled("nslookup", None, crate::applets::nslookup as BundledFn);
-        commands.insert_bundled("host", None, crate::applets::host as BundledFn);
-        commands.insert_bundled("ping", None, crate::applets::ping as BundledFn);
-        commands.insert_bundled("ping6", None, crate::applets::ping6 as BundledFn);
-        commands.insert_bundled("traceroute", None, crate::applets::traceroute as BundledFn);
-        commands.insert_bundled(
-            "traceroute6",
-            None,
-            crate::applets::traceroute6 as BundledFn,
-        );
-    }
-    #[cfg(target_os = "linux")]
     commands.extend_bundled(crate::applets::linux_storage::commands());
     #[cfg(target_os = "linux")]
     commands.extend_bundled(crate::applets::linux_inspect::commands());
     #[cfg(target_os = "linux")]
+    commands.extend_bundled(crate::applets::linux_diagnostics::commands());
     {
         commands.insert_bundled(
             "fsnotifywait",

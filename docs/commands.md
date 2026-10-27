@@ -71,11 +71,11 @@ Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-sty
 
 | Category | Bundled commands |
 | --- | --- |
-| `files` — Files & search | `basename`, `cp`, `dir`, `dirname`, `find`, `fsnotifywait`, `fsnotifywatch`, `inotifywait`, `inotifywatch`, `install`, `link`, `ln`, `ls`, `mkdir`, `mkfifo`, `mknod`, `mktemp`, `mv`, `pathchk`, `pwd`, `readlink`, `realpath`, `rm`, `rmdir`, `stat`, `touch`, `tree`, `truncate`, `unlink`, `vdir` |
+| `files` — Files & search | `basename`, `cp`, `dir`, `dirname`, `find`, `fsnotifywait`, `fsnotifywatch`, `inotifywait`, `inotifywatch`, `install`, `link`, `ln`, `ls`, `mkdir`, `mkfifo`, `mknod`, `mktemp`, `mv`, `namei`, `pathchk`, `pwd`, `readlink`, `realpath`, `rm`, `rmdir`, `stat`, `touch`, `tree`, `truncate`, `unlink`, `vdir` |
 | `text` — Text & data | `awk`, `b2sum`, `base32`, `base64`, `basenc`, `cat`, `cksum`, `cmp`, `comm`, `csplit`, `cut`, `diff`, `expand`, `factor`, `fmt`, `fold`, `grep`, `egrep`, `fgrep`, `rgrep`, `head`, `hexdump`, `hd`, `join`, `jq`, `md5sum`, `nl`, `numfmt`, `od`, `paste`, `pr`, `ptx`, `sdiff`, `sed`, `seq`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, `shuf`, `sort`, `split`, `sum`, `tac`, `tail`, `tee`, `tr`, `tsort`, `unexpand`, `uniq`, `wc` |
 | `archives` — Archives & compression | `tar`, `gzip`, `gunzip`, `zcat`, `gzcat`, `bzip2`, `bunzip2`, `bzcat`, `xz`, `unxz`, `xzcat`, `zstd` |
-| `storage` — Storage & backup | `blkid`, `blockdev`, `dd`, `df`, `du`, `iostat`, `mount`, `mountpoint`, `sync`, `umount` |
-| `process` — Processes | `hugetop`, `kill`, `killall`, `lsof`, `nice`, `nohup`, `pgrep`, `pidof`, `pidwait`, `pkill`, `pmap`, `ps`, `pwdx`, `skill`, `snice`, `timeout`, `top`, `watch`, `xargs` |
+| `storage` — Storage & backup | `blkid`, `blockdev`, `dd`, `df`, `du`, `iostat`, `lsblk`, `lslocks`, `mount`, `mountpoint`, `sync`, `umount` |
+| `process` — Processes | `hugetop`, `fuser`, `kill`, `killall`, `lsof`, `nice`, `nohup`, `pgrep`, `pidof`, `pidwait`, `pkill`, `pmap`, `ps`, `pstree`, `pwdx`, `skill`, `snice`, `timeout`, `top`, `watch`, `xargs` |
 | `system` — Host & system | `arch`, `date`, `dmesg`, `free`, `hostid`, `hostname`, `dnsdomainname`, `ipcs`, `last`, `logname`, `lsmod`, `lspci`, `lsscsi`, `lsusb`, `modinfo`, `nproc`, `pinky`, `slabtop`, `sysctl`, `tload`, `uname`, `uptime`, `users`, `vmstat`, `vzik`, `w`, `who` |
 | `network` — Network & remote access | `http`, `arp`, `ifconfig`, `ip`, `ipaddr`, `iplink`, `ipneigh`, `iproute`, `iprule`, `ipcalc`, `host`, `nslookup`, `ping`, `ping6`, `traceroute`, `traceroute6` |
 | `containers` — Containers & orchestration | `chroot` |
@@ -88,6 +88,22 @@ Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-sty
 For the bundled HTTP applet, see [HTTP requests](http.md).
 
 For passive host context and targeted evidence, see [Vzik](vzik.md).
+
+## Linux diagnostics
+
+`namei`, `fuser`, `lslocks`, `pstree`, and `lsblk` are Linux-only bundled
+applets. Their procfs, sysfs, mount, and process visibility follows the
+current namespace and the caller's permissions; inaccessible processes and
+devices are not synthesized.
+
+The compatibility baseline is util-linux 2.41.2 for `namei`, `lslocks`, and
+`lsblk`, and psmisc 23.7 for `fuser` and `pstree`. `fuser` keeps process IDs on
+stdout and sends labels, verbose rows, and diagnostics to stderr. It supports
+the upstream signal and write-filter options; `-k` never signals AXE itself.
+`lslocks` emits `{"locks": [...]}` for JSON output. `lsblk` emits
+`{"blockdevices": [...]}` and returns 32 when all explicit device operands are
+missing, or 64 when only some are missing.
+
 
 ## Filters and paths
 
