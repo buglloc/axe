@@ -601,6 +601,7 @@ pub fn build(
         commands.insert_bundled("zstd", None, crate::applets::zstd as BundledFn);
     }
     commands.insert_bundled("http", None, crate::applets::http as BundledFn);
+    #[cfg(target_os = "linux")]
     commands.extend_bundled(crate::applets::linux_storage::commands());
     #[cfg(target_os = "linux")]
     commands.extend_bundled(crate::applets::linux_inspect::commands());
@@ -620,6 +621,7 @@ pub fn build(
         );
         commands.extend_bundled(crate::applets::linux_network::commands());
     }
+    #[cfg(target_os = "linux")]
     {
         commands.insert_bundled(
             "fsnotifywait",
