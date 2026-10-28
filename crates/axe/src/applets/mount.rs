@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use libc::c_ulong;
+use vzik::procfs::unescape_mount;
 
 use super::errno::strerror;
 use super::linux_storage::probe;
@@ -1721,9 +1722,9 @@ fn parse_mountinfo_line(line: &[u8]) -> Option<MountEntry> {
                 minor: minor.parse().ok()?,
             }
         },
-        source: OsString::from_vec(unescape(right[1])),
-        target: PathBuf::from(OsString::from_vec(unescape(left[4]))),
-        fs_type: String::from_utf8_lossy(&unescape(right[0])).into_owned(),
+        source: OsString::from_vec(unescape_mount(right[1])),
+        target: PathBuf::from(OsString::from_vec(unescape_mount(left[4]))),
+        fs_type: String::from_utf8_lossy(&unescape_mount(right[0])).into_owned(),
         mount_options: String::from_utf8_lossy(left[5]).into_owned(),
         super_options: String::from_utf8_lossy(right[2]).into_owned(),
         shared: left[6..].iter().any(|field| field.starts_with(b"shared:")),
@@ -1768,37 +1769,13 @@ fn parse_fstab_line(line: &[u8]) -> Result<Option<FstabEntry>, ()> {
     let (Some(target), Some(fs_type)) = (fields.next(), fields.next()) else {
         return Err(());
     };
-    let text = |field: &[u8]| String::from_utf8_lossy(&unescape(field)).into_owned();
+    let text = |field: &[u8]| String::from_utf8_lossy(&unescape_mount(field)).into_owned();
     Ok(Some(FstabEntry {
-        source: OsString::from_vec(unescape(source)),
-        target: PathBuf::from(OsString::from_vec(unescape(target))),
+        source: OsString::from_vec(unescape_mount(source)),
+        target: PathBuf::from(OsString::from_vec(unescape_mount(target))),
         fs_type: text(fs_type),
         options: fields.next().map_or_else(|| "defaults".to_owned(), text),
     }))
-}
-
-/// Decodes the `\ooo` octal escapes used by mountinfo and fstab.
-fn unescape(field: &[u8]) -> Vec<u8> {
-    let mut decoded = Vec::with_capacity(field.len());
-    let mut index = 0;
-    while index < field.len() {
-        if field[index] == b'\\'
-            && let Some(digits) = field.get(index + 1..index + 4)
-            && digits.iter().all(|digit| (b'0'..=b'7').contains(digit))
-        {
-            let value = digits
-                .iter()
-                .fold(0u16, |value, digit| value * 8 + u16::from(digit - b'0'));
-            if let Ok(byte) = u8::try_from(value) {
-                decoded.push(byte);
-                index += 4;
-                continue;
-            }
-        }
-        decoded.push(field[index]);
-        index += 1;
-    }
-    decoded
 }
 
 #[cfg(test)]

@@ -15,6 +15,9 @@ use lzma_rust2::XzReader;
 use object::{Object, ObjectSection};
 use vzik::procfs;
 
+use super::proc_text::ProcText;
+use super::utf8_args;
+
 pub type AppletFn = fn(Vec<OsString>) -> i32;
 
 pub fn commands() -> HashMap<String, AppletFn> {
@@ -1450,26 +1453,6 @@ impl NameDatabase {
     }
 }
 
-fn lsof_text_prefix(bytes: &[u8], limit: usize) -> (usize, usize) {
-    let mut width = 0;
-    let mut count = 0;
-    for &byte in bytes {
-        let next = if byte < 0x20 || byte == b'\\' {
-            2
-        } else if byte >= 0x7f {
-            4
-        } else {
-            1
-        };
-        if limit != 0 && width + next > limit {
-            break;
-        }
-        width += next;
-        count += 1;
-    }
-    (count, width)
-}
-
 struct LsofText<'a>(&'a [u8]);
 
 impl std::fmt::Display for LsofText<'_> {
@@ -1591,7 +1574,7 @@ impl OpenTable {
         uid: u32,
         names: &NameDatabase,
     ) -> usize {
-        let (count, width) = lsof_text_prefix(&command, limit);
+        let (count, width) = ProcText(&command).prefix(limit);
         command.truncate(count);
         self.widths[0] = self.widths[0].max(width);
         self.widths[1] =
@@ -1633,7 +1616,7 @@ impl OpenTable {
             let process = &self.processes[row.process];
             print!(
                 "{:<command$} {:>pid$} ",
-                LsofText(&process.command),
+                ProcText(&process.command),
                 process.pid
             );
             if let Some(name) = names.users.get(&process.uid) {
@@ -1842,7 +1825,7 @@ impl OpenEmitter<'_> {
         if let Some(fields) = self.fields {
             if first_process_row {
                 fields.emit('p', self.pid);
-                fields.emit('c', LsofText(&self.command));
+                fields.emit('c', ProcText(&self.command));
                 fields.emit('u', self.uid);
                 if let Some(user) = self.names.users.get(&self.uid) {
                     fields.emit('L', LsofText(user.as_bytes()));
@@ -2174,14 +2157,7 @@ fn format_endpoint(
 }
 
 fn process_uid(base: &Path) -> Option<u32> {
-    let status = fs::read_to_string(base.join("status")).ok()?;
-    status.lines().find_map(|line| {
-        line.strip_prefix("Uid:")?
-            .split_whitespace()
-            .next()?
-            .parse()
-            .ok()
-    })
+    procfs::status_uid(&fs::read(base.join("status")).ok()?)
 }
 
 fn truncate(value: &str, length: usize) -> &str {
@@ -2905,16 +2881,6 @@ fn sys_text(path: &Path) -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
-}
-
-fn utf8_args(args: Vec<OsString>) -> Result<Vec<String>, String> {
-    args.into_iter()
-        .map(|value| {
-            value.into_string().map_err(|value| {
-                format!("argument is not valid UTF-8: {}", value.to_string_lossy())
-            })
-        })
-        .collect()
 }
 
 fn read_dir_optional(path: &Path) -> Result<Vec<fs::DirEntry>, String> {

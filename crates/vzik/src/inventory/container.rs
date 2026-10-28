@@ -11,8 +11,7 @@ use super::porto::{self, Client, ContainerSnapshot, Error as PortoError, Respons
 use super::{finish, output_limit, path_value, read_bounded, sorted_entries, text};
 use crate::cli::{CapabilityId, Invocation, Request};
 use crate::protocol::{
-    CapabilityReport, Coverage, ExecutionContext, Outcome, ProtocolError, RecordSink,
-    check_deadline,
+    CapabilityReport, Coverage, ExecutionContext, ProtocolError, RecordSink, check_deadline,
 };
 
 const PORTO_CALL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -193,11 +192,7 @@ fn porto_list<W: Write>(
         Err(PortoCollectError::Control(error)) => return Err(error),
         Err(PortoCollectError::Api(error)) => {
             let _ = porto_failure(sink, capability, socket, &error, &mut coverage)?;
-            return Ok(CapabilityReport {
-                outcome: Outcome::Unavailable,
-                coverage,
-                limits_hit: Vec::new(),
-            });
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
 
@@ -262,11 +257,7 @@ fn porto_inspect<W: Write>(
         Err(PortoCollectError::Control(error)) => return Err(error),
         Err(PortoCollectError::Api(error)) => {
             let _ = porto_failure(sink, capability, socket, &error, &mut coverage)?;
-            return Ok(CapabilityReport {
-                outcome: Outcome::Unavailable,
-                coverage,
-                limits_hit: Vec::new(),
-            });
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
 
@@ -1170,11 +1161,7 @@ fn unavailable_container<W: Write>(
         1,
     )?;
 
-    Ok(CapabilityReport {
-        outcome: Outcome::Unavailable,
-        coverage,
-        limits_hit: Vec::new(),
-    })
+    Ok(CapabilityReport::unavailable(coverage))
 }
 
 fn is_sensitive(property: &str) -> bool {

@@ -1154,17 +1154,6 @@ fn parse_process_fdinfo(bytes: &[u8]) -> io::Result<Value> {
     Ok(Value::Object(data))
 }
 
-fn process_socket_state(protocol: &str, state: u8) -> &'static str {
-    if protocol == "udp" {
-        return match state {
-            0x07 => "unconnected",
-            0x01 => "established",
-            _ => "unknown",
-        };
-    }
-    procfs::tcp_state(state).unwrap_or("unknown")
-}
-
 fn process_socket_map<W: Write>(
     sink: &mut RecordSink<'_, W>,
     deadline: ExecutionContext<'_>,
@@ -1231,7 +1220,7 @@ fn process_socket_map<W: Write>(
                     "local_port":socket.local.port(),
                     "remote_address":socket.remote.ip().to_string(),
                     "remote_port":socket.remote.port(),
-                    "state":process_socket_state(protocol, socket.state),
+                    "state":procfs::socket_state(protocol, socket.state),
                     "uid":socket.uid,
                     "source":path_value(&path),
                 }),
@@ -1846,21 +1835,8 @@ fn parse_proc_stat(bytes: &[u8]) -> io::Result<(u32, &[u8], &[u8], u32)> {
 }
 
 fn proc_stat_parts(bytes: &[u8]) -> io::Result<(u32, &[u8], &[u8])> {
-    let open = bytes
-        .iter()
-        .position(|byte| *byte == b'(')
-        .ok_or_else(invalid_data)?;
-    let close = bytes
-        .windows(2)
-        .rposition(|window| window == b") ")
-        .ok_or_else(invalid_data)?;
-
-    if open == 0 || close <= open {
-        return Err(invalid_data());
-    }
-
-    let pid = parse_ascii_u32(bytes[..open].trim_ascii())?;
-    Ok((pid, &bytes[open + 1..close], &bytes[close + 2..]))
+    let head = procfs::parse_stat_head(bytes).ok_or_else(invalid_data)?;
+    Ok((head.pid, head.comm, head.fields))
 }
 
 struct ProcessStat<'a> {
@@ -2256,37 +2232,15 @@ fn parse_mountinfo(line: &[u8], namespace: Option<Value>) -> Result<Value, ()> {
         "mount_id":mount_id,
         "parent_id":parent_id,
         "device":text(fields[2]),
-        "root":text(&unescape_mount(fields[3])),
-        "target":text(&unescape_mount(fields[4])),
+        "root":text(&procfs::unescape_mount(fields[3])),
+        "target":text(&procfs::unescape_mount(fields[4])),
         "filesystem":text(fields[separator + 1]),
-        "source":text(&unescape_mount(fields[separator + 2])),
+        "source":text(&procfs::unescape_mount(fields[separator + 2])),
         "options":options,
         "optional_fields":fields[6..separator].iter().map(|field| text(field)).collect::<Vec<_>>(),
         "read_only":fields[5].split(|byte| *byte == b',').any(|value| value == b"ro"),
         "namespace":namespace,
     }))
-}
-
-fn unescape_mount(value: &[u8]) -> Vec<u8> {
-    let mut output = Vec::with_capacity(value.len());
-    let mut index = 0;
-    while index < value.len() {
-        if value[index] == b'\\'
-            && index + 3 < value.len()
-            && value[index + 1..index + 4].iter().all(u8::is_ascii_digit)
-        {
-            let octal = (value[index + 1] - b'0') * 64
-                + (value[index + 2] - b'0') * 8
-                + (value[index + 3] - b'0');
-            output.push(octal);
-            index += 4;
-        } else {
-            output.push(value[index]);
-            index += 1;
-        }
-    }
-
-    output
 }
 
 fn parse_ascii_u32(value: &[u8]) -> io::Result<u32> {

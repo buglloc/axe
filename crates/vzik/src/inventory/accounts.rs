@@ -13,7 +13,7 @@ use super::{
     sorted_entries, source_failure, text, unavailable,
 };
 use crate::cli::{CapabilityId, Invocation};
-use crate::procfs::parse_u64;
+use crate::procfs::{parse_u64, unescape_mount};
 use crate::protocol::{
     CapabilityReport, Coverage, ExecutionContext, ProtocolError, RecordSink, check_deadline,
 };
@@ -774,31 +774,6 @@ fn is_remote_or_automount(path: &Path) -> bool {
     }
 
     remote
-}
-
-fn unescape_mount(value: &[u8]) -> Vec<u8> {
-    let mut output = Vec::with_capacity(value.len());
-    let mut index = 0;
-    while index < value.len() {
-        if value[index] == b'\\'
-            && index + 3 < value.len()
-            && value[index + 1..index + 4]
-                .iter()
-                .all(|byte| matches!(byte, b'0'..=b'7'))
-        {
-            output.push(
-                (value[index + 1] - b'0') * 64
-                    + (value[index + 2] - b'0') * 8
-                    + (value[index + 3] - b'0'),
-            );
-            index += 4;
-        } else {
-            output.push(value[index]);
-            index += 1;
-        }
-    }
-
-    output
 }
 
 #[cfg(test)]

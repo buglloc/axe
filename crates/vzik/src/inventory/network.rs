@@ -226,11 +226,7 @@ fn routes<W: Write>(
     }
 
     if !any_source {
-        return Ok(CapabilityReport {
-            outcome: crate::protocol::Outcome::Unavailable,
-            coverage,
-            limits_hit: Vec::new(),
-        });
+        return Ok(CapabilityReport::unavailable(coverage));
     }
 
     Ok(finish(coverage, partial, None))
@@ -423,7 +419,7 @@ fn parse_inet_socket(
             "local_port":socket.local.port(),
             "remote_address":socket.remote.ip().to_string(),
             "remote_port":socket.remote.port(),
-            "state":socket_state(protocol, socket.state),
+            "state":procfs::socket_state(protocol, socket.state),
             "inode":socket.inode,
             "uid":socket.uid,
             "listening":listening,
@@ -646,17 +642,6 @@ fn socket_owners(
 
 fn ipv6_route_hex(value: &[u8]) -> io::Result<Ipv6Addr> {
     Ok(Ipv6Addr::from(ipv6_bytes(value)?))
-}
-
-fn socket_state(protocol: &str, state: u8) -> &'static str {
-    if protocol == "udp" {
-        return match state {
-            0x07 => "unconnected",
-            0x01 => "established",
-            _ => "unknown",
-        };
-    }
-    procfs::tcp_state(state).unwrap_or("unknown")
 }
 
 fn addresses<W: Write>(

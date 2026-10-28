@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use linux_raw_sys::ioctl::*;
 
+use super::utf8_args;
+
 pub type AppletFn = fn(Vec<OsString>) -> i32;
 
 pub fn commands() -> HashMap<String, AppletFn> {
@@ -1836,16 +1838,6 @@ fn blkid_text(value: Option<OsString>, missing: &str) -> Result<String, String> 
         .ok_or_else(|| missing.to_owned())?
         .into_string()
         .map_err(|_| "option value is not valid UTF-8".to_owned())
-}
-
-fn utf8_args(args: Vec<OsString>) -> Result<Vec<String>, String> {
-    args.into_iter()
-        .map(|value| {
-            value.into_string().map_err(|value| {
-                format!("argument is not valid UTF-8: {}", value.to_string_lossy())
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]

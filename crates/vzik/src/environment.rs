@@ -3,8 +3,6 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 #[cfg(target_os = "linux")]
-use std::io::Read;
-#[cfg(target_os = "linux")]
 use std::path::Path;
 #[cfg(any(target_os = "linux", test))]
 use std::path::PathBuf;
@@ -1598,17 +1596,13 @@ fn read_text_with_limit(path: &Path, limit: u64) -> io::Result<String> {
 
 #[cfg(target_os = "linux")]
 fn read_bytes_with_limit(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
-    let file = fs::File::open(path)?;
-    let mut bytes = Vec::with_capacity(limit.min(64 << 10) as usize);
-    file.take(limit + 1).read_to_end(&mut bytes)?;
-
-    if bytes.len() as u64 > limit {
+    let (bytes, truncated) = crate::inventory::read_bounded(path, limit)?;
+    if truncated {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("observation source exceeds {limit} byte limit"),
         ));
     }
-
     Ok(bytes)
 }
 

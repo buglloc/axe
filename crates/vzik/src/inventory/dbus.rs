@@ -10,8 +10,7 @@ use super::systemd::{ManagerTarget, connect, manager_targets};
 use super::{emit_provider, finish, output_limit, path_value, text};
 use crate::cli::{CapabilityId, Invocation, Request};
 use crate::protocol::{
-    CapabilityReport, Coverage, ExecutionContext, Outcome, ProtocolError, RecordSink,
-    check_deadline,
+    CapabilityReport, Coverage, ExecutionContext, ProtocolError, RecordSink, check_deadline,
 };
 
 pub fn run<W: Write>(
@@ -65,7 +64,7 @@ fn list<W: Write>(
                 &error.to_string(),
                 &mut coverage,
             )?;
-            return Ok(unavailable_report(coverage));
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
 
@@ -244,7 +243,7 @@ fn list<W: Write>(
     }
 
     if successful_buses == 0 {
-        return Ok(unavailable_report(coverage));
+        return Ok(CapabilityReport::unavailable(coverage));
     }
 
     Ok(finish(coverage, partial, None))
@@ -269,7 +268,7 @@ fn inspect<W: Write>(
                 &error.to_string(),
                 &mut coverage,
             )?;
-            return Ok(unavailable_report(coverage));
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
 
@@ -279,7 +278,7 @@ fn inspect<W: Write>(
         Ok(connection) => connection,
         Err(error) => {
             provider_failure(sink, capability, &target.socket, &error, &mut coverage)?;
-            return Ok(unavailable_report(coverage));
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
     let proxy = match DBusProxy::new(&connection) {
@@ -292,7 +291,7 @@ fn inspect<W: Write>(
                 &error.to_string(),
                 &mut coverage,
             )?;
-            return Ok(unavailable_report(coverage));
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
     let bus_name = match BusName::try_from(name) {
@@ -306,7 +305,7 @@ fn inspect<W: Write>(
                 &error.to_string(),
                 &mut coverage,
             )?;
-            return Ok(unavailable_report(coverage));
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
 
@@ -320,7 +319,7 @@ fn inspect<W: Write>(
                 &error.to_string(),
                 &mut coverage,
             )?;
-            return Ok(unavailable_report(coverage));
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
 
@@ -526,12 +525,4 @@ fn name_failure<W: Write>(
         error,
         1,
     )
-}
-
-fn unavailable_report(coverage: Coverage) -> CapabilityReport {
-    CapabilityReport {
-        outcome: Outcome::Unavailable,
-        coverage,
-        limits_hit: Vec::new(),
-    }
 }

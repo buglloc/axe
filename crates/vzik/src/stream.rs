@@ -38,14 +38,7 @@ impl Error {
     }
 
     pub fn retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::Read(error) | Self::Write(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::Interrupted | io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                )
-        )
+        matches!(self, Self::Read(error) | Self::Write(error) if crate::retryable_io(error))
     }
 
     pub fn details(&self) -> Value {

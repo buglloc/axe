@@ -25,6 +25,9 @@ use tokio::task::JoinSet;
 mod supervisor;
 
 const NO_SHELL_EXECUTABLE: &str = "sshd: cannot locate AXE executable for shell sessions";
+const DEFAULT_SSH_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const SSH_HOME_DIRECTORY: &str = ".axe-home";
+
 const SHELL_WELCOME: &[u8] = b"AXE shell | agent context: skill://axe | runtime: doctor --json | host evidence: vzik capabilities\r\n---\r\n\r\n";
 
 #[derive(Parser)]
@@ -38,6 +41,9 @@ struct Options {
     listen: String,
     #[arg(long, env = "AXE_WORK_DIR")]
     workdir: Option<PathBuf>,
+    #[arg(skip)]
+    home_dir: Option<PathBuf>,
+
     #[arg(long, env = "AXE_STORE_DIR")]
     store_dir: Option<PathBuf>,
     /// AXE Store policy inherited by SSH shell and exec sessions.
@@ -138,6 +144,8 @@ fn start_server(
     executable: Arc<crate::executable::Executable>,
     ready: Option<supervisor::ReadyNotifier>,
 ) -> i32 {
+    normalize_session_path();
+
     if let Err(error) = require_shell_executable(&executable) {
         eprintln!("{error}");
         return 1;
@@ -291,8 +299,12 @@ fn prepare(options: &mut Options) -> io::Result<()> {
             None => prepare_derived_store(&workdir),
         }
     };
+    let home_dir = prepare_session_home(&workdir)?;
+
     options.workdir = Some(workdir);
+    options.home_dir = Some(home_dir);
     options.store_dir = store_dir;
+
 
     // SAFETY: preparation finishes before daemonization, the Tokio runtime, or
     // any other SSH worker threads start. The daemon-owned Store client and
@@ -344,6 +356,26 @@ fn prepare(options: &mut Options) -> io::Result<()> {
     }
     Ok(())
 }
+fn prepare_session_home(workdir: &Path) -> io::Result<PathBuf> {
+    let home = workdir.join(SSH_HOME_DIRECTORY);
+    #[cfg(unix)]
+    crate::path_bridge::ensure_private_directory(&home)?;
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(&home)?;
+    home.canonicalize()
+}
+
+fn normalize_session_path() {
+    let empty = std::env::var_os("PATH").is_none_or(|path| path.is_empty());
+    if empty {
+        // SAFETY: the SSH runtime and worker tasks are created after this
+        // process-wide environment normalization.
+        unsafe {
+            std::env::set_var("PATH", DEFAULT_SSH_PATH);
+        }
+    }
+}
+
 
 fn default_relay_id() -> String {
     let username = whoami::username().ok();
@@ -476,13 +508,21 @@ async fn run(
             .workdir
             .expect("sshd options were prepared before starting the server"),
     );
+    let home_dir = Arc::new(
+        options
+            .home_dir
+            .expect("sshd home directory was prepared before starting the server"),
+    );
+
     let index_refresher =
         (options.store_mode == crate::registry::StoreMode::Auto).then(IdleIndexRefresher::start);
     let mut factory = SshServer {
         principals,
         ca_fingerprints: Arc::new(ca_fingerprints),
         workdir,
+        home_dir,
         store_dir: Arc::new(options.store_dir),
+
         store_mode: options.store_mode,
         index_activity: index_refresher.as_ref().map(IdleIndexRefresher::activity),
         channels: Arc::default(),
@@ -868,6 +908,8 @@ struct SshServer {
     principals: Arc<[String]>,
     ca_fingerprints: Arc<Vec<ssh_key::Fingerprint>>,
     workdir: Arc<PathBuf>,
+    home_dir: Arc<PathBuf>,
+
     store_dir: Arc<Option<PathBuf>>,
     store_mode: crate::registry::StoreMode,
     index_activity: Option<Arc<SessionActivity>>,
@@ -896,6 +938,8 @@ impl server::Server for SshServer {
             principals: self.principals.clone(),
             ca_fingerprints: self.ca_fingerprints.clone(),
             workdir: self.workdir.clone(),
+            home_dir: self.home_dir.clone(),
+
             store_dir: self.store_dir.clone(),
             store_mode: self.store_mode,
             index_activity: self.index_activity.clone(),
@@ -1111,7 +1155,9 @@ impl server::Handler for SshServer {
         if name == "sftp"
             && let Some(ssh_channel) = ssh_channel
         {
-            let filesystem = super::sftp::Filesystem::new((*self.workdir).clone());
+            let filesystem =
+                super::sftp::Filesystem::with_home((*self.workdir).clone(), (*self.home_dir).clone());
+
             let task = tokio::spawn(async move {
                 super::sftp::run(ssh_channel.into_stream(), filesystem).await
             });
@@ -1383,6 +1429,7 @@ impl SshServer {
             .arg("--noprofile")
             .arg("--no-config")
             .current_dir(&*self.workdir)
+            .env("HOME", &*self.home_dir)
             .env("AXE", "true")
             .env("AXE_WORK_DIR", &*self.workdir)
             .env("AXE_STORE_MODE", self.store_mode.as_str())

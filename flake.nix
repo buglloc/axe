@@ -106,6 +106,7 @@
           ]
           ++ lib.optionals stdenv.hostPlatform.isLinux [
             iproute2
+            psmisc
             util-linux
           ];
       in {

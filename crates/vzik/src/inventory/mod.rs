@@ -188,7 +188,7 @@ pub(super) fn coverage_diagnostic<W: Write>(
     )
 }
 
-pub(super) fn read_bounded(path: &Path, maximum: u64) -> io::Result<(Vec<u8>, bool)> {
+pub(crate) fn read_bounded(path: &Path, maximum: u64) -> io::Result<(Vec<u8>, bool)> {
     let file = File::open(path)?;
     let mut bytes = Vec::with_capacity(usize::try_from(maximum.min(64 << 10)).unwrap_or(0));
 
@@ -257,11 +257,7 @@ pub(super) fn unavailable<W: Write>(
 ) -> Result<CapabilityReport, ProtocolError> {
     source_failure(sink, capability, source, &error, &mut coverage)?;
 
-    Ok(CapabilityReport {
-        outcome: Outcome::Unavailable,
-        coverage,
-        limits_hit: Vec::new(),
-    })
+    Ok(CapabilityReport::unavailable(coverage))
 }
 
 pub(super) fn text(bytes: &[u8]) -> Value {

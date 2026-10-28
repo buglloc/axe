@@ -29,6 +29,8 @@ mod mount;
 #[cfg(target_os = "linux")]
 mod ping;
 #[cfg(target_os = "linux")]
+mod proc_text;
+#[cfg(target_os = "linux")]
 mod procutils;
 pub(crate) mod sftp;
 mod sshd;
@@ -80,6 +82,18 @@ pub(crate) fn in_process_io_status(result: std::io::Result<()>, error_status: i3
         Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => 141,
         Err(_) => error_status,
     }
+}
+
+/// Converts applet arguments for parsers that accept only UTF-8 command lines.
+#[cfg(target_os = "linux")]
+pub(crate) fn utf8_args(args: Vec<OsString>) -> Result<Vec<String>, String> {
+    args.into_iter()
+        .map(|value| {
+            value.into_string().map_err(|value| {
+                format!("argument is not valid UTF-8: {}", value.to_string_lossy())
+            })
+        })
+        .collect()
 }
 
 pub fn grep(mut args: Vec<OsString>) -> i32 {

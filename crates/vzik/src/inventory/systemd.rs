@@ -13,8 +13,7 @@ use super::{
 };
 use crate::cli::{CapabilityId, Invocation, Request, SystemdUnitSelection};
 use crate::protocol::{
-    CapabilityReport, Coverage, ExecutionContext, Outcome, ProtocolError, RecordSink,
-    check_deadline,
+    CapabilityReport, Coverage, ExecutionContext, ProtocolError, RecordSink, check_deadline,
 };
 
 const SYSTEM_BUS_SOCKET: &str = "/run/dbus/system_bus_socket";
@@ -101,7 +100,7 @@ fn list<W: Write>(
                 &error.to_string(),
                 &mut coverage,
             )?;
-            return Ok(unavailable_report(coverage));
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
 
@@ -177,7 +176,7 @@ fn list<W: Write>(
     }
 
     if successful_managers == 0 {
-        return Ok(unavailable_report(coverage));
+        return Ok(CapabilityReport::unavailable(coverage));
     }
 
     Ok(finish(coverage, partial, None))
@@ -202,7 +201,7 @@ fn inspect<W: Write>(
                 &error.to_string(),
                 &mut coverage,
             )?;
-            return Ok(unavailable_report(coverage));
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
 
@@ -212,7 +211,7 @@ fn inspect<W: Write>(
         Ok(connection) => connection,
         Err(error) => {
             provider_failure(sink, capability, &target.socket, &error, &mut coverage)?;
-            return Ok(unavailable_report(coverage));
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
     let object_path = match get_unit(&connection, unit) {
@@ -226,7 +225,7 @@ fn inspect<W: Write>(
                 &error,
                 &mut coverage,
             )?;
-            return Ok(unavailable_report(coverage));
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
 
@@ -234,7 +233,7 @@ fn inspect<W: Write>(
         Ok(properties) => properties,
         Err(error) => {
             provider_failure(sink, capability, &target.socket, &error, &mut coverage)?;
-            return Ok(unavailable_report(coverage));
+            return Ok(CapabilityReport::unavailable(coverage));
         }
     };
     coverage.scanned += 1;
@@ -725,14 +724,6 @@ fn property_diagnostic<W: Write>(
         &format!("{errors} unit property queries failed"),
         errors,
     )
-}
-
-fn unavailable_report(coverage: Coverage) -> CapabilityReport {
-    CapabilityReport {
-        outcome: Outcome::Unavailable,
-        coverage,
-        limits_hit: Vec::new(),
-    }
 }
 
 #[cfg(test)]

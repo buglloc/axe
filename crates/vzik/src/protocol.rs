@@ -98,6 +98,15 @@ impl CapabilityReport {
         }
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn unavailable(coverage: Coverage) -> Self {
+        Self {
+            outcome: Outcome::Unavailable,
+            coverage,
+            limits_hit: Vec::new(),
+        }
+    }
+
     #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub fn unsupported() -> Self {
         Self {

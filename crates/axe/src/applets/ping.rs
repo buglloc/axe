@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use tokio::io::unix::AsyncFd;
 use tokio::io::{Interest, Ready};
 
+use super::utf8_args;
+
 pub fn ping(args: Vec<OsString>) -> i32 {
     run_ping(args, false)
 }
@@ -1273,16 +1275,6 @@ fn parse_value<T: std::str::FromStr>(value: Option<String>, name: &str) -> Resul
     value
         .parse()
         .map_err(|_| format!("invalid {name}: '{value}'"))
-}
-
-fn utf8_args(args: Vec<OsString>) -> Result<Vec<String>, String> {
-    args.into_iter()
-        .map(|value| {
-            value.into_string().map_err(|value| {
-                format!("argument is not valid UTF-8: {}", value.to_string_lossy())
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]

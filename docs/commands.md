@@ -104,6 +104,14 @@ the upstream signal and write-filter options; `-k` never signals AXE itself.
 `{"blockdevices": [...]}` and returns 32 when all explicit device operands are
 missing, or 64 when only some are missing.
 
+A process chooses its own name and arguments, so `pstree`, `fuser`, `lslocks`,
+and the `lsof` command field print `comm`, thread names, and `pstree -a`
+arguments in one locale-independent form: printable ASCII as is, `\` doubled,
+and every other byte, including UTF-8, as `\ooo`. This matches psmisc
+`pstree`. It intentionally differs from psmisc `fuser`, which prints bytes
+above 0x7f as sign-extended `\37777777777`, and from util-linux `lslocks` and
+`lsof`, which print `\xNN`; `lsof` file names keep the `lsof` escaping.
+
 
 ## Filters and paths
 

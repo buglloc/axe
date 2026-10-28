@@ -186,11 +186,16 @@ fn finish_output(result: io::Result<()>, operation: &str, stderr: &mut impl Writ
     }
 }
 
-fn write_io_error(writer: &mut impl Write, operation: &str, error: &io::Error) {
-    let retryable = matches!(
+/// I/O errors that may succeed when the same operation is repeated.
+pub(crate) fn retryable_io(error: &io::Error) -> bool {
+    matches!(
         error.kind(),
         io::ErrorKind::Interrupted | io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-    );
+    )
+}
+
+fn write_io_error(writer: &mut impl Write, operation: &str, error: &io::Error) {
+    let retryable = retryable_io(error);
     write_telemetry(
         writer,
         "output_write_failed",

@@ -874,3 +874,58 @@ fn blkid_matches_util_linux_for_filtered_filesystem_type() {
         scratch.path(),
     );
 }
+
+/// Runs AXE `sleep` under a process name of arbitrary bytes: the kernel takes
+/// `comm` from the executed path, so a symlink is enough.
+#[cfg(target_os = "linux")]
+struct NamedSleeper(std::process::Child);
+
+#[cfg(target_os = "linux")]
+impl NamedSleeper {
+    fn spawn(directory: &Path, name: &[u8]) -> Self {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::process::CommandExt;
+
+        let link = directory.join(OsStr::from_bytes(name));
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_axe"), &link).expect("link AXE");
+        let child = Command::new(&link)
+            .arg0("sleep")
+            .arg("60")
+            .spawn()
+            .expect("spawn named sleeper");
+        Self(child)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for NamedSleeper {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pstree_escapes_process_names_like_psmisc() {
+    let scratch = Scratch::new("pstree-names");
+    for name in [
+        b"bad\xff\xfe".as_slice(),
+        "тест".as_bytes(),
+        b"ab\x7fc",
+        b"a\\b\t",
+        b"\x1b[2Jx",
+    ] {
+        let sleeper = NamedSleeper::spawn(scratch.path(), name);
+        let pid = sleeper.0.id().to_string();
+        assert_parity(
+            "pstree",
+            Case {
+                label: "process name escaping",
+                args: &["-p", &pid],
+                input: b"",
+            },
+            scratch.path(),
+        );
+    }
+}

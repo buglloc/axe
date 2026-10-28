@@ -13,8 +13,7 @@ use super::{
 use crate::cli::{CapabilityId, Invocation};
 use crate::procfs::parse_u64;
 use crate::protocol::{
-    CapabilityReport, Coverage, ExecutionContext, Outcome, ProtocolError, RecordSink,
-    check_deadline,
+    CapabilityReport, Coverage, ExecutionContext, ProtocolError, RecordSink, check_deadline,
 };
 
 const SMALL_SOURCE: u64 = 1 << 20;
@@ -220,11 +219,7 @@ fn packages<W: Write>(
     }
 
     if !any_source {
-        return Ok(CapabilityReport {
-            outcome: Outcome::Unavailable,
-            coverage,
-            limits_hit: Vec::new(),
-        });
+        return Ok(CapabilityReport::unavailable(coverage));
     }
 
     Ok(finish(coverage, partial, None))

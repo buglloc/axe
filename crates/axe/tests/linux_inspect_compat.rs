@@ -311,7 +311,7 @@ fn lsof_text_fields_escape_control_bytes_without_forging_records() {
     let scratch = Scratch::new();
     let held = scratch.file("held\np999999\n\\\t\r\u{c}\u{8}\u{1}\u{1b}\u{7f}", b"held");
     let file = File::open(&held).unwrap();
-    let command = r"cmd\np999999\n\\\t^A";
+    let command = r"cmd\012p999999\012\\\011\001";
     let filename = r"held\np999999\n\\\t\r\f\b^A^[\x7f";
     let output = axe("lsof", &["-a", "-p", &pid, "-Fpcfnt"], &[&held]);
     let lines = success(&output).lines().collect::<Vec<_>>();
@@ -899,4 +899,25 @@ fn private_proc_sysfs_and_ipc_formats() {
         .split_whitespace()
         .collect::<Vec<_>>();
     assert_eq!(&row[1..], &["root", &std::process::id().to_string(), "0"]);
+}
+
+#[test]
+fn lsof_escapes_process_names_and_keeps_their_uid() {
+    use std::os::unix::process::CommandExt;
+
+    let scratch = Scratch::new();
+    let link = scratch.0.join(std::ffi::OsStr::from_bytes(b"bad\xff\xfe"));
+    symlink(env!("CARGO_BIN_EXE_axe"), &link).unwrap();
+    let mut sleeper = Command::new(&link).arg0("sleep").arg("60").spawn().unwrap();
+    let pid = sleeper.id();
+    let uid = fs::metadata(format!("/proc/{pid}")).unwrap().uid();
+
+    let output = axe("lsof", &["-a", "-p", &pid.to_string(), "-Fpcu"], &[]);
+    let _ = sleeper.kill();
+    let _ = sleeper.wait();
+
+    assert!(
+        success(&output).starts_with(&format!("p{pid}\nc{}\nu{uid}\n", r"bad\377\376")),
+        "{output:?}"
+    );
 }

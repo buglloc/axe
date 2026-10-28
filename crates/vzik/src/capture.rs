@@ -53,10 +53,7 @@ impl Error {
         match self {
             Self::Collector(error) => error.retryable(),
             Self::Stream(error) => error.retryable(),
-            Self::Io { source, .. } => matches!(
-                source.kind(),
-                io::ErrorKind::Interrupted | io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-            ),
+            Self::Io { source, .. } => crate::retryable_io(source),
             Self::Invalid(_) => false,
         }
     }

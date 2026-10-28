@@ -20,6 +20,8 @@ use netlink_packet_route::route::{
 use netlink_packet_route::rule::{RuleAttribute, RuleMessage};
 use rtnetlink::IpVersion;
 
+use super::utf8_args;
+
 pub type AppletFn = fn(Vec<OsString>) -> i32;
 
 pub fn commands() -> HashMap<String, AppletFn> {
@@ -3281,16 +3283,6 @@ fn ipcalc_address_space(network: IpAddr, prefix: u8) -> &'static str {
             }
         }
     }
-}
-
-fn utf8_args(args: Vec<OsString>) -> Result<Vec<String>, String> {
-    args.into_iter()
-        .map(|value| {
-            value.into_string().map_err(|value| {
-                format!("argument is not valid UTF-8: {}", value.to_string_lossy())
-            })
-        })
-        .collect()
 }
 
 fn family_matches(actual: AddressFamily, expected: Option<AddressFamily>) -> bool {

@@ -125,3 +125,38 @@ fn lsblk_lists_supported_columns_without_store_or_path() {
             .any(|line| line.trim_start().starts_with("NAME "))
     );
 }
+
+#[test]
+fn fuser_verbose_escapes_process_names() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::process::CommandExt;
+
+    let scratch = Scratch::new("fuser-names");
+    let link = scratch
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"bad\xff\xfe"));
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_axe"), &link).expect("link AXE");
+    let mut sleeper = Command::new(&link)
+        .arg0("sleep")
+        .arg("60")
+        .current_dir(scratch.path())
+        .spawn()
+        .expect("spawn named sleeper");
+    let pid = sleeper.id().to_string();
+
+    let output = run(
+        &scratch,
+        "fuser",
+        &["-v", scratch.path().to_str().expect("UTF-8 path")],
+    );
+    let _ = sleeper.kill();
+    let _ = sleeper.wait();
+
+    assert!(output.status.success());
+    let rows = String::from_utf8(output.stderr).expect("escaped fuser rows are ASCII");
+    assert!(
+        rows.lines()
+            .any(|row| row.contains(&pid) && row.ends_with(r"bad\377\376")),
+        "{rows}"
+    );
+}

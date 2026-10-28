@@ -9,6 +9,10 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map as JsonMap, Value as JsonValue};
+use vzik::procfs;
+
+use super::proc_text::ProcText;
+use super::utf8_args;
 
 pub type AppletFn = fn(Vec<OsString>) -> i32;
 
@@ -22,16 +26,6 @@ pub fn commands() -> HashMap<String, AppletFn> {
     commands
 }
 
-fn utf8_args(args: Vec<OsString>) -> Result<Vec<String>, String> {
-    args.into_iter()
-        .map(|value| {
-            value.into_string().map_err(|value| {
-                format!("argument is not valid UTF-8: {}", value.to_string_lossy())
-            })
-        })
-        .collect()
-}
-
 fn text(value: &OsStr) -> String {
     String::from_utf8_lossy(value.as_bytes()).into_owned()
 }
@@ -42,6 +36,15 @@ fn read_trim(path: &Path) -> Option<String> {
             .trim_matches(|character: char| character == '\0' || character.is_whitespace())
             .to_owned()
     })
+}
+
+/// Reads a `/proc/.../comm` name without its trailing newline.
+fn read_comm(path: &Path) -> Option<Vec<u8>> {
+    let mut name = fs::read(path).ok()?;
+    if name.last() == Some(&b'\n') {
+        name.pop();
+    }
+    Some(name)
 }
 
 fn user_name(uid: u32) -> String {
@@ -449,7 +452,7 @@ struct FuserOptions {
 struct ProcessInfo {
     pid: u32,
     uid: u32,
-    command: String,
+    command: Vec<u8>,
 }
 
 struct FdRef {
@@ -744,7 +747,8 @@ fn apply_kill(matches: Vec<FuserMatch>, options: &FuserOptions) -> (Vec<FuserMat
         if options.interactive {
             eprint!(
                 "Kill process {} ({})? ",
-                matched.process.pid, matched.process.command
+                matched.process.pid,
+                ProcText(&matched.process.command)
             );
             let mut answer = String::new();
             if io::stdin().read_line(&mut answer).is_err()
@@ -780,7 +784,8 @@ fn list_processes() -> io::Result<Vec<ProcessInfo>> {
         let uid = fs::metadata(entry.path())
             .map(|metadata| metadata.uid())
             .unwrap_or(0);
-        let command = read_trim(&entry.path().join("comm")).unwrap_or_else(|| pid.to_string());
+        let command =
+            read_comm(&entry.path().join("comm")).unwrap_or_else(|| pid.to_string().into());
         processes.push(ProcessInfo { pid, uid, command });
     }
     processes.sort_unstable_by_key(|process| process.pid);
@@ -795,7 +800,7 @@ fn process_fds(pid: u32) -> Vec<FdRef> {
             result.push(FdRef {
                 name: OsString::from(name),
                 metadata: fs::metadata(&path).ok(),
-                socket_inode: socket_inode(target.as_os_str()),
+                socket_inode: procfs::socket_inode(target.as_os_str().as_bytes()),
                 writable: false,
                 target,
             });
@@ -813,7 +818,7 @@ fn process_fds(pid: u32) -> Vec<FdRef> {
             writable: fd_is_writable(pid, &name),
             name,
             metadata: fs::metadata(entry.path()).ok(),
-            socket_inode: socket_inode(target.as_os_str()),
+            socket_inode: procfs::socket_inode(target.as_os_str().as_bytes()),
             target,
         });
     }
@@ -836,14 +841,6 @@ fn fd_is_writable(pid: u32, fd: &OsStr) -> bool {
                 .map(|flags| flags & 3 != 0)
         })
         .unwrap_or(false)
-}
-
-fn socket_inode(target: &OsStr) -> Option<u64> {
-    let value = text(target);
-    value
-        .strip_prefix("socket:[")
-        .and_then(|value| value.strip_suffix(']'))
-        .and_then(|value| value.parse().ok())
 }
 
 fn file_matches(
@@ -1048,33 +1045,11 @@ fn network_matches(
 }
 
 fn mount_points() -> io::Result<HashSet<PathBuf>> {
-    let mut result = HashSet::new();
-    for line in fs::read_to_string("/proc/self/mountinfo")?.lines() {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        if fields.len() > 4 {
-            result.insert(PathBuf::from(unescape_mount_field(fields[4])));
-        }
-    }
-    Ok(result)
-}
-
-fn unescape_mount_field(value: &str) -> String {
-    let mut result = String::new();
-    let bytes = value.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'\\'
-            && index + 3 < bytes.len()
-            && let Ok(number) = u8::from_str_radix(&value[index + 1..index + 4], 8)
-        {
-            result.push(number as char);
-            index += 4;
-            continue;
-        }
-        result.push(bytes[index] as char);
-        index += 1;
-    }
-    result
+    Ok(fs::read("/proc/self/mountinfo")?
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| procfs::ascii_fields(line).get(4).copied())
+        .map(|field| PathBuf::from(OsString::from_vec(procfs::unescape_mount(field))))
+        .collect())
 }
 
 fn print_fuser_matches(label: &str, matches: &[FuserMatch], options: &FuserOptions, network: bool) {
@@ -1092,7 +1067,7 @@ fn print_fuser_matches(label: &str, matches: &[FuserMatch], options: &FuserOptio
                 user_name(matched.process.uid),
                 matched.process.pid,
                 matched.access,
-                matched.process.command
+                ProcText(&matched.process.command)
             );
         }
         return;
@@ -1145,7 +1120,7 @@ struct LockRecord {
     end: Option<u64>,
     path: Option<String>,
     file_size: Option<u64>,
-    command: String,
+    command: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -1244,10 +1219,10 @@ fn run_lslocks(args: Vec<OsString>) -> Result<(), String> {
         }
         if record.command.is_empty() {
             record.command = if record.pid >= 0 {
-                read_trim(Path::new(&format!("/proc/{}/comm", record.pid)))
-                    .unwrap_or_else(|| "?".into())
+                read_comm(Path::new(&format!("/proc/{}/comm", record.pid)))
+                    .unwrap_or_else(|| b"?".to_vec())
             } else {
-                "-".into()
+                b"-".to_vec()
             };
         }
     }
@@ -1392,7 +1367,7 @@ fn parse_lock_line(line: &str) -> Option<LockRecord> {
         end,
         path: None,
         file_size: None,
-        command: String::new(),
+        command: Vec::new(),
     })
 }
 
@@ -1439,27 +1414,18 @@ fn resolve_lock_path(record: &LockRecord) -> Option<(String, Option<u64>)> {
 }
 
 fn fallback_lock_path(record: &LockRecord) -> Option<String> {
-    let content = fs::read_to_string("/proc/self/mountinfo").ok()?;
-    for line in content.lines() {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        let Some(device) = fields.get(2) else {
-            continue;
-        };
-        let Some((major, minor)) = device.split_once(':') else {
-            continue;
-        };
+    let content = fs::read("/proc/self/mountinfo").ok()?;
+    content.split(|byte| *byte == b'\n').find_map(|line| {
+        let fields = procfs::ascii_fields(line);
+        let (major, minor) = std::str::from_utf8(fields.get(2)?).ok()?.split_once(':')?;
         if major.parse::<u64>().ok() != Some(record.major)
             || minor.parse::<u64>().ok() != Some(record.minor)
         {
-            continue;
+            return None;
         }
-        let Some(field) = fields.get(4) else {
-            continue;
-        };
-        let mountpoint = unescape_mount_field(field);
-        return Some(format!("{mountpoint}..."));
-    }
-    None
+        let mountpoint = procfs::unescape_mount(fields.get(4)?);
+        Some(format!("{}...", String::from_utf8_lossy(&mountpoint)))
+    })
 }
 
 fn lock_size(record: &LockRecord, bytes: bool) -> String {
@@ -1493,7 +1459,7 @@ fn human_size(size: u64) -> String {
 
 fn lock_value(record: &LockRecord, column: &str, options: &LocksOptions) -> String {
     match column {
-        "COMMAND" => record.command.clone(),
+        "COMMAND" => ProcText(&record.command).to_string(),
         "PID" => record.pid.to_string(),
         "TYPE" => record.lock_type.clone(),
         "SIZE" => lock_size(record, options.bytes),
@@ -1599,7 +1565,7 @@ fn print_locks_json(locks: &[LockRecord], columns: &[String], options: &LocksOpt
 
 fn lock_json_value(record: &LockRecord, column: &str, options: &LocksOptions) -> JsonValue {
     match column {
-        "COMMAND" => record.command.clone().into(),
+        "COMMAND" => ProcText(&record.command).to_string().into(),
         "PID" => record.pid.into(),
         "TYPE" => record.lock_type.clone().into(),
         "SIZE" if options.bytes => record.file_size.map_or(JsonValue::Null, JsonValue::from),
@@ -1642,8 +1608,9 @@ struct TreeProcess {
     ppid: u32,
     pgrp: u32,
     uid: u32,
-    name: String,
-    arguments: String,
+    name: Vec<u8>,
+    /// `cmdline` arguments joined with spaces.
+    arguments: Vec<u8>,
     threads: Vec<TreeThread>,
     namespaces: BTreeMap<String, u64>,
     security: Option<String>,
@@ -1652,7 +1619,7 @@ struct TreeProcess {
 #[derive(Clone)]
 struct TreeThread {
     tid: u32,
-    name: String,
+    name: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -1924,14 +1891,12 @@ fn read_tree_processes() -> BTreeMap<u32, TreeProcess> {
                 .unwrap_or(0)
         });
         let arguments = fs::read(path.join("cmdline"))
-            .ok()
             .map(|bytes| {
                 bytes
                     .split(|byte| *byte == 0)
                     .filter(|part| !part.is_empty())
-                    .map(|part| String::from_utf8_lossy(part).into_owned())
                     .collect::<Vec<_>>()
-                    .join(" ")
+                    .join(&b' ')
             })
             .unwrap_or_default();
         let namespaces = read_namespace_ids(&path);
@@ -1946,7 +1911,7 @@ fn read_tree_processes() -> BTreeMap<u32, TreeProcess> {
                 if tid == pid {
                     continue;
                 }
-                if let Some(name) = read_trim(&task.path().join("comm")) {
+                if let Some(name) = read_comm(&task.path().join("comm")) {
                     threads.push(TreeThread { tid, name });
                 }
             }
@@ -1970,28 +1935,23 @@ fn read_tree_processes() -> BTreeMap<u32, TreeProcess> {
     processes
 }
 
-fn read_stat(pid: u32) -> Option<(String, u32, u32)> {
-    let value = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    parse_process_stat(&value)
+fn read_stat(pid: u32) -> Option<(Vec<u8>, u32, u32)> {
+    parse_process_stat(&fs::read(format!("/proc/{pid}/stat")).ok()?)
 }
 
-fn parse_process_stat(value: &str) -> Option<(String, u32, u32)> {
-    let open = value.find('(')?;
-    let close = value.rfind(") ")?;
-    let comm = value[open + 1..close].to_owned();
-    let fields = value[close + 2..].split_whitespace().collect::<Vec<_>>();
-    let ppid = fields.get(1)?.parse().ok()?;
-    let pgrp = fields.get(2)?.parse().ok()?;
-    Some((comm, ppid, pgrp))
+fn parse_process_stat(value: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    let head = procfs::parse_stat_head(value)?;
+    let mut fields = std::str::from_utf8(head.fields)
+        .ok()?
+        .split_whitespace()
+        .skip(1);
+    let ppid = fields.next()?.parse().ok()?;
+    let pgrp = fields.next()?.parse().ok()?;
+    Some((head.comm.to_vec(), ppid, pgrp))
 }
 
 fn read_proc_uid(path: &Path) -> Option<u32> {
-    for line in fs::read_to_string(path.join("status")).ok()?.lines() {
-        if let Some(value) = line.strip_prefix("Uid:") {
-            return value.split_whitespace().next()?.parse().ok();
-        }
-    }
-    None
+    procfs::status_uid(&fs::read(path.join("status")).ok()?)
 }
 
 fn read_namespace_ids(path: &Path) -> BTreeMap<String, u64> {
@@ -2036,15 +1996,17 @@ fn select_tree_roots(
 }
 
 fn tree_display(process: &TreeProcess, options: &PstreeOptions) -> String {
-    let mut value = process.name.clone();
+    let mut value = ProcText(&process.name).to_string();
     if options.arguments && !process.arguments.is_empty() {
-        let arguments = if options.long {
-            process.arguments.clone()
-        } else {
-            truncate(&process.arguments, 80)
-        };
+        let arguments = ProcText(&process.arguments);
         value.push(' ');
-        value.push_str(&arguments);
+        if options.long || arguments.prefix(80).0 == process.arguments.len() {
+            value.push_str(&arguments.to_string());
+        } else {
+            let (length, _) = arguments.prefix(77);
+            value.push_str(&ProcText(&process.arguments[..length]).to_string());
+            value.push_str("...");
+        }
     }
     if options.pids || options.groups {
         value.push('(');
@@ -2103,7 +2065,7 @@ fn subtree_signature(
             return String::new();
         };
         if depth > 128 || !active.insert(pid) {
-            return format!("{}[]", process.name);
+            return format!("{}[]", ProcText(&process.name));
         }
         let mut child_signatures = children
             .get(&pid)
@@ -2113,7 +2075,11 @@ fn subtree_signature(
             .collect::<Vec<_>>();
         child_signatures.sort_unstable();
         active.remove(&pid);
-        format!("{}[{}]", process.name, child_signatures.join("|"))
+        format!(
+            "{}[{}]",
+            ProcText(&process.name),
+            child_signatures.join("|")
+        )
     }
 
     visit(pid, processes, children, &mut HashSet::new(), 0)
@@ -2225,9 +2191,9 @@ fn render_tree_children(
                 (if last { "`- " } else { "|- " }, "")
             };
             let mut value = if options.thread_names {
-                thread.name.clone()
+                ProcText(&thread.name).to_string()
             } else {
-                format!("{{{}}}", thread.name)
+                format!("{{{}}}", ProcText(&thread.name))
             };
             if options.pids {
                 value.push_str(&format!("({})", thread.tid));
@@ -3044,24 +3010,24 @@ fn read_udev_properties(devno: &str) -> BTreeMap<String, String> {
 
 fn block_mountpoints() -> HashMap<String, Vec<String>> {
     let mut result = HashMap::new();
-    let Ok(content) = fs::read_to_string("/proc/self/mountinfo") else {
+    let Ok(content) = fs::read("/proc/self/mountinfo") else {
         return result;
     };
-    for line in content.lines() {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        let Some(separator) = fields.iter().position(|field| *field == "-") else {
+    for line in content.split(|byte| *byte == b'\n') {
+        let fields = procfs::ascii_fields(line);
+        let Some(separator) = fields.iter().position(|field| *field == b"-") else {
             continue;
         };
         if fields.len() <= separator + 2 || fields.len() <= 5 {
             continue;
         }
-        let mountpoint = unescape_mount_field(fields[4]);
-        let source = unescape_mount_field(fields[separator + 2]);
+        let mountpoint = String::from_utf8_lossy(&procfs::unescape_mount(fields[4])).into_owned();
+        let source = OsString::from_vec(procfs::unescape_mount(fields[separator + 2]));
         if let Some(name) = Path::new(&source).file_name().and_then(OsStr::to_str) {
             result
                 .entry(name.to_owned())
                 .or_insert_with(Vec::new)
-                .push(mountpoint.clone());
+                .push(mountpoint);
         }
     }
     result
@@ -3417,7 +3383,7 @@ mod tests {
             end: Some(2047),
             path: None,
             file_size: Some(2048),
-            command: "init".into(),
+            command: b"init".to_vec(),
         };
         assert_eq!(lock_size(&record, true), "2048");
         assert_eq!(lock_size(&record, false), "2.0K");
@@ -3433,10 +3399,10 @@ mod tests {
 
     #[test]
     fn process_stat_parser_handles_parenthesized_command_names() {
-        let stat = "42 (worker (io)) S 7 42 42 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
+        let stat = b"42 (worker (io)\xff) S 7 42 42 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
         assert_eq!(
             parse_process_stat(stat),
-            Some(("worker (io)".into(), 7, 42))
+            Some((b"worker (io)\xff".to_vec(), 7, 42))
         );
     }
 
