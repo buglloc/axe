@@ -8,6 +8,26 @@ axe sshd --listen '[::]:6969' --workdir .
 
 Interactive SSH sessions show a short welcome message. Remote exec, SFTP, and forwarding produce no welcome output.
 
+## SSH session environment
+
+SSH shell and exec sessions start in the selected `workdir`. AXE sets:
+
+```text
+HOME=<workdir>/.axe-home
+```
+
+The directory is created with private permissions and persists with the workdir. It is used by tools for home-based configuration and state; the daemon's inherited home is not exposed to sessions.
+
+If `PATH` is unset or empty when `sshd` starts, AXE uses:
+
+```text
+/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+```
+
+The AXE applet bridge remains at the front of `PATH` when it is available. A non-empty inherited `PATH` is preserved.
+
+SFTP resolves relative paths from `workdir` and `~` from the session home. The `expand-path@openssh.com` extension keeps `scp`'s default SFTP mode and `scp -O`'s legacy remote-shell mode consistent.
+
 ## Relay
 
 The target runs `axe sshd`; the separate `axe-relay` daemon assigns public TCP ports on a reachable host. Relay is disabled by default in the OSS edition. Use `--relay ENDPOINT` to enable it or `--no-relay` to override an edition's configured default.

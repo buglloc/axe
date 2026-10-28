@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io;
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
@@ -25,6 +25,9 @@ use tokio::task::JoinSet;
 mod supervisor;
 
 const NO_SHELL_EXECUTABLE: &str = "sshd: cannot locate AXE executable for shell sessions";
+const DEFAULT_SSH_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const SSH_HOME_DIRECTORY: &str = ".axe-home";
+
 const SHELL_WELCOME: &[u8] = b"AXE shell | agent context: skill://axe | runtime: doctor --json | host evidence: vzik capabilities\r\n---\r\n\r\n";
 
 #[derive(Parser)]
@@ -38,6 +41,9 @@ struct Options {
     listen: String,
     #[arg(long, env = "AXE_WORK_DIR")]
     workdir: Option<PathBuf>,
+    #[arg(skip)]
+    home_dir: Option<PathBuf>,
+
     #[arg(long, env = "AXE_STORE_DIR")]
     store_dir: Option<PathBuf>,
     /// AXE Store policy inherited by SSH shell and exec sessions.
@@ -138,6 +144,8 @@ fn start_server(
     executable: Arc<crate::executable::Executable>,
     ready: Option<supervisor::ReadyNotifier>,
 ) -> i32 {
+    normalize_session_path();
+
     if let Err(error) = require_shell_executable(&executable) {
         eprintln!("{error}");
         return 1;
@@ -291,7 +299,10 @@ fn prepare(options: &mut Options) -> io::Result<()> {
             None => prepare_derived_store(&workdir),
         }
     };
+    let home_dir = prepare_session_home(&workdir)?;
+
     options.workdir = Some(workdir);
+    options.home_dir = Some(home_dir);
     options.store_dir = store_dir;
 
     // SAFETY: preparation finishes before daemonization, the Tokio runtime, or
@@ -343,6 +354,30 @@ fn prepare(options: &mut Options) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+fn prepare_session_home(workdir: &Path) -> io::Result<PathBuf> {
+    let home = workdir.join(SSH_HOME_DIRECTORY);
+    #[cfg(unix)]
+    crate::path_bridge::ensure_private_directory(&home)?;
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(&home)?;
+    home.canonicalize()
+}
+
+fn normalize_session_path() {
+    if let Some(path) = fallback_session_path(std::env::var_os("PATH").as_deref()) {
+        // SAFETY: the SSH runtime and worker tasks are created after this
+        // process-wide environment normalization.
+        unsafe {
+            std::env::set_var("PATH", path);
+        }
+    }
+}
+
+fn fallback_session_path(path: Option<&OsStr>) -> Option<&'static OsStr> {
+    path.is_none_or(OsStr::is_empty)
+        .then_some(OsStr::new(DEFAULT_SSH_PATH))
 }
 
 fn default_relay_id() -> String {
@@ -476,13 +511,21 @@ async fn run(
             .workdir
             .expect("sshd options were prepared before starting the server"),
     );
+    let home_dir = Arc::new(
+        options
+            .home_dir
+            .expect("sshd home directory was prepared before starting the server"),
+    );
+
     let index_refresher =
         (options.store_mode == crate::registry::StoreMode::Auto).then(IdleIndexRefresher::start);
     let mut factory = SshServer {
         principals,
         ca_fingerprints: Arc::new(ca_fingerprints),
         workdir,
+        home_dir,
         store_dir: Arc::new(options.store_dir),
+
         store_mode: options.store_mode,
         index_activity: index_refresher.as_ref().map(IdleIndexRefresher::activity),
         channels: Arc::default(),
@@ -868,6 +911,8 @@ struct SshServer {
     principals: Arc<[String]>,
     ca_fingerprints: Arc<Vec<ssh_key::Fingerprint>>,
     workdir: Arc<PathBuf>,
+    home_dir: Arc<PathBuf>,
+
     store_dir: Arc<Option<PathBuf>>,
     store_mode: crate::registry::StoreMode,
     index_activity: Option<Arc<SessionActivity>>,
@@ -896,6 +941,8 @@ impl server::Server for SshServer {
             principals: self.principals.clone(),
             ca_fingerprints: self.ca_fingerprints.clone(),
             workdir: self.workdir.clone(),
+            home_dir: self.home_dir.clone(),
+
             store_dir: self.store_dir.clone(),
             store_mode: self.store_mode,
             index_activity: self.index_activity.clone(),
@@ -1111,7 +1158,11 @@ impl server::Handler for SshServer {
         if name == "sftp"
             && let Some(ssh_channel) = ssh_channel
         {
-            let filesystem = super::sftp::Filesystem::new((*self.workdir).clone());
+            let filesystem = super::sftp::Filesystem::with_home(
+                (*self.workdir).clone(),
+                (*self.home_dir).clone(),
+            );
+
             let task = tokio::spawn(async move {
                 super::sftp::run(ssh_channel.into_stream(), filesystem).await
             });
@@ -1383,6 +1434,7 @@ impl SshServer {
             .arg("--noprofile")
             .arg("--no-config")
             .current_dir(&*self.workdir)
+            .env("HOME", &*self.home_dir)
             .env("AXE", "true")
             .env("AXE_WORK_DIR", &*self.workdir)
             .env("AXE_STORE_MODE", self.store_mode.as_str())
@@ -1987,6 +2039,19 @@ mod tests {
     }
 
     #[test]
+    fn empty_session_path_uses_system_fallback() {
+        assert_eq!(
+            fallback_session_path(None),
+            Some(OsStr::new(DEFAULT_SSH_PATH))
+        );
+        assert_eq!(
+            fallback_session_path(Some(OsStr::new(""))),
+            Some(OsStr::new(DEFAULT_SSH_PATH))
+        );
+        assert_eq!(fallback_session_path(Some(OsStr::new("/custom/bin"))), None);
+    }
+
+    #[test]
     fn unavailable_executable_is_rejected_before_bind() {
         let executable = crate::executable::Executable::unavailable();
 
@@ -2028,7 +2093,8 @@ mod tests {
         channel
             .exec(
                 true,
-                b"printf 'b\\na\\na\\n' | sort | uniq; printf 'x\\n' | xargs -n1 printf '<%s>\\n'; printf 'store:%s\\n' \"$AXE_STORE_MODE\"",
+                b"printf 'home:%s\\n' \"$HOME\"; printf 'tilde:%s\\n' ~/legacy; printf 'b\\na\\na\\n' | sort | uniq; printf 'x\\n' | xargs -n1 printf '<%s>\\n'; printf 'store:%s\\n' \"$AXE_STORE_MODE\"",
+
             )
             .await
             .expect("request bundled pipeline");
@@ -2048,7 +2114,23 @@ mod tests {
         .expect("bundled SSH exec did not exit");
 
         assert_eq!(exit_status, 0);
-        assert_eq!(stdout, b"a\nb\n<x>\nstore:auto\n");
+        assert_eq!(
+            stdout,
+            format!(
+                "home:{}\ntilde:{}/legacy\na\nb\n<x>\nstore:auto\n",
+                directory
+                    .join(SSH_HOME_DIRECTORY)
+                    .canonicalize()
+                    .expect("canonicalize expected SSH home")
+                    .display(),
+                directory
+                    .join(SSH_HOME_DIRECTORY)
+                    .canonicalize()
+                    .expect("canonicalize expected SSH home")
+                    .display()
+            )
+            .as_bytes()
+        );
         close_test_connection(client, server).await;
         std::fs::remove_dir_all(directory).expect("remove SSH filesystem test directory");
     }
@@ -2197,10 +2279,17 @@ mod tests {
             ..Default::default()
         });
 
+        let home_dir = if workdir == Path::new(".") {
+            workdir.clone()
+        } else {
+            prepare_session_home(&workdir).expect("prepare SSH test home directory")
+        };
+
         let handler = SshServer {
             ca_fingerprints: Arc::new(vec![ca_key.public_key().fingerprint(HashAlg::Sha256)]),
             principals,
             workdir: Arc::new(workdir),
+            home_dir: Arc::new(home_dir),
             store_dir: Arc::new(store_dir),
             store_mode,
             index_activity: None,
@@ -2552,6 +2641,7 @@ mod tests {
         let store_dir = store_dir
             .canonicalize()
             .expect("canonicalize SSH AXE Store");
+        let home_dir = prepare_session_home(&workdir).expect("prepare OpenSSH test home");
 
         let ca_key = PrivateKey::from_openssh(crate::embedded::INPUTS.ssh_host_key)
             .expect("parse test CA key");
@@ -2620,6 +2710,7 @@ mod tests {
             ca_fingerprints: Arc::new(vec![ca_key.public_key().fingerprint(HashAlg::Sha256)]),
             principals: Arc::from([String::from("axe-user")]),
             workdir: Arc::new(workdir.clone()),
+            home_dir: Arc::new(home_dir.clone()),
             store_dir: Arc::new(Some(store_dir.clone())),
             store_mode: crate::registry::StoreMode::CacheOnly,
             index_activity: None,

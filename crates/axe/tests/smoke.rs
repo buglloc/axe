@@ -2535,15 +2535,17 @@ fn sshd_starts_without_writable_storage() {
         String::from_utf8_lossy(&output.stderr)
     );
     // sshd may publish its applet bridge when the filesystem still allows it
-    // (permission enforcement varies across mount namespaces), but it must
-    // not leave any other state behind in a read-only workdir.
+    // (permission enforcement varies across mount namespaces). Its private
+    // session home is also expected state.
+
     let unexpected: Vec<String> = fs::read_dir(scratch.path())
         .expect("read restored workdir")
         .filter_map(|entry| {
             let entry = entry.expect("read workdir entry");
             let valid_bridge =
                 entry.file_name() == ".axe-bridge" && entry.path().join("bin").is_dir();
-            (!valid_bridge).then(|| entry.path().display().to_string())
+            let valid_home = entry.file_name() == ".axe-home" && entry.path().is_dir();
+            (!(valid_bridge || valid_home)).then(|| entry.path().display().to_string())
         })
         .collect();
     assert!(

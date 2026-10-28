@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use bytes::Bytes;
+use russh_sftp::extensions::{EXPAND_PATH, ExpandPathExtension};
 use russh_sftp::protocol::{
-    Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Packet, Status, StatusCode,
+    Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Packet, Status, StatusCode, Version,
 };
 use russh_sftp::server::{Handler, StatusReply};
+
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
 const DIRECTORY_BATCH_SIZE: usize = 64;
@@ -28,25 +30,57 @@ enum OpenHandle {
 
 pub struct Filesystem {
     workdir: PathBuf,
+    home_dir: PathBuf,
     next_handle: u64,
     handles: HashMap<String, OpenHandle>,
 }
 
 impl Filesystem {
-    pub fn new(workdir: PathBuf) -> Self {
+    pub fn with_home(workdir: PathBuf, home_dir: PathBuf) -> Self {
         Self {
             workdir,
+            home_dir,
             next_handle: 0,
             handles: HashMap::new(),
         }
     }
 
     fn path(&self, path: &str) -> PathBuf {
+        if path == "~" {
+            return self.home_dir.clone();
+        }
+        if let Some(path) = path.strip_prefix("~/") {
+            return self.home_dir.join(path);
+        }
         let path = Path::new(path);
         if path.is_absolute() {
             path.to_owned()
         } else {
             self.workdir.join(path)
+        }
+    }
+
+    async fn canonical_path(&self, path: &str) -> io::Result<PathBuf> {
+        let mut current = self.path(path);
+        let mut missing = Vec::new();
+
+        loop {
+            match tokio::fs::canonicalize(&current).await {
+                Ok(mut canonical) => {
+                    for component in missing.iter().rev() {
+                        canonical.push(component);
+                    }
+                    return Ok(canonical);
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    let Some(name) = current.file_name() else {
+                        return Err(error);
+                    };
+                    missing.push(name.to_owned());
+                    current.pop();
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
 
@@ -71,6 +105,14 @@ impl Handler for Filesystem {
 
     fn unimplemented(&self) -> Self::Error {
         StatusCode::OpUnsupported.into()
+    }
+
+    async fn init(&mut self, _: u32, _: HashMap<String, String>) -> Result<Version, Self::Error> {
+        let mut version = Version::new();
+        version
+            .extensions
+            .insert(EXPAND_PATH.to_owned(), "1".to_owned());
+        Ok(version)
     }
 
     async fn open(
@@ -301,9 +343,7 @@ impl Handler for Filesystem {
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
-        let path = tokio::fs::canonicalize(self.path(&path))
-            .await
-            .map_err(sftp_error)?;
+        let path = self.canonical_path(&path).await.map_err(sftp_error)?;
 
         Ok(Name {
             id,
@@ -361,6 +401,35 @@ impl Handler for Filesystem {
             return Err(StatusCode::OpUnsupported.into());
         }
         Ok(ok(id))
+    }
+
+    async fn extended(
+        &mut self,
+        id: u32,
+        request: String,
+        data: Vec<u8>,
+    ) -> Result<Packet, Self::Error> {
+        if request != EXPAND_PATH {
+            return Err(StatusCode::OpUnsupported.into());
+        }
+
+        let mut data = Bytes::from(data);
+        let request: ExpandPathExtension = russh_sftp::de::from_bytes(&mut data)
+            .map_err(|error| StatusCode::BadMessage.with_message(error.to_string()))?;
+        if !data.is_empty() {
+            return Err(
+                StatusCode::BadMessage.with_message("expand-path request contains trailing data")
+            );
+        }
+
+        let path = self
+            .canonical_path(&request.path)
+            .await
+            .map_err(sftp_error)?;
+        Ok(Packet::Name(Name {
+            id,
+            files: vec![File::dummy(path.to_string_lossy())],
+        }))
     }
 }
 
@@ -551,8 +620,13 @@ mod tests {
         let scratch = Scratch::new();
         let (client_stream, server_stream) = tokio::io::duplex(1 << 20);
         let root = scratch.0.clone();
+        let home = scratch.0.join("home");
+        std::fs::create_dir(&home).expect("create SFTP home directory");
 
-        let server = tokio::spawn(async move { run(server_stream, Filesystem::new(root)).await });
+        let server =
+            tokio::spawn(
+                async move { run(server_stream, Filesystem::with_home(root, home)).await },
+            );
 
         let session = russh_sftp::client::SftpSession::new(client_stream)
             .await
@@ -567,6 +641,19 @@ mod tests {
         assert_eq!(
             session.read("upload.part").await.expect("read file"),
             b"hello over sftp"
+        );
+        let mut home_file = session
+            .create("~/home-upload.part")
+            .await
+            .expect("create file in SFTP home");
+        home_file
+            .write_all(b"hello in home")
+            .await
+            .expect("write home file");
+        home_file.close().await.expect("close home file");
+        assert_eq!(
+            std::fs::read(scratch.0.join("home/home-upload.part")).expect("read home file"),
+            b"hello in home"
         );
 
         session
@@ -604,11 +691,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expand_path_extension_resolves_session_home() {
+        let scratch = Scratch::new();
+        let home = scratch.0.join("home");
+        std::fs::create_dir(&home).expect("create SFTP home directory");
+        let mut filesystem = Filesystem::with_home(scratch.0.clone(), home.clone());
+        let data: Vec<u8> = ExpandPathExtension {
+            path: "~/new-file".to_owned(),
+        }
+        .try_into()
+        .expect("encode expand-path request");
+
+        let Packet::Name(response) = filesystem
+            .extended(1, EXPAND_PATH.to_owned(), data)
+            .await
+            .expect("expand SFTP home path")
+        else {
+            panic!("expand-path must return a NAME response");
+        };
+
+        assert_eq!(
+            response.files[0].filename,
+            home.canonicalize()
+                .expect("canonicalize SFTP home")
+                .join("new-file")
+                .to_string_lossy()
+        );
+    }
+
+    #[tokio::test]
     async fn read_is_capped_to_one_bounded_response() {
         let scratch = Scratch::new();
         std::fs::write(scratch.0.join("large"), vec![b'x'; MAX_TRANSFER_SIZE + 1])
             .expect("write large fixture");
-        let mut filesystem = Filesystem::new(scratch.0.clone());
+        let mut filesystem = Filesystem::with_home(scratch.0.clone(), scratch.0.clone());
+
         let handle = filesystem
             .open(
                 1,
@@ -632,7 +749,7 @@ mod tests {
     async fn rejects_handles_beyond_session_limit() {
         let scratch = Scratch::new();
         std::fs::write(scratch.0.join("file"), b"fixture").expect("write fixture");
-        let mut filesystem = Filesystem::new(scratch.0.clone());
+        let mut filesystem = Filesystem::with_home(scratch.0.clone(), scratch.0.clone());
 
         for id in 0..MAX_OPEN_HANDLES {
             filesystem
