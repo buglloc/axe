@@ -415,6 +415,17 @@ impl Options {
         match result {
             Ok(code) => Ok(code),
             Err(error) => {
+                if error.kind() == io::ErrorKind::BrokenPipe {
+                    #[cfg(unix)]
+                    {
+                        // SAFETY: SIGPIPE is deliberately sent only to this
+                        // process; its disposition was restored before the
+                        // applet was invoked.
+                        unsafe {
+                            libc::raise(libc::SIGPIPE);
+                        }
+                    }
+                }
                 let message = error.to_string();
                 let message = if error.raw_os_error().is_some() {
                     message
