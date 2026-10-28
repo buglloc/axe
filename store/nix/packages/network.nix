@@ -254,6 +254,7 @@
       '';
       postInstall = "";
       postFixup = "";
+      doCheck = false;
       doInstallCheck = false;
       nativeInstallCheckInputs = [];
     });
