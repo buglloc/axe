@@ -468,37 +468,37 @@ mod tests {
 
     #[test]
     fn removed_target_fallback_skips_bridge_and_runs_next_candidate_once() {
-        let root = std::env::temp_dir().join(format!(
-            "axe-ondemand-fallback-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system clock is after epoch")
-                .as_nanos()
-        ));
+        let current = std::env::current_exe().expect("locate test executable");
+        let root = current
+            .parent()
+            .expect("locate test executable directory")
+            .join(format!(
+                "axe-ondemand-fallback-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("system clock is after epoch")
+                    .as_nanos()
+            ));
         let bridge = root.join("bridge");
         let external = root.join("external");
         std::fs::create_dir_all(&bridge).expect("create bridge directory");
         std::fs::create_dir_all(&external).expect("create external directory");
-
-        let current = std::env::current_exe().expect("locate test executable");
         let bridge_candidate = bridge.join("store-tool");
         symlink(&current, &bridge_candidate).expect("create recursive bridge candidate");
 
         let count = root.join("count");
         let external_candidate = external.join("store-tool");
-        // Prepare in an owned subprocess so parallel tests cannot retain a
-        // writable executable descriptor until exec.
-        let prepared = Command::new(&current)
-            .args([
-                "--exact",
-                "ondemand::tests::external_candidate_fixture",
-                "--ignored",
-            ])
-            .env("AXE_TEST_COPY_EXECUTABLE_TO", &external_candidate)
-            .output()
-            .expect("prepare external candidate");
-        assert!(prepared.status.success(), "{prepared:?}");
+        std::fs::write(
+            &external_candidate,
+            b"#!/usr/bin/env bash\nprintf x > \"$(dirname \"$0\")/../count\"\n",
+        )
+        .expect("write external candidate");
+        std::fs::set_permissions(
+            &external_candidate,
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .expect("make external candidate executable");
 
         let error = StoreError {
             stage: axe_store_client::StoreStage::Manifest,
@@ -509,12 +509,7 @@ mod tests {
             .expect("record test executable");
         let code = run_path_candidates(
             "store-tool",
-            &[
-                OsString::from("--exact"),
-                OsString::from("ondemand::tests::external_candidate_fixture"),
-                OsString::from("--ignored"),
-                OsString::from("--nocapture"),
-            ],
+            &[],
             &error,
             [&bridge_candidate, &external_candidate],
             Some(&bridge),
@@ -524,32 +519,5 @@ mod tests {
         assert_eq!(code, 0);
         assert_eq!(std::fs::read(&count).expect("read execution count"), b"x");
         std::fs::remove_dir_all(root).expect("remove fallback test directory");
-    }
-
-    #[test]
-    #[ignore = "owned subprocess fixture for PATH fallback"]
-    fn external_candidate_fixture() {
-        let current = std::env::current_exe().expect("locate fallback candidate");
-        if let Some(destination) = std::env::var_os("AXE_TEST_COPY_EXECUTABLE_TO") {
-            crate::executable::test_link_or_copy(&current, Path::new(&destination))
-                .expect("link external candidate");
-            return;
-        }
-        if current.file_name() != Some(OsStr::new("store-tool")) {
-            return;
-        }
-        let count = current
-            .parent()
-            .and_then(Path::parent)
-            .expect("locate fallback test root")
-            .join("count");
-
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(count)
-            .expect("open execution count")
-            .write_all(b"x")
-            .expect("record fallback execution");
     }
 }

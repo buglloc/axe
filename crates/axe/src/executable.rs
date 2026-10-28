@@ -1519,14 +1519,17 @@ mod tests {
 
     impl Scratch {
         fn new(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "axe-executable-{label}-{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("system clock is after epoch")
-                    .as_nanos()
-            ));
+            let path = current_executable()
+                .parent()
+                .expect("locate test executable directory")
+                .join(format!(
+                    "axe-executable-{label}-{}-{}",
+                    std::process::id(),
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("system clock is after epoch")
+                        .as_nanos()
+                ));
             fs::create_dir_all(&path).expect("create scratch directory");
             Self(path)
         }
@@ -1765,7 +1768,14 @@ mod tests {
         let _ = executable.relay.set(Err(disabled_relay_failure()));
 
         fs::remove_file(&path).expect("remove original inode");
-        fs::copy(current_executable(), &path).expect("replace executable inode");
+        use std::os::unix::fs::symlink;
+
+        let replacement = current_executable()
+            .parent()
+            .and_then(Path::parent)
+            .expect("locate AXE binary")
+            .join("axe");
+        symlink(replacement, &path).expect("replace executable inode");
 
         assert_eq!(executable.filesystem_path(), None);
         let status = executable
