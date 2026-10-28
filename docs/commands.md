@@ -338,9 +338,13 @@ Its `RES` and `%MEM` use resident KiB from `/proc/PID/status`; `SHR` is
 sets the sample count; it does not emulate procps NUMA, once or human-size modes.
 `tload` uses the current terminal, not a TTY pathname operand.
 
-`lsof` inspects visible `/proc` cwd, root, executable and descriptor entries, not
-memory mappings. `-a` intersects requested selection classes; otherwise they are
-unioned. It supports
+`lsof` inspects visible `/proc` cwd, root, executable, memory-mapped file and
+descriptor entries. Like lsof, it lists each mapped file once per device and
+inode, skips the executable, reports a deleted mapped file as `DEL`, and appends
+`(stat: ...)` or `(path dev=...,inode=...)` to the name when the path no longer
+names the mapped file; unlike lsof, a mapped path keeps embedded whitespace.
+`-a` intersects requested selection classes; otherwise they are unioned. It
+supports
 the `-F` field subset `p`, `c`, `f`, `n`, `t`, `u`, `L`, `i`, `D`, `s`, `P`,
 `a`, `o`, `r` and the NUL terminator selector `0`; other fields are rejected.
 

@@ -1,6 +1,6 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::ffi::{CStr, OsString};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::ffi::{CStr, OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::net::{IpAddr, SocketAddr};
@@ -15,6 +15,7 @@ use lzma_rust2::XzReader;
 use object::{Object, ObjectSection};
 use vzik::procfs;
 
+use super::errno::strerror;
 use super::proc_text::ProcText;
 use super::utf8_args;
 
@@ -1183,7 +1184,7 @@ fn run_lsof(args: Vec<OsString>) -> Result<bool, String> {
             }
             "-h" | "--help" => {
                 println!(
-                    "Usage: lsof [-nP] [-a] [-p PID] [-c COMMAND] [-u USER] [-i[46][TCP|UDP][:PORT]] [-t] [-F[pcafntuLiDrsoP0]] [+d DIR] [+D DIR] [PATH ...]\n-F also accepts a separate field list; use -F -- before pathname operands.\nInventory: cwd, root, executable and descriptors visible in /proc; memory mappings are not listed."
+                    "Usage: lsof [-nP] [-a] [-p PID] [-c COMMAND] [-u USER] [-i[46][TCP|UDP][:PORT]] [-t] [-F[pcafntuLiDrsoP0]] [+d DIR] [+D DIR] [PATH ...]\n-F also accepts a separate field list; use -F -- before pathname operands.\nInventory: cwd, root, executable, memory-mapped files and descriptors visible in /proc."
                 );
                 return Ok(true);
             }
@@ -1319,6 +1320,7 @@ fn run_lsof(args: Vec<OsString>) -> Result<bool, String> {
                 emitter.emit(Cow::Borrowed(fd), &path, &target);
             }
         }
+        emitter.emit_mappings(&base);
         if let Ok(entries) = fs::read_dir(base.join("fd")) {
             let mut entries = entries.flatten().collect::<Vec<_>>();
             entries.sort_unstable_by_key(|entry| entry.file_name());
@@ -1697,18 +1699,167 @@ struct OpenEmitter<'a> {
     table_process: Option<usize>,
 }
 
+/// What a row reports about a file: stat(2) of its link or path, or, for a
+/// mapping whose path no longer names the mapped file, the `/proc/PID/maps`
+/// device and inode of a regular file.
+struct FileStat {
+    kind: &'static str,
+    device: u64,
+    inode: u64,
+    raw_device: Option<u64>,
+    size: Option<u64>,
+}
+
+impl FileStat {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        let file_type = metadata.file_type();
+        let kind = if file_type.is_dir() {
+            "DIR"
+        } else if file_type.is_char_device() {
+            "CHR"
+        } else if file_type.is_block_device() {
+            "BLK"
+        } else if file_type.is_fifo() {
+            "FIFO"
+        } else if file_type.is_socket() {
+            "sock"
+        } else if file_type.is_file() {
+            "REG"
+        } else {
+            "unknown"
+        };
+        Self {
+            kind,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            raw_device: (file_type.is_char_device() || file_type.is_block_device())
+                .then_some(metadata.rdev()),
+            size: (metadata.is_file() || metadata.is_dir()).then_some(metadata.len()),
+        }
+    }
+
+    fn mapped(device: u64, inode: u64) -> Self {
+        Self {
+            kind: "REG",
+            device,
+            inode,
+            raw_device: None,
+            size: None,
+        }
+    }
+}
+
+/// lsof's NAME note for a mapped path whose stat(2) device or inode differs
+/// from the mapping.
+fn mismatch_note(metadata: &fs::Metadata, device: u64, inode: u64) -> String {
+    let mut parts = Vec::new();
+    if metadata.dev() != device {
+        parts.push(format!(
+            "dev={},{}",
+            libc::major(metadata.dev()),
+            libc::minor(metadata.dev())
+        ));
+    }
+    if metadata.ino() != inode {
+        parts.push(format!("inode={}", metadata.ino()));
+    }
+    format!("(path {})", parts.join(","))
+}
+
 impl OpenEmitter<'_> {
     fn emit(&mut self, fd: Cow<'static, str>, link: &Path, target: &Path) {
-        let metadata = if self.has_path_filters {
-            fs::metadata(link).ok()
+        let stat = || {
+            fs::metadata(link)
+                .ok()
+                .map(|metadata| FileStat::from_metadata(&metadata))
+        };
+        self.emit_file(fd, link, target, "", stat);
+    }
+
+    /// Lists file-backed memory mappings once per device and inode, as lsof
+    /// does: the executable is already `txt`, a mapping whose file is gone is
+    /// `DEL`, and a path that no longer names the mapped file gets a NAME note.
+    fn emit_mappings(&mut self, base: &Path) {
+        let Ok(maps) = fs::read(base.join("maps")) else {
+            return;
+        };
+        let executable = fs::metadata(base.join("exe"))
+            .ok()
+            .map(|metadata| (metadata.dev(), metadata.ino()));
+        // Paths from another mount namespace resolve to other files here; its
+        // map_files links name the mapped files themselves.
+        let other_namespace = match (
+            fs::metadata("/proc/self/ns/mnt"),
+            fs::metadata(base.join("ns/mnt")),
+        ) {
+            (Ok(own), Ok(target)) => own.ino() != target.ino(),
+            _ => false,
+        };
+        let mut seen = HashSet::new();
+        for entry in maps
+            .split(|byte| *byte == b'\n')
+            .filter_map(procfs::parse_map)
+        {
+            let device = libc::makedev(entry.major, entry.minor);
+            if entry.path.is_empty()
+                || (device == 0 && entry.inode == 0)
+                || executable == Some((device, entry.inode))
+                || !seen.insert((device, entry.inode))
+            {
+                continue;
+            }
+            let (path, deleted) = match entry.path.strip_suffix(b" (deleted)") {
+                Some(path) if !path.is_empty() => (path, true),
+                _ => (entry.path, false),
+            };
+            let path = Path::new(OsStr::from_bytes(path));
+            let stat_path = if other_namespace {
+                base.join(format!("map_files/{:x}-{:x}", entry.start, entry.end))
+            } else {
+                path.to_path_buf()
+            };
+            let metadata = fs::metadata(&stat_path);
+            let trusted = metadata.as_ref().is_ok_and(|metadata| {
+                other_namespace || (metadata.dev(), metadata.ino()) == (device, entry.inode)
+            });
+            let (stat, note) = match metadata {
+                Ok(metadata) if trusted => (FileStat::from_metadata(&metadata), String::new()),
+                _ if deleted => (FileStat::mapped(device, entry.inode), String::new()),
+                Ok(metadata) => (
+                    FileStat::mapped(device, entry.inode),
+                    mismatch_note(&metadata, device, entry.inode),
+                ),
+                Err(error) => (
+                    FileStat::mapped(device, entry.inode),
+                    format!("(stat: {})", strerror(&error)),
+                ),
+            };
+            let fd = if deleted && !trusted { "DEL" } else { "mem" };
+            self.emit_file(Cow::Borrowed(fd), &stat_path, path, &note, || Some(stat));
+        }
+    }
+
+    /// Emits one row; `stat` runs at most once, before selection only when a
+    /// path filter needs the file identity.
+    fn emit_file(
+        &mut self,
+        fd: Cow<'static, str>,
+        link: &Path,
+        target: &Path,
+        note: &str,
+        stat: impl FnOnce() -> Option<FileStat>,
+    ) {
+        let mut stat = Some(stat);
+        let early = if self.has_path_filters {
+            stat.take().and_then(|stat| stat())
         } else {
             None
         };
         let socket_inode = procfs::socket_inode(target.as_os_str().as_bytes());
         let socket = socket_inode.and_then(|inode| self.sockets.get(&inode));
-        let path_match = metadata
+        let path_match = early
             .as_ref()
-            .is_some_and(|metadata| self.identities.contains(&(metadata.dev(), metadata.ino())))
+            .is_some_and(|file| self.identities.contains(&(file.device, file.inode)))
             || self
                 .recursive_directories
                 .iter()
@@ -1745,45 +1896,27 @@ impl OpenEmitter<'_> {
             return;
         }
 
-        let metadata = if self.has_path_filters {
-            metadata
-        } else {
-            fs::metadata(link).ok()
+        let file = match stat {
+            Some(stat) => stat(),
+            None => early,
         };
         let inet_socket = socket.is_some_and(|socket| socket.family != SocketFamily::Unix);
-        let is_socket = socket_inode.is_some()
-            || metadata
-                .as_ref()
-                .is_some_and(|value| value.file_type().is_socket());
+        let is_socket =
+            socket_inode.is_some() || file.as_ref().is_some_and(|file| file.kind == "sock");
         let kind = if let Some(socket) = socket {
             match socket.family {
                 SocketFamily::Inet4 => "IPv4",
                 SocketFamily::Inet6 => "IPv6",
                 SocketFamily::Unix => "unix",
             }
-        } else if let Some(metadata) = &metadata {
-            let kind = metadata.file_type();
-            if kind.is_dir() {
-                "DIR"
-            } else if kind.is_char_device() {
-                "CHR"
-            } else if kind.is_block_device() {
-                "BLK"
-            } else if kind.is_fifo() {
-                "FIFO"
-            } else if kind.is_socket() {
-                "sock"
-            } else if kind.is_file() {
-                "REG"
-            } else {
-                "unknown"
-            }
+        } else if let Some(file) = &file {
+            file.kind
         } else if socket_inode.is_some() {
             "sock"
         } else {
             "unknown"
         };
-        let name = if let Some(socket) = socket {
+        let mut name = if let Some(socket) = socket {
             Cow::Owned(
                 format_socket(
                     socket,
@@ -1799,21 +1932,18 @@ impl OpenEmitter<'_> {
         } else {
             Cow::Borrowed(target.as_os_str().as_bytes())
         };
+        if !note.is_empty() {
+            let name = name.to_mut();
+            name.push(b' ');
+            name.extend_from_slice(note.as_bytes());
+        }
         let inode = if inet_socket {
             None
         } else {
-            metadata.as_ref().map(MetadataExt::ino).or(socket_inode)
+            file.as_ref().map(|file| file.inode).or(socket_inode)
         };
-        let raw_device = metadata
-            .as_ref()
-            .filter(|metadata| {
-                metadata.file_type().is_char_device() || metadata.file_type().is_block_device()
-            })
-            .map(MetadataExt::rdev);
-        let file_size = metadata
-            .as_ref()
-            .filter(|metadata| metadata.is_file() || metadata.is_dir())
-            .map(fs::Metadata::len);
+        let raw_device = file.as_ref().and_then(|file| file.raw_device);
+        let file_size = file.as_ref().and_then(|file| file.size);
         let info = if self
             .fields
             .is_none_or(|fields| fields.selected.contains(&'a') || fields.selected.contains(&'o'))
@@ -1833,12 +1963,10 @@ impl OpenEmitter<'_> {
                 fields.end_set();
             }
             let mut emitted = fields.emit('f', fd.as_ref());
-            if let Some(access) = info.access {
-                emitted |= fields.emit('a', access);
-            }
+            emitted |= fields.emit('a', info.access.unwrap_or(' '));
             emitted |= fields.emit('t', kind);
-            if !is_socket && let Some(metadata) = &metadata {
-                emitted |= fields.emit('D', format_args!("0x{:x}", metadata.dev()));
+            if !is_socket && let Some(file) = &file {
+                emitted |= fields.emit('D', format_args!("0x{:x}", file.device));
             }
             if let Some(device) = raw_device {
                 emitted |= fields.emit('r', format_args!("0x{device:x}"));
@@ -1869,7 +1997,7 @@ impl OpenEmitter<'_> {
             String::new()
         } else {
             raw_device
-                .or_else(|| metadata.as_ref().map(MetadataExt::dev))
+                .or_else(|| file.as_ref().map(|file| file.device))
                 .map(|device| format!("{},{}", libc::major(device), libc::minor(device)))
                 .unwrap_or_default()
         };

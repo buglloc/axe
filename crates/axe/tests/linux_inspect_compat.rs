@@ -921,3 +921,74 @@ fn lsof_escapes_process_names_and_keeps_their_uid() {
         "{output:?}"
     );
 }
+
+#[test]
+fn lsof_lists_mapped_files_once_and_deleted_ones_as_del() {
+    fn map(path: &Path, length: usize) -> *mut libc::c_void {
+        let file = File::open(path).unwrap();
+        // SAFETY: a fresh shared read-only mapping of an open regular file;
+        // the result is checked and unmapped by the caller.
+        let address = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                length,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        assert_ne!(address, libc::MAP_FAILED);
+        address
+    }
+
+    let scratch = Scratch::new();
+    let mapped = scratch.file("mapped", vec![b'x'; 8192]);
+    let deleted = scratch.file("deleted", vec![b'x'; 4096]);
+    let mappings = [
+        (map(&mapped, 4096), 4096),
+        (map(&mapped, 8192), 8192),
+        (map(&deleted, 4096), 4096),
+    ];
+    let mapped_inode = fs::metadata(&mapped).unwrap().ino();
+    let deleted_inode = fs::metadata(&deleted).unwrap().ino();
+    fs::remove_file(&deleted).unwrap();
+
+    let pid = std::process::id().to_string();
+    let output = axe("lsof", &["-a", "-p", &pid, "-Ffain"], &[]);
+    for (address, length) in mappings {
+        // SAFETY: each pair is a live mapping created above and unmapped once.
+        unsafe { libc::munmap(address, length) };
+    }
+
+    let text = success(&output);
+    let records = text
+        .split("\nf")
+        .skip(1)
+        .map(|record| record.lines().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let mapped_name = format!("n{}", mapped.display());
+    let mapped_rows = records
+        .iter()
+        .filter(|record| record.iter().any(|field| field.starts_with(&mapped_name)))
+        .collect::<Vec<_>>();
+    assert_eq!(mapped_rows.len(), 1, "{text}");
+    assert_eq!(mapped_rows[0][0], "mem");
+    assert!(mapped_rows[0].contains(&format!("i{mapped_inode}").as_str()));
+    let deleted_row = vec![
+        "DEL".to_owned(),
+        "a ".to_owned(),
+        format!("i{deleted_inode}"),
+        format!("n{}", deleted.display()),
+    ];
+    assert!(
+        records.iter().any(|record| *record == deleted_row),
+        "{text}"
+    );
+    for fd in ["cwd", "rtd", "txt"] {
+        assert!(
+            records.iter().any(|record| record[..2] == [fd, "a "]),
+            "{text}"
+        );
+    }
+}

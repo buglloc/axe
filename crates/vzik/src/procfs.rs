@@ -188,6 +188,49 @@ pub fn unescape_mount(field: &[u8]) -> Vec<u8> {
     decoded
 }
 
+/// One row of `/proc/PID/maps`.
+pub struct MapEntry<'a> {
+    pub start: u64,
+    pub end: u64,
+    pub major: u32,
+    pub minor: u32,
+    pub inode: u64,
+    /// Backing path as printed, spaces included and possibly ending in
+    /// ` (deleted)`; empty for anonymous memory.
+    pub path: &'a [u8],
+}
+
+/// Parses one row of `/proc/PID/maps`; the path is the rest of the row.
+pub fn parse_map(line: &[u8]) -> Option<MapEntry<'_>> {
+    fn field<'a>(rest: &mut &'a [u8]) -> &'a [u8] {
+        let trimmed = rest.trim_ascii_start();
+        let end = trimmed
+            .iter()
+            .position(u8::is_ascii_whitespace)
+            .unwrap_or(trimmed.len());
+        let (value, tail) = trimmed.split_at(end);
+        *rest = tail;
+        value
+    }
+
+    let mut rest = line;
+    let range = field(&mut rest);
+    let _permissions = field(&mut rest);
+    let _offset = field(&mut rest);
+    let device = field(&mut rest);
+    let inode = field(&mut rest);
+    let (start, end) = range.split_at(range.iter().position(|byte| *byte == b'-')?);
+    let (major, minor) = device.split_at(device.iter().position(|byte| *byte == b':')?);
+    Some(MapEntry {
+        start: hex_u64(start).ok()?,
+        end: hex_u64(&end[1..]).ok()?,
+        major: u32::try_from(hex_u64(major).ok()?).ok()?,
+        minor: u32::try_from(hex_u64(&minor[1..]).ok()?).ok()?,
+        inode: parse_u64(inode).ok()?,
+        path: rest.trim_ascii_start(),
+    })
+}
+
 pub(crate) fn malformed(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
@@ -321,5 +364,23 @@ mod tests {
         assert_eq!(socket_state("tcp", 0x07), "close");
         assert_eq!(socket_state("udp", 0x0a), "unknown");
         assert_eq!(socket_state("tcp", 0x0a), "listen");
+    }
+
+    #[test]
+    fn map_rows_keep_whole_paths_and_device_numbers() {
+        let entry = parse_map(
+            b"7f2a00000000-7f2a00002000 rw-s 00001000 fd:1a 1234                       /tmp/a b\tc (deleted)",
+        )
+        .expect("parse map");
+        assert_eq!(
+            (entry.start, entry.end),
+            (0x7f2a_0000_0000, 0x7f2a_0000_2000)
+        );
+        assert_eq!((entry.major, entry.minor, entry.inode), (0xfd, 0x1a, 1234));
+        assert_eq!(entry.path, b"/tmp/a b\tc (deleted)");
+
+        let anonymous = parse_map(b"7ffc0000-7ffc1000 rw-p 00000000 00:00 0 ").expect("parse");
+        assert_eq!((anonymous.inode, anonymous.path), (0, b"".as_slice()));
+        assert!(parse_map(b"7ffc0000 rw-p 00000000 00:00 0").is_none());
     }
 }
