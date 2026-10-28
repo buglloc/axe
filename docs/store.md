@@ -43,6 +43,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `ffuf` | `security/ffuf` | Fuzz web application paths and parameters | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `findmnt` | `storage/findmnt` | Locate and describe mounted filesystems | `aarch64-linux`, `x86_64-linux` |
 | `fio` | `storage/fio` | Benchmark and verify storage I/O workloads | `aarch64-linux`, `x86_64-linux` |
+| `fsmon` | `debugging/fsmon` | Monitor filesystem changes with process attribution | `aarch64-linux`, `x86_64-linux` |
 | `fzf` | `files/fzf` | Interactively filter and select values | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `gdb` | `debugging/gdb` | Debug native programs and processes | `aarch64-linux`, `x86_64-linux` |
 | `gdbserver` | `debugging/gdbserver` | Expose native programs to remote GDB | `aarch64-linux`, `x86_64-linux` |
@@ -178,6 +179,7 @@ Uploads and remote streams are explicit network operations and use host TLS trus
         --verify_fatal=1 --unlink=1
 )
 ```
+`fsmon` is Linux-only. Its daemon requires `CAP_SYS_ADMIN` for process attribution and refuses to start without it unless `FSMON_ALLOW_UNPRIVILEGED=1` is set. The Store package provides the `fsmon` executable; use `fsmon init --service` to generate its user service configuration.
 
 `python` includes pinned pure-Python HTTP, WebSocket, and HTML libraries and a certifi CA bundle. The package excludes pip, ensurepip, and virtual-environment tooling; update its interpreter and wheels together in the package definition.
 

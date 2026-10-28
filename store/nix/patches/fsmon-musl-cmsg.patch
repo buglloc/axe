@@ -1,0 +1,20 @@
+--- a/src/common/monitor/factory.rs
++++ b/src/common/monitor/factory.rs
+@@ -154,1 +154,1 @@
+-            (*cmsg).cmsg_len = cmsg_align(mem::size_of::<libc::cmsghdr>()) + data_len;
++            (*cmsg).cmsg_len = (cmsg_align(mem::size_of::<libc::cmsghdr>()) + data_len) as _;
+@@ -162,1 +162,1 @@
+-        msg.msg_controllen = control_space(fds.len());
++        msg.msg_controllen = control_space(fds.len()) as _;
+@@ -187,1 +187,1 @@
+-    msg.msg_controllen = control.len();
++    msg.msg_controllen = control.len() as _;
+@@ -198,1 +198,1 @@
+-    let control_end = control_start + msg.msg_controllen;
++    let control_end = control_start + msg.msg_controllen as usize;
+@@ -208,1 +208,1 @@
+-                let total = (*cmsg).cmsg_len;
++                let total = (*cmsg).cmsg_len as usize;
+@@ -221,1 +221,1 @@
+-            let next = (cmsg_addr + cmsg_align((*cmsg).cmsg_len)) as *mut libc::cmsghdr;
++            let next = (cmsg_addr + cmsg_align((*cmsg).cmsg_len as usize)) as *mut libc::cmsghdr;

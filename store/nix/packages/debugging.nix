@@ -237,7 +237,45 @@
   binutilsPackages = buildPkgs.lib.genAttrs linuxSystems (
     target: binutilsMinimal (staticSetFor target (pkgsFor target))
   );
+  fsmonVersion = "0.5.6";
+  fsmonSource = buildPkgs.fetchFromGitHub {
+    owner = "lenitain";
+    repo = "fsmon";
+    rev = "4235788d4062733064af7aa6a399b5c86a6dff1c";
+    hash = "sha256-fJkjl6j1ANVqEIHSfvHNBWj3eG/evRnpTF7ACnKyHkI=";
+  };
+  fsmonPackageFor = target: targetPkgs: let
+    packageSet = staticSetFor target targetPkgs;
+  in
+    packageSet.rustPlatform.buildRustPackage {
+      pname = "fsmon";
+      version = fsmonVersion;
+      src = fsmonSource;
+      cargoHash = "sha256-IV2ZHBvKeK/hBcw9lnzZYYVn6QFjglexj35ag/x4z/g=";
+      cargoBuildFlags = ["--bin" "fsmon"];
+      postPatch = ''
+        patch -p1 < ${../patches/fsmon-musl-cmsg.patch}
+      '';
+      postConfigure = ''
+        patch -d ../fsmon-${fsmonVersion}-vendor/source-registry-0/proc-connector-0.3.0 -p1 \
+          < ${../patches/proc-connector-musl-msghdr.patch}
+      '';
+      doCheck = false;
+      installPhase = ''
+        runHook preInstall
+        install -Dm755 target/${packageSet.stdenv.hostPlatform.rust.rustcTarget}/release/fsmon "$out/bin/fsmon"
+        runHook postInstall
+      '';
+      postInstall = "";
+    };
 in {
+  fsmon = mkNixpkgsBinary {
+    name = "fsmon";
+    synopsis = "Monitor filesystem changes with process attribution";
+    systems = linuxSystems;
+    packageFor = fsmonPackageFor;
+  };
+
   binwalk = mkNixpkgsBinary {
     name = "binwalk";
     synopsis = "Analyze firmware images and embedded files";

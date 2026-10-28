@@ -1,0 +1,20 @@
+--- a/src/socket.rs
++++ b/src/socket.rs
+@@ -170,9 +170,8 @@
+-        let msg_hdr = libc::msghdr {
+-            msg_name: std::ptr::null_mut(),
+-            msg_namelen: 0,
+-            msg_iov: &iov as *const libc::iovec as *mut libc::iovec,
+-            msg_iovlen: 1,
+-            msg_control: std::ptr::null_mut(),
+-            msg_controllen: 0,
+-            msg_flags: 0,
+-        };
++        let mut msg_hdr: libc::msghdr = unsafe { std::mem::zeroed() };
++        msg_hdr.msg_name = std::ptr::null_mut();
++        msg_hdr.msg_namelen = 0;
++        msg_hdr.msg_iov = &iov as *const libc::iovec as *mut libc::iovec;
++        msg_hdr.msg_iovlen = 1;
++        msg_hdr.msg_control = std::ptr::null_mut();
++        msg_hdr.msg_controllen = 0;
++        msg_hdr.msg_flags = 0;
