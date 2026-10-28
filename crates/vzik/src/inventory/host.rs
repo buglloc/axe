@@ -15,7 +15,7 @@ use super::{
     unavailable,
 };
 use crate::cli::{CapabilityId, Invocation, Request};
-use crate::procfs::{hex_u64, malformed, parse_u64};
+use crate::procfs::{self, hex_u64, malformed, parse_u64};
 use crate::protocol::{
     CapabilityReport, Coverage, ExecutionContext, Outcome, ProtocolError, RecordSink,
     check_deadline,
@@ -24,6 +24,11 @@ use crate::protocol::{
 const FIXED_SOURCE_BYTES: u64 = 512 << 10;
 const PROCESS_SOURCE_BYTES: u64 = 64 << 10;
 const PROCESS_DETAIL_VALUE_BYTES: usize = (crate::cli::MAX_LINE_BYTES / 32) as usize;
+const PROCESS_FD_MAX: usize = 4096;
+const PROCESS_FD_ENTRY_MAX: usize = 512;
+const PROCESS_FD_VALUE_BYTES: usize = 48 << 10;
+const PROCESS_FDINFO_SOURCE_BYTES: u64 = 16 << 10;
+const PROCESS_ANCESTRY_MAX: usize = 32;
 const MOUNT_SOURCE_BYTES: u64 = 16 << 20;
 const RESOLVER_SOURCE_BYTES: u64 = 256 << 10;
 const FILE_CHUNK_BYTES: usize = 48 << 10;
@@ -369,6 +374,7 @@ struct ProcessDetailCoverage {
     coverage: Coverage,
     sources: Map<String, Value>,
     limits_hit: Vec<&'static str>,
+    partial: bool,
 }
 
 impl ProcessDetailCoverage {
@@ -381,9 +387,11 @@ impl ProcessDetailCoverage {
     }
 
     fn partial(&self) -> bool {
-        self.sources
-            .values()
-            .any(|source| source["availability"] != "available")
+        self.partial
+            || self
+                .sources
+                .values()
+                .any(|source| source["availability"] != "available")
     }
 }
 
@@ -441,6 +449,7 @@ fn process_inspect<W: Write>(
     }
     data.insert("scope".into(), json!("collector_visible"));
     data.insert("resources".into(), resources);
+    data.insert("session".into(), process_session(&stat));
     let mut security_context_complete = !name_truncated;
 
     let status_path = root.join("status");
@@ -554,6 +563,9 @@ fn process_inspect<W: Write>(
         "security_context_complete".into(),
         json!(security_context_complete),
     );
+    process_ancestry(sink, deadline, pid, stat.ppid, &mut data, &mut detail)?;
+    process_security_metadata(sink, deadline, &root, &mut data, &mut detail)?;
+    process_fd_inventory(sink, deadline, &root, &mut data, &mut detail)?;
 
     let limits_path = root.join("limits");
     if let Some(bytes) = read_process_source(sink, deadline, "limits", &limits_path, &mut detail)?
@@ -614,6 +626,653 @@ fn process_inspect<W: Write>(
     } else {
         Outcome::Complete
     }))
+}
+
+fn process_session(stat: &ProcessStat<'_>) -> Value {
+    json!({
+        "process_group_id":stat.process_group_id,
+        "session_id":stat.session_id,
+        "tty": {
+            "device_number":stat.tty_number,
+            "foreground_process_group_id":stat.foreground_process_group_id,
+        },
+    })
+}
+
+fn process_ancestry<W: Write>(
+    sink: &mut RecordSink<'_, W>,
+    deadline: ExecutionContext<'_>,
+    pid: u32,
+    ppid: u32,
+    data: &mut Map<String, Value>,
+    detail: &mut ProcessDetailCoverage,
+) -> Result<(), ProtocolError> {
+    let source = PathBuf::from(format!("/proc/{pid}/stat"));
+    let mut parents = Vec::new();
+    let mut current = ppid;
+    let mut seen = Vec::new();
+
+    while current != 0 && parents.len() < PROCESS_ANCESTRY_MAX && !seen.contains(&current) {
+        check_deadline(deadline)?;
+        seen.push(current);
+        let path = PathBuf::from(format!("/proc/{current}/stat"));
+        let name = format!("ancestry.{}", parents.len());
+        let bytes = match read_bounded(&path, PROCESS_SOURCE_BYTES) {
+            Ok((bytes, truncated)) => {
+                detail.coverage.scanned += bytes.len() as u64;
+                if truncated {
+                    process_detail_limit(sink, &name, &path, "max_source_bytes", detail)?;
+                    detail.partial = true;
+                    break;
+                }
+                bytes
+            }
+            Err(error) => {
+                detail.partial = true;
+                process_source_result::<W, Vec<u8>>(sink, &name, &path, Err(error), detail)?;
+                break;
+            }
+        };
+
+        let Some(stat) = process_source_result(
+            sink,
+            &name,
+            &path,
+            parse_process_detail_stat(&bytes),
+            detail,
+        )?
+        else {
+            detail.partial = true;
+            break;
+        };
+        let (name_value, name_truncated) = process_detail_text(stat.name);
+        if name_truncated {
+            detail.partial = true;
+            process_detail_limit(sink, &name, &path, "max_line_bytes", detail)?;
+        }
+        parents.push(json!({
+            "pid":stat.pid,
+            "ppid":stat.ppid,
+            "name":name_value,
+            "state":text(stat.state),
+            "start_time_ticks":stat.start_ticks,
+        }));
+        current = stat.ppid;
+    }
+
+    if current != 0 && parents.len() == PROCESS_ANCESTRY_MAX {
+        detail.partial = true;
+        detail.coverage.truncated = true;
+        if !detail.limits_hit.contains(&"max_ancestry_depth") {
+            detail.limits_hit.push("max_ancestry_depth");
+        }
+        sink.diagnostic(
+            CapabilityId::ProcessInspect.id(),
+            "limit",
+            "limit_reached",
+            "limit_reached",
+            path_value(&source),
+            "process ancestry exceeded its bounded depth",
+            1,
+        )?;
+    }
+    data.insert("ancestry".into(), Value::Array(parents));
+    Ok(())
+}
+
+fn process_security_metadata<W: Write>(
+    sink: &mut RecordSink<'_, W>,
+    deadline: ExecutionContext<'_>,
+    root: &Path,
+    data: &mut Map<String, Value>,
+    detail: &mut ProcessDetailCoverage,
+) -> Result<(), ProtocolError> {
+    let mut metadata = Map::new();
+
+    let attr_path = root.join("attr/current");
+    if let Some(bytes) = read_process_source(sink, deadline, "attr.current", &attr_path, detail)? {
+        let (label, truncated) = process_detail_text(bytes.trim_ascii());
+        if !bytes.trim_ascii().is_empty() {
+            metadata.insert("security_label".into(), label);
+        }
+        if truncated {
+            process_detail_limit(sink, "attr.current", &attr_path, "max_line_bytes", detail)?;
+        }
+    }
+
+    for (source, field) in [("loginuid", "login_uid"), ("sessionid", "audit_session_id")] {
+        let path = root.join(source);
+        if let Some(bytes) = read_process_source(sink, deadline, source, &path, detail)?
+            && let Some(value) =
+                process_source_result(sink, source, &path, parse_process_u32(&bytes), detail)?
+        {
+            metadata.insert(field.into(), json!(value));
+        }
+    }
+
+    let exe_path = root.join("exe");
+    if let Some(file) = process_source_result(
+        sink,
+        "exe_metadata",
+        &exe_path,
+        fs::metadata(&exe_path),
+        detail,
+    )? {
+        let file_type = FileType::from_raw_mode(file.mode());
+        metadata.insert(
+            "file".into(),
+            json!({
+                "type":process_file_type(file_type),
+                "device":file.dev(),
+                "inode":file.ino(),
+                "mode":file.mode(),
+                "uid":file.uid(),
+                "gid":file.gid(),
+                "size_bytes":file.size(),
+                "hard_links":file.nlink(),
+            }),
+        );
+    }
+    if let Some(target) =
+        process_source_result(sink, "exe", &exe_path, fs::read_link(&exe_path), detail)?
+    {
+        metadata.insert(
+            "deleted".into(),
+            json!(target.as_os_str().as_bytes().ends_with(b" (deleted)")),
+        );
+    }
+
+    if !metadata.is_empty() {
+        data.insert("exec_metadata".into(), Value::Object(metadata));
+    }
+    Ok(())
+}
+
+fn process_fd_inventory<W: Write>(
+    sink: &mut RecordSink<'_, W>,
+    deadline: ExecutionContext<'_>,
+    root: &Path,
+    data: &mut Map<String, Value>,
+    detail: &mut ProcessDetailCoverage,
+) -> Result<(), ProtocolError> {
+    let fd_dir = root.join("fd");
+    let directory = match fs::read_dir(&fd_dir) {
+        Ok(directory) => directory,
+        Err(error) => {
+            process_source_result::<W, fs::ReadDir>(sink, "fd", &fd_dir, Err(error), detail)?;
+            return Ok(());
+        }
+    };
+    detail.sources.insert(
+        "fd".into(),
+        json!({"source":path_value(&fd_dir), "availability":"available"}),
+    );
+
+    let mut descriptors = Vec::new();
+    let mut skipped = 0_u64;
+    let mut descriptor_truncated = false;
+    for entry in directory {
+        if descriptors.len() > PROCESS_FD_MAX {
+            descriptor_truncated = true;
+            break;
+        }
+        check_deadline(deadline)?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                skipped += 1;
+                detail.partial = true;
+                continue;
+            }
+        };
+        let Some(fd) = entry
+            .file_name()
+            .as_bytes()
+            .iter()
+            .try_fold(0_u32, |value, byte| {
+                if !byte.is_ascii_digit() {
+                    return None;
+                }
+                value.checked_mul(10)?.checked_add(u32::from(byte - b'0'))
+            })
+        else {
+            skipped += 1;
+            continue;
+        };
+        descriptors.push((fd, entry.path()));
+    }
+    descriptors.sort_unstable_by_key(|(fd, _)| *fd);
+
+    let mut by_kind = BTreeMap::<String, u64>::new();
+    let mut pipe_fds = BTreeMap::<u64, Vec<u32>>::new();
+    let mut socket_inodes = BTreeMap::<u64, Vec<u32>>::new();
+    let mut entries = Vec::new();
+    let mut observed = 0_u64;
+    let mut vanished = 0_u64;
+    let mut denied = 0_u64;
+    let mut fdinfo_failures = 0_u64;
+    let mut fdinfo_truncated = false;
+    let mut output_size = 2_usize;
+    let mut output_truncated = descriptor_truncated;
+
+    for (index, (fd, path)) in descriptors.into_iter().enumerate() {
+        if index >= PROCESS_FD_MAX {
+            break;
+        }
+        check_deadline(deadline)?;
+        let target = match fs::read_link(&path) {
+            Ok(target) => target,
+            Err(error) => {
+                match error.kind() {
+                    io::ErrorKind::NotFound => vanished += 1,
+                    io::ErrorKind::PermissionDenied => denied += 1,
+                    _ => skipped += 1,
+                }
+                detail.partial = true;
+                continue;
+            }
+        };
+        observed += 1;
+        detail.coverage.scanned += 1;
+        let target_bytes = target.as_os_str().as_bytes();
+        let (mut kind, inode, subtype) = process_fd_target(target_bytes);
+        if let Some(inode) = inode {
+            if kind == "pipe" {
+                pipe_fds.entry(inode).or_default().push(fd);
+            } else if kind == "socket" {
+                socket_inodes.entry(inode).or_default().push(fd);
+            }
+        }
+
+        let mut entry = Map::new();
+        entry.insert("fd".into(), json!(fd));
+        if let Some(subtype) = subtype {
+            entry.insert("subtype".into(), text(subtype));
+        }
+        let (target_value, target_truncated) =
+            process_bounded_text(target_bytes, PROCESS_FD_TEXT_BYTES);
+        entry.insert("target".into(), target_value);
+        if target_truncated {
+            detail.partial = true;
+            output_truncated = true;
+        }
+        if let Some(inode) = inode {
+            entry.insert("inode".into(), json!(inode));
+        }
+
+        if let Ok(file) = fs::metadata(&path) {
+            let file_type = FileType::from_raw_mode(file.mode());
+            if kind == "path" {
+                kind = process_file_type(file_type);
+            }
+            entry.insert(
+                "file".into(),
+                json!({
+                    "type":process_file_type(file_type),
+                    "device":file.dev(),
+                    "inode":file.ino(),
+                    "mode":file.mode(),
+                    "uid":file.uid(),
+                    "gid":file.gid(),
+                    "size_bytes":file.size(),
+                }),
+            );
+        } else {
+            skipped += 1;
+            detail.partial = true;
+        }
+        *by_kind.entry(kind.to_owned()).or_default() += 1;
+        entry.insert("kind".into(), json!(kind));
+
+        let fdinfo_path = root.join("fdinfo").join(fd.to_string());
+        match read_bounded(&fdinfo_path, PROCESS_FDINFO_SOURCE_BYTES) {
+            Ok((bytes, truncated)) => {
+                detail.coverage.scanned += bytes.len() as u64;
+                if truncated {
+                    fdinfo_failures += 1;
+                    fdinfo_truncated = true;
+                    skipped += 1;
+                    detail.partial = true;
+                } else if let Ok(info) = parse_process_fdinfo(&bytes) {
+                    entry.insert("fdinfo".into(), info);
+                } else {
+                    fdinfo_failures += 1;
+                    skipped += 1;
+                    detail.partial = true;
+                }
+            }
+            Err(error) => {
+                fdinfo_failures += 1;
+                detail.partial = true;
+                if error.kind() == io::ErrorKind::PermissionDenied {
+                    denied += 1;
+                } else {
+                    vanished += 1;
+                }
+            }
+        }
+
+        let value = Value::Object(entry);
+        let added = json_bytes(&value).map_err(|error| {
+            ProtocolError::Internal(format!("serialize process FD entry: {error}"))
+        })?;
+        if entries.len() < PROCESS_FD_ENTRY_MAX
+            && output_size + added + usize::from(!entries.is_empty()) <= PROCESS_FD_VALUE_BYTES
+        {
+            output_size += added + usize::from(!entries.is_empty());
+            entries.push(value);
+        } else {
+            output_truncated = true;
+        }
+    }
+
+    if fdinfo_truncated {
+        output_truncated = true;
+        if !detail.limits_hit.contains(&"max_source_bytes") {
+            detail.limits_hit.push("max_source_bytes");
+        }
+    }
+    if output_truncated {
+        detail.partial = true;
+        detail.coverage.truncated = true;
+        if !detail.limits_hit.contains(&"max_fd_inventory") {
+            detail.limits_hit.push("max_fd_inventory");
+        }
+    }
+    if fdinfo_failures > 0 {
+        let availability = if fdinfo_truncated {
+            "truncated"
+        } else {
+            "io_error"
+        };
+        detail.sources.insert(
+            "fdinfo".into(),
+            json!({"source":path_value(&root.join("fdinfo")), "availability":availability}),
+        );
+        if fdinfo_truncated {
+            sink.diagnostic(
+                CapabilityId::ProcessInspect.id(),
+                "limit",
+                "limit_reached",
+                "limit_reached",
+                path_value(&root.join("fdinfo")),
+                "one or more process fdinfo files exceeded the bounded read limit",
+                1,
+            )?;
+        } else {
+            source_failure(
+                sink,
+                CapabilityId::ProcessInspect,
+                &root.join("fdinfo"),
+                &io::Error::other(format!("{fdinfo_failures} fdinfo entries were unavailable")),
+                &mut detail.coverage,
+            )?;
+        }
+    } else {
+        detail.sources.insert(
+            "fdinfo".into(),
+            json!({"source":path_value(&root.join("fdinfo")), "availability":"available"}),
+        );
+    }
+
+    let sockets = process_socket_map(
+        sink,
+        deadline,
+        root,
+        socket_inodes.keys().copied().collect(),
+        detail,
+    )?;
+    let pipes = pipe_fds
+        .iter()
+        .filter_map(|(inode, fds)| (fds.len() > 1).then_some((*inode, fds.clone())))
+        .collect::<BTreeMap<_, _>>();
+    for entry in &mut entries {
+        let Some(object) = entry.as_object_mut() else {
+            continue;
+        };
+        let Some(inode) = object.get("inode").and_then(Value::as_u64) else {
+            continue;
+        };
+        let is_socket = object.get("kind").and_then(Value::as_str) == Some("socket");
+        let is_pipe = object.get("kind").and_then(Value::as_str) == Some("pipe");
+        if is_socket && let Some(socket) = sockets.get(&inode) {
+            object.insert("socket".into(), socket.clone());
+        }
+        if is_pipe && let Some(peer_fds) = pipes.get(&inode) {
+            object.insert("peer_fds".into(), json!(peer_fds));
+        }
+    }
+
+    data.insert(
+        "fds".into(),
+        json!({
+            "summary": {
+                "observed":observed,
+                "by_kind":by_kind,
+                "skipped":skipped,
+                "vanished":vanished,
+                "denied":denied,
+            },
+            "entries":entries,
+            "coverage": {
+                "observed":observed,
+                "skipped":skipped,
+                "denied":denied,
+                "vanished":vanished,
+                "truncated":output_truncated,
+            },
+        }),
+    );
+    Ok(())
+}
+
+const PROCESS_FD_TEXT_BYTES: usize = 2048;
+
+fn process_bounded_text(bytes: &[u8], maximum: usize) -> (Value, bool) {
+    let length = bytes.len().min(maximum);
+    (text(&bytes[..length]), length < bytes.len())
+}
+
+fn process_file_type(file_type: FileType) -> &'static str {
+    if file_type.is_file() {
+        "regular_file"
+    } else if file_type.is_dir() {
+        "directory"
+    } else if file_type.is_symlink() {
+        "symlink"
+    } else if file_type.is_socket() {
+        "socket"
+    } else if file_type.is_fifo() {
+        "fifo"
+    } else if file_type.is_char_device() {
+        "character_device"
+    } else if file_type.is_block_device() {
+        "block_device"
+    } else {
+        "other"
+    }
+}
+
+fn process_fd_target(target: &[u8]) -> (&'static str, Option<u64>, Option<&[u8]>) {
+    if let Some(inode) = procfs::socket_inode(target) {
+        return ("socket", Some(inode), None);
+    }
+    if let Some(value) = target
+        .strip_prefix(b"pipe:[")
+        .and_then(|value| value.strip_suffix(b"]"))
+        .and_then(|value| parse_u64(value).ok())
+    {
+        return ("pipe", Some(value), None);
+    }
+    if let Some(subtype) = target
+        .strip_prefix(b"anon_inode:[")
+        .and_then(|value| value.strip_suffix(b"]"))
+    {
+        return ("anon_inode", None, Some(subtype));
+    }
+    ("path", None, None)
+}
+
+fn parse_process_fdinfo(bytes: &[u8]) -> io::Result<Value> {
+    let mut data = Map::new();
+    let mut epoll_targets = Vec::new();
+    for line in bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        let Some(separator) = line.iter().position(|byte| *byte == b':') else {
+            return Err(malformed("malformed process fdinfo line"));
+        };
+        let key = &line[..separator];
+        let value = line[separator + 1..].trim_ascii();
+        match key {
+            b"pos" => {
+                data.insert("position".into(), json!(parse_u64(value)?));
+            }
+            b"flags" => {
+                data.insert("flags".into(), text(value));
+            }
+            b"mnt_id" => {
+                data.insert("mount_id".into(), json!(parse_u64(value)?));
+            }
+            b"ino" => {
+                data.insert("inode".into(), json!(parse_u64(value)?));
+            }
+            b"tfd" => {
+                let fd = value
+                    .split(|byte| byte.is_ascii_whitespace())
+                    .next()
+                    .ok_or_else(|| malformed("missing epoll target fd"))?;
+                epoll_targets.push(parse_u64(fd)?);
+            }
+            _ => {}
+        }
+    }
+    if !epoll_targets.is_empty() {
+        data.insert("epoll_targets".into(), json!(epoll_targets));
+    }
+    Ok(Value::Object(data))
+}
+
+fn process_socket_state(protocol: &str, state: u8) -> &'static str {
+    if protocol == "udp" {
+        return match state {
+            0x07 => "unconnected",
+            0x01 => "established",
+            _ => "unknown",
+        };
+    }
+    procfs::tcp_state(state).unwrap_or("unknown")
+}
+
+fn process_socket_map<W: Write>(
+    sink: &mut RecordSink<'_, W>,
+    deadline: ExecutionContext<'_>,
+    root: &Path,
+    wanted: Vec<u64>,
+    detail: &mut ProcessDetailCoverage,
+) -> Result<BTreeMap<u64, Value>, ProtocolError> {
+    let wanted = wanted
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    if wanted.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut sockets = BTreeMap::new();
+    for (name, protocol, family) in [
+        ("tcp", "tcp", "ipv4"),
+        ("tcp6", "tcp", "ipv6"),
+        ("udp", "udp", "ipv4"),
+        ("udp6", "udp", "ipv6"),
+    ] {
+        check_deadline(deadline)?;
+        let path = root.join("net").join(name);
+        let bytes = match read_bounded(&path, PROCESS_SOURCE_BYTES) {
+            Ok((bytes, truncated)) => {
+                detail.coverage.scanned += bytes.len() as u64;
+                if truncated {
+                    process_detail_limit(
+                        sink,
+                        &format!("net.{name}"),
+                        &path,
+                        "max_source_bytes",
+                        detail,
+                    )?;
+                    None
+                } else {
+                    process_source_result(sink, &format!("net.{name}"), &path, Ok(bytes), detail)?
+                }
+            }
+            Err(error) => {
+                process_source_result(sink, &format!("net.{name}"), &path, Err(error), detail)?
+            }
+        };
+        let Some(bytes) = bytes else {
+            continue;
+        };
+        for line in bytes.split(|byte| *byte == b'\n').skip(1) {
+            if line.is_empty() {
+                continue;
+            }
+            let socket = match procfs::parse_inet_socket(line, family == "ipv6") {
+                Ok(socket) if wanted.contains(&socket.inode) => socket,
+                Ok(_) => continue,
+                Err(_) => {
+                    detail.partial = true;
+                    continue;
+                }
+            };
+            sockets.insert(
+                socket.inode,
+                json!({
+                    "protocol":protocol,
+                    "family":family,
+                    "local_address":socket.local.ip().to_string(),
+                    "local_port":socket.local.port(),
+                    "remote_address":socket.remote.ip().to_string(),
+                    "remote_port":socket.remote.port(),
+                    "state":process_socket_state(protocol, socket.state),
+                    "uid":socket.uid,
+                    "source":path_value(&path),
+                }),
+            );
+        }
+    }
+
+    let path = root.join("net/unix");
+    let bytes = match read_bounded(&path, PROCESS_SOURCE_BYTES) {
+        Ok((bytes, truncated)) => {
+            detail.coverage.scanned += bytes.len() as u64;
+            if truncated {
+                process_detail_limit(sink, "net.unix", &path, "max_source_bytes", detail)?;
+                None
+            } else {
+                process_source_result(sink, "net.unix", &path, Ok(bytes), detail)?
+            }
+        }
+        Err(error) => process_source_result(sink, "net.unix", &path, Err(error), detail)?,
+    };
+    if let Some(bytes) = bytes {
+        for line in bytes.split(|byte| *byte == b'\n').skip(1) {
+            let Some(socket) = procfs::parse_unix_socket(line) else {
+                continue;
+            };
+            if wanted.contains(&socket.inode) {
+                let mut value = Map::new();
+                value.insert("protocol".into(), json!("unix"));
+                value.insert("family".into(), json!("unix"));
+                value.insert("state".into(), json!(format!("{:02x}", socket.state)));
+                value.insert("socket_type".into(), json!(socket.socket_type));
+                value.insert("listening".into(), json!(socket.listening()));
+                value.insert("source".into(), path_value(&path));
+                if let Some(path) = socket.path {
+                    value.insert("path".into(), text(path));
+                }
+                sockets.insert(socket.inode, Value::Object(value));
+            }
+        }
+    }
+    Ok(sockets)
 }
 
 fn read_process_source<W: Write>(
@@ -1209,6 +1868,10 @@ struct ProcessStat<'a> {
     name: &'a [u8],
     state: &'a [u8],
     ppid: u32,
+    process_group_id: u32,
+    session_id: u32,
+    tty_number: i64,
+    foreground_process_group_id: i64,
     start_ticks: u64,
     cpu_user_ticks: u64,
     cpu_system_ticks: u64,
@@ -1234,6 +1897,10 @@ fn parse_process_detail_stat(bytes: &[u8]) -> io::Result<ProcessStat<'_>> {
         name,
         state: fields[0],
         ppid: parse_ascii_u32(fields[1])?,
+        process_group_id: parse_ascii_u32(fields[2])?,
+        session_id: parse_ascii_u32(fields[3])?,
+        tty_number: parse_ascii_i64(fields[4])?,
+        foreground_process_group_id: parse_ascii_i64(fields[5])?,
         start_ticks: parse_u64(fields[19])?,
         cpu_user_ticks: parse_u64(fields[11])?,
         cpu_system_ticks: parse_u64(fields[12])?,
@@ -1635,6 +2302,17 @@ fn parse_ascii_u32(value: &[u8]) -> io::Result<u32> {
     })
 }
 
+fn parse_ascii_i64(value: &[u8]) -> io::Result<i64> {
+    std::str::from_utf8(value)
+        .map_err(|_| invalid_data())?
+        .parse::<i64>()
+        .map_err(|_| invalid_data())
+}
+
+fn parse_process_u32(value: &[u8]) -> io::Result<u32> {
+    parse_ascii_u32(value.trim_ascii())
+}
+
 fn invalid_data() -> io::Error {
     malformed("malformed source")
 }
@@ -1782,6 +2460,20 @@ mod tests {
             (json!([]), true),
         );
         assert!(process_cgroup_membership(b"0::/visible:name\ninvalid\n", budget).is_err());
+    }
+
+    #[test]
+    fn process_fdinfo_preserves_open_flags_and_epoll_targets() {
+        let value = parse_process_fdinfo(
+            b"pos: 7\nflags: 02000002\nmnt_id: 12\nino: 34\ntfd: 5 events: 19 data: 7\n",
+        )
+        .expect("valid fdinfo");
+        assert_eq!(value["position"], 7);
+        assert_eq!(value["flags"]["display"], "02000002");
+        assert_eq!(value["mount_id"], 12);
+        assert_eq!(value["inode"], 34);
+        assert_eq!(value["epoll_targets"], json!([5]));
+        assert!(parse_process_fdinfo(b"pos: nope\n").is_err());
     }
 
     #[test]

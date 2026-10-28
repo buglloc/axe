@@ -152,7 +152,7 @@ Current data kinds and key fields:
 | `kernel.sysctls` | `kernel_sysctl` | key, value, source |
 | `security.posture` | `security_control` | category, control name, runtime value, source |
 | `process.list` | `process` | PID/PPID, credentials, capabilities, seccomp, namespaces, executable and command line |
-| `process.inspect` | `process_detail` | one PID's security context, resource counters, rlimits, I/O and source availability |
+| `process.inspect` | `process_detail` | one PID's security, execution context, bounded FD inventory, resource counters, rlimits, I/O and source availability |
 | `network.interfaces` | `network_interface` | name, index/link metadata or traffic counters |
 | `network.addresses` | `network_address` | interface, family, address/prefix, broadcast or destination |
 | `network.resolvers` | `resolver_directive` | resolver, hosts, NSS, and systemd-resolved directives with source and line |
@@ -323,6 +323,17 @@ byte-string hexadecimal `cap_inheritable`, `cap_permitted`, `cap_effective`,
 Namespace keys are cgroup/ipc/mnt/net/pid/user/uts with available link targets
 as byte strings. Missing optional fields mean unavailable evidence, not zero.
 
+`session` contains `process_group_id` and `session_id` as u32 values and a `tty`
+object with signed `device_number` and `foreground_process_group_id` values.
+`ancestry` is an ordered parent-to-root array of bounded process summaries with
+`pid`, `ppid`, `name`, `state`, and `start_time_ticks`.
+
+`exec_metadata` is optional. Its `file` object contains the target executable's
+type, device, inode, mode, UID, GID, size, and hard-link count. It can also
+contain `deleted`, `security_label`, `login_uid`, and `audit_session_id`.
+`security_label` is the current LSM label when `/proc/PID/attr/current`
+provides one; its presence does not identify a particular LSM.
+
 | Resource field | Type and unit |
 |---|---|
 | `rss_bytes`, `virtual_size_bytes` | u64 bytes; RSS uses checked pages × page size |
@@ -339,13 +350,28 @@ through read/write interfaces, including cached I/O), `read_calls`, `write_calls
 `accounted_cancelled_storage_write_bytes` (kernel storage-layer accounting).
 Zero storage accounting does not establish that all reads were served from cache.
 
-`sources` maps stat/status/cmdline/cgroup/exe/cwd/root/limits/io and
-`ns.{cgroup,ipc,mnt,net,pid,user,uts}` to `{source, availability}`.
-`source` is a byte-string `/proc/PID/...` path. Availability is `available`,
-`truncated`, `not_found`, `permission_denied`, `malformed`, or `io_error`.
-Reads are bounded to 64 KiB per file. Variable output fields have a 4 KiB
-serialized budget; shortening is explicit, with `limit_reached`, partial
-coverage, and `max_source_bytes` or `max_line_bytes` in `limits_hit`.
+`fds` is an always-requested bounded inventory. `summary.observed` is the number
+of descriptors acquired, with `by_kind` counts for `path`, `regular_file`,
+`directory`, `socket`, `pipe`, `anon_inode`, and other observed kinds; `entries`
+contain `fd`, `kind`, byte-string `target`, optional `inode`, file metadata, and
+parsed `fdinfo`. `fdinfo` contains `position`, byte-string octal `flags`,
+`mount_id`, `inode`, and optional `epoll_targets`. Socket entries can contain
+namespace-local endpoint and state data from `/proc/PID/net`; pipe entries can
+contain `peer_fds` for other descriptors in the same process. `fds.coverage`
+reports observed, skipped, denied, vanished, and truncated descriptors.
+
+`sources` maps stat/status/cmdline/cgroup/exe/cwd/root/limits/io, the FD
+directories, `fdinfo`, optional security files, ancestry stat files, and
+namespace-local socket tables to `{source, availability}`. Source keys include
+`attr.current`, `loginuid`, `sessionid`, `exe_metadata`, `fd`, `fdinfo`,
+`ancestry.N`, and `net.{tcp,tcp6,udp,udp6,unix}`. `source` is a byte-string
+`/proc/PID/...` path. Availability is `available`, `truncated`, `not_found`,
+`permission_denied`, `malformed`, or `io_error`.
+Reads are bounded to 64 KiB per process source and 16 KiB per `fdinfo` file.
+An FD directory is capped at 4096 descriptors; emitted entries are capped at
+512 entries and 48 KiB. Ancestry is capped at 32 parents. Variable output
+shortening is explicit, with `limit_reached`, partial coverage, and the
+corresponding limit in `limits_hit`.
 Source-read truncation omits fields; output shortening can retain prefixes.
 
 Stat is mandatory and re-read before emission. If unreadable or malformed,
@@ -354,7 +380,8 @@ the capability is unavailable and emits no detail. Detected PID reuse emits
 serialized identity. Optional source failures retain usable facts with
 partial coverage. Complete means all declared sources were available; it
 does not imply an atomic or permanently valid process snapshot.
-No environ, smaps, memory-map, or FD inventory is acquired.
+No environment variables, process memory, `smaps`, or raw memory-map inventory
+is acquired.
 
 ## Capture receipt
 

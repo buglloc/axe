@@ -373,13 +373,32 @@ fn process_inspect_live_child() {
         assert_eq!(limit[field], expected);
     }
     assert_eq!(limit["units"]["display"], "files");
-    for source in ["stat", "status", "cmdline", "limits", "io"] {
+    assert!(detail["session"]["session_id"].is_u64());
+    assert_eq!(
+        detail["ancestry"][0]["pid"],
+        Value::from(std::process::id()),
+    );
+    assert!(detail["exec_metadata"]["file"]["inode"].is_u64());
+    assert_eq!(detail["fds"]["coverage"]["truncated"], false,);
+    assert!(detail["fds"]["summary"]["observed"].as_u64().unwrap_or(0) >= 2);
+    assert!(
+        detail["fds"]["entries"]
+            .as_array()
+            .expect("fd entries")
+            .iter()
+            .any(|entry| entry["fdinfo"].is_object()),
+    );
+    for source in ["stat", "status", "cmdline", "limits", "io", "fd", "fdinfo"] {
         assert_eq!(detail["sources"][source]["availability"], "available");
         assert_eq!(
             detail["sources"][source]["source"]["display"],
             root.join(source).to_str().expect("proc source path"),
         );
     }
+    assert_eq!(
+        detail["sources"]["exe_metadata"]["availability"],
+        "available"
+    );
     assert_eq!(records.last().expect("terminal")["type"], "stream_end");
 }
 

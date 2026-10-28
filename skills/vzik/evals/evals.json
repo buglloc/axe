@@ -143,8 +143,8 @@
     {
       "id": 11,
       "name": "слепой-ресурсы-одного-процесса",
-      "prompt": "На этой Linux-машине создай собственный короткоживущий sleeping child и исследуй только его: память, накопленное CPU-время, ограничения ресурсов и доступность источников. Нужно ограниченное read-only наблюдение без перечисления остальных процессов, environ, smaps, maps и FD inventory. Не устанавливай программы и не исследуй сеть. Объясни единицы и пробелы покрытия; заверши свой child.",
-      "expected_output": "Выбирается process.inspect для PID собственного child через capture в новый приватный каталог; данные и coverage выбираются из того же JSONL через jq. Агент сохраняет declared units и source availability, не расширяет сбор и завершает child.",
+      "prompt": "На этой Linux-машине создай собственный короткоживущий sleeping child и исследуй только его: память, накопленное CPU-время, ограничения, bounded FD/fdinfo inventory, executable metadata, ancestry/session/TTY и доступность источников. Нужно ограниченное read-only наблюдение без перечисления остальных процессов, environ, smaps и maps. Не устанавливай программы и не исследуй сеть. Объясни единицы и пробелы покрытия; заверши свой child.",
+      "expected_output": "Выбирается process.inspect для PID собственного child через capture в новый приватный каталог; данные и coverage выбираются из того же JSONL через jq. Агент сохраняет declared units и source availability, использует bounded FD inventory без широкого process enumeration, не расширяет сбор и завершает child.",
       "files": [],
       "expectations": [
         "Для наблюдения используется Vzik process.inspect ровно с PID одного собственного child; повторные снимки не смешивают разные PID",

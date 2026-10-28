@@ -639,7 +639,7 @@ static CAPABILITIES: [CapabilitySpec; 39] = [
         capability: CapabilityId::ProcessInspect,
         id: "process.inspect",
         command: &["process", "inspect"],
-        description: "Bounded security context, resources, and limits for one visible process",
+        description: "Bounded security, execution context, and FD inventory for one visible process",
         request: RequestSpec::ProcessInspect,
         data_kinds: &["process_detail"],
         baseline: false,
