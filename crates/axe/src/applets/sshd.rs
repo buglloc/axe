@@ -1993,9 +1993,13 @@ mod tests {
         let copy =
             std::env::temp_dir().join(format!("axe-preserved-executable-{}", std::process::id()));
         let _ = std::fs::remove_file(&copy);
-
-        std::fs::copy(std::env::current_exe().expect("locate test binary"), &copy)
-            .expect("copy test binary");
+        crate::executable::test_link_or_copy(
+            std::env::current_exe()
+                .expect("locate test binary")
+                .as_path(),
+            &copy,
+        )
+        .expect("link test binary");
         let executable = std::fs::File::open(&copy).expect("open copied executable");
         std::fs::remove_file(&copy).expect("unlink copied executable");
 

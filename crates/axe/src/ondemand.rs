@@ -487,9 +487,8 @@ mod tests {
 
         let count = root.join("count");
         let external_candidate = external.join("store-tool");
-        // Copy in an owned subprocess: parallel tests can fork while a file
-        // is writable and retain its descriptor until exec despite CLOEXEC.
-        // Waiting for the copier to exit prevents ETXTBSY on first execution.
+        // Prepare in an owned subprocess so parallel tests cannot retain a
+        // writable executable descriptor until exec.
         let prepared = Command::new(&current)
             .args([
                 "--exact",
@@ -532,7 +531,8 @@ mod tests {
     fn external_candidate_fixture() {
         let current = std::env::current_exe().expect("locate fallback candidate");
         if let Some(destination) = std::env::var_os("AXE_TEST_COPY_EXECUTABLE_TO") {
-            std::fs::copy(&current, destination).expect("copy external candidate");
+            crate::executable::test_link_or_copy(&current, Path::new(&destination))
+                .expect("link external candidate");
             return;
         }
         if current.file_name() != Some(OsStr::new("store-tool")) {

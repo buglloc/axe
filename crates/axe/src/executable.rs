@@ -54,6 +54,14 @@ const NOT_FOUND: &str = "cannot locate AXE executable for re-exec";
 pub(crate) const RELAY_PROBE_FLAG: &str = "--axe-internal-self-exec-probe";
 pub(crate) const DOCTOR_PROBE_FLAG: &str = "--axe-internal-doctor-probe";
 
+#[cfg(test)]
+pub(crate) fn test_link_or_copy(source: &Path, destination: &Path) -> io::Result<()> {
+    match fs::hard_link(source, destination) {
+        Ok(()) => Ok(()),
+        Err(_) => fs::copy(source, destination).map(|_| ()),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ExecutableStartupFacts {
     pub argv0: OsString,
@@ -1722,8 +1730,9 @@ mod tests {
         let scratch = Scratch::new("refresh-fallback");
         let original = scratch.0.join("original");
         let relay = scratch.0.join("relay");
-        fs::copy(current_executable(), &original).expect("copy original executable");
-        fs::copy(current_executable(), &relay).expect("copy relay executable");
+        test_link_or_copy(current_executable().as_path(), &original)
+            .expect("link original executable");
+        test_link_or_copy(current_executable().as_path(), &relay).expect("link relay executable");
         let original = fs::canonicalize(original).expect("canonicalize original executable");
         let relay = fs::canonicalize(relay).expect("canonicalize relay executable");
         let executable =
@@ -1751,7 +1760,7 @@ mod tests {
     fn retained_descriptor_rejects_replacement_and_runs_original_image() {
         let scratch = Scratch::new("replacement");
         let path = scratch.0.join("axe");
-        fs::copy(current_executable(), &path).expect("copy executable");
+        test_link_or_copy(current_executable().as_path(), &path).expect("link executable");
         let executable = Executable::from_filesystem_path(&path).expect("open copied executable");
         let _ = executable.relay.set(Err(disabled_relay_failure()));
 
@@ -1787,7 +1796,7 @@ mod tests {
     fn descriptor_capability_survives_unlink_without_proc_path() {
         let scratch = Scratch::new("unlink");
         let path = scratch.0.join("axe");
-        fs::copy(current_executable(), &path).expect("copy executable");
+        test_link_or_copy(current_executable().as_path(), &path).expect("link executable");
         let executable = Executable::from_filesystem_path(&path).expect("open copied executable");
         let _ = executable.relay.set(Err(disabled_relay_failure()));
         fs::remove_file(&path).expect("unlink copied executable");
