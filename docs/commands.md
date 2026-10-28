@@ -340,9 +340,11 @@ sets the sample count; it does not emulate procps NUMA, once or human-size modes
 
 `lsof` inspects visible `/proc` cwd, root, executable, memory-mapped file and
 descriptor entries. Like lsof, it lists each mapped file once per device and
-inode, skips the executable, reports a deleted mapped file as `DEL`, and appends
-`(stat: ...)` or `(path dev=...,inode=...)` to the name when the path no longer
-names the mapped file; unlike lsof, a mapped path keeps embedded whitespace.
+inode, skips the mapping whose device and inode match the executable's
+stat(2), reports a deleted mapped file as `DEL`, and appends `(stat: ...)` or
+`(path dev=...,inode=...)` to the name when the path no longer names the mapped
+file, so the executable can also appear as `mem` on file systems where those
+differ; unlike lsof, a mapped path keeps embedded whitespace.
 `-a` intersects requested selection classes; otherwise they are unioned. It
 supports
 the `-F` field subset `p`, `c`, `f`, `n`, `t`, `u`, `L`, `i`, `D`, `s`, `P`,
