@@ -1977,7 +1977,6 @@ fn no_proc_uses_filesystem_reexec_and_cleans_unusable_bridge() {
         let reservation =
             std::net::TcpListener::bind("127.0.0.1:0").expect("reserve SSH listen address");
         let address = reservation.local_addr().expect("read SSH listen address");
-        drop(reservation);
         let child = Command::new(&axe)
             .env_clear()
             .env("HOME", &root)
@@ -1994,6 +1993,7 @@ fn no_proc_uses_filesystem_reexec_and_cleans_unusable_bridge() {
             .stderr(Stdio::piped())
             .spawn()
             .expect("start proc-free sshd");
+        drop(reservation);
         let sshd = stop_process_after_ready(child, address);
         assert!(
             sshd.status.success(),
@@ -2363,7 +2363,13 @@ fn stop_process_after_ready(
             break;
         }
         if let Some(status) = child.try_wait().expect("poll process") {
-            panic!("process exited before listening: {status}");
+            let output = child
+                .wait_with_output()
+                .expect("collect failed sshd output");
+            panic!(
+                "process exited before listening: {status}\nstderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         assert!(Instant::now() < deadline, "process did not start");
         thread::sleep(Duration::from_millis(10));
@@ -2504,7 +2510,6 @@ fn sshd_starts_without_writable_storage() {
         .expect("make sshd workdir read-only");
     let reservation = TcpListener::bind("127.0.0.1:0").expect("reserve SSH port");
     let address = reservation.local_addr().expect("read reserved address");
-    drop(reservation);
 
     let child = Command::new(env!("CARGO_BIN_EXE_axe"))
         .env_clear()
@@ -2525,6 +2530,7 @@ fn sshd_starts_without_writable_storage() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("start sshd");
+    drop(reservation);
     let output = stop_process_after_ready(child, address);
     fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o755))
         .expect("restore workdir permissions");
@@ -2562,7 +2568,6 @@ fn sshd_selects_workdir_and_store_once_when_unspecified() {
     let scratch = Scratch::new("sshd-auto-workdir");
     let reservation = TcpListener::bind("127.0.0.1:0").expect("reserve SSH port");
     let address = reservation.local_addr().expect("read reserved address");
-    drop(reservation);
 
     let child = Command::new(env!("CARGO_BIN_EXE_axe"))
         .env_clear()
@@ -2581,6 +2586,7 @@ fn sshd_selects_workdir_and_store_once_when_unspecified() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("start sshd");
+    drop(reservation);
     let output = stop_process_after_ready(child, address);
 
     assert!(
@@ -2604,7 +2610,6 @@ fn sshd_publishes_selected_path_bridge_reused_by_shells() {
     let scratch = Scratch::new("sshd-bridge");
     let reservation = TcpListener::bind("127.0.0.1:0").expect("reserve SSH port");
     let address = reservation.local_addr().expect("read reserved address");
-    drop(reservation);
 
     let child = Command::new(env!("CARGO_BIN_EXE_axe"))
         .env_clear()
@@ -2623,6 +2628,7 @@ fn sshd_publishes_selected_path_bridge_reused_by_shells() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("start sshd");
+    drop(reservation);
 
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
