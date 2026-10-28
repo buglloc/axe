@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::net::Ipv6Addr;
@@ -515,16 +515,22 @@ fn parse_unix_sockets<W: Write>(
     Ok(())
 }
 
+struct SocketOwner {
+    name: Option<Value>,
+    exe: Option<Value>,
+    fds: Vec<u32>,
+}
+
 fn socket_owners(
     wanted: &HashSet<u64>,
     deadline: ExecutionContext<'_>,
     coverage: &mut Coverage,
     partial: &mut bool,
 ) -> Result<HashMap<u64, Vec<Value>>, ProtocolError> {
-    let mut owners = HashMap::<u64, Vec<Value>>::new();
+    let mut owner_map = HashMap::<u64, BTreeMap<u32, SocketOwner>>::new();
     let Ok(entries) = fs::read_dir("/proc") else {
         *partial = true;
-        return Ok(owners);
+        return Ok(HashMap::new());
     };
 
     let mut lowest = BinaryHeap::<u32>::with_capacity(MAX_OWNERSHIP_PROCESSES + 1);
@@ -553,7 +559,6 @@ fn socket_owners(
     pids.sort_unstable();
 
     let mut total_fds = 0;
-    let mut seen = HashSet::<(u64, u32)>::new();
     for pid in pids {
         check_deadline(deadline)?;
         let process_path = Path::new("/proc").join(pid.to_string());
@@ -584,19 +589,33 @@ fn socket_owners(
                 break;
             }
             total_fds += 1;
-            let Ok(target) = fd.and_then(|entry| fs::read_link(entry.path())) else {
+            let Ok(fd) = fd else {
+                continue;
+            };
+            let Some(fd_number) = std::str::from_utf8(fd.file_name().as_bytes())
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let Ok(target) = fs::read_link(fd.path()) else {
                 continue;
             };
             let bytes = target.as_os_str().as_bytes();
             let Some(inode) = socket_inode(bytes) else {
                 continue;
             };
-            if wanted.contains(&inode) && seen.insert((inode, pid)) {
-                owners.entry(inode).or_default().push(json!({
-                    "pid":pid,
-                    "name":name,
-                    "exe":exe,
-                }));
+            if wanted.contains(&inode) {
+                let owner = owner_map
+                    .entry(inode)
+                    .or_default()
+                    .entry(pid)
+                    .or_insert_with(|| SocketOwner {
+                        name: name.clone(),
+                        exe: exe.clone(),
+                        fds: Vec::new(),
+                    });
+                owner.fds.push(fd_number);
             }
         }
 
@@ -605,7 +624,24 @@ fn socket_owners(
         }
     }
 
-    Ok(owners)
+    Ok(owner_map
+        .into_iter()
+        .map(|(inode, owners)| {
+            let processes = owners
+                .into_iter()
+                .map(|(pid, mut owner)| {
+                    owner.fds.sort_unstable();
+                    json!({
+                        "pid":pid,
+                        "fds":owner.fds,
+                        "name":owner.name,
+                        "exe":owner.exe,
+                    })
+                })
+                .collect();
+            (inode, processes)
+        })
+        .collect())
 }
 
 fn ipv6_route_hex(value: &[u8]) -> io::Result<Ipv6Addr> {

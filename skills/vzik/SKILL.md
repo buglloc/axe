@@ -134,7 +134,9 @@ AXE execution and storage behavior.
    hidden managers, host namespaces, or files outside declared roots. Use
    `container.inspect`, PID 1, cgroups, and mounts to identify the boundary.
    Listener binds do not prove firewall reachability; sockets without owner
-   records have unknown, not absent, ownership.
+   records have unknown, not absent, ownership. Owner `fds` identify the
+   process descriptors that reference the socket; they do not prove peer
+   identity beyond the reported namespace and coverage.
 
    Treat every result as authoritative only for the collector's visible
    namespace, declared providers, bounded time window, and terminal coverage.
@@ -148,7 +150,7 @@ AXE execution and storage behavior.
    - Reachability and exposed surface: `network.interfaces`,
      `network.addresses`, `network.routes`, `network.neighbors`,
      `network.resolvers`, baseline `network.sockets`, and `network.firewall`,
-     then socket owner processes.
+     then socket owner processes and their FD mappings.
    - Privilege posture: `user.list`, `group.list`, `auth.posture`, `sudo.rules`,
      `security.posture`, `kernel.sysctls`, `cgroup.inspect`, process credential
      and capability fields, and writable mounts.
@@ -183,8 +185,8 @@ AXE execution and storage behavior.
    | Host or kernel summary | `vzik host info` or `vzik kernel info` |
    | Modules or hardening controls | `vzik kernel modules --max-items N`, `vzik kernel sysctls --max-items N`, or `vzik security posture` |
    | Process inventory and security context | `vzik process list --max-items N` |
-   | Security context, resources, limits, and I/O for one visible PID | `vzik process inspect PID` |
-   | Interfaces, addresses, routes, neighbors, or sockets | `vzik network interfaces`, `vzik network addresses`, `vzik network routes`, `vzik network neighbors`, `vzik network sockets`, or `vzik network listeners` with an explicit `--max-items N` |
+   | Security context, resources, limits, I/O, and FD inventory for one visible PID | `vzik process inspect PID` |
+   | Interfaces, addresses, routes, neighbors, or sockets with bounded process owners and owner FDs | `vzik network interfaces`, `vzik network addresses`, `vzik network routes`, `vzik network neighbors`, `vzik network sockets`, or `vzik network listeners` with an explicit `--max-items N` |
    | Resolver or firewall configuration evidence | `vzik network resolvers` or `vzik network firewall` |
    | Mount or cgroup scope | `vzik mount list --max-items N` or `vzik cgroup inspect` |
    | Accounts and privilege policy | `vzik user list`, `vzik group list`, `vzik auth posture`, or `vzik sudo rules` |
@@ -222,7 +224,9 @@ AXE execution and storage behavior.
   fields, diagnostics, and partial coverage. CPU ticks are cumulative counters,
   not percentages. The collector checks for PID reuse while reading; a PID is
   still only an address in the current namespace, not persistent identity.
-  It does not acquire environ, smaps, memory maps, or FD inventories.
+  It does not acquire environ, smaps, or memory maps. `network.sockets` and
+  `network.listeners` may include bounded owner `fds`; those FDs identify
+  references to the socket in the visible process namespace.
 
 - `service.list` is static evidence. It covers all systemd unit suffixes in
   system, global-user, and discovered per-user roots, but it does not infer

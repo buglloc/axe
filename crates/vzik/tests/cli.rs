@@ -2,6 +2,8 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
+use std::net::TcpListener;
+use std::os::fd::AsRawFd;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -34,6 +36,45 @@ fn invalid_request_has_structured_process_error() {
     assert_eq!(diagnostics[0]["operation"], "parse_request");
     assert_eq!(diagnostics[0]["retryable"], false);
     assert_eq!(diagnostics[0]["details"]["kind"], "invalid_subcommand");
+}
+
+#[test]
+fn network_socket_owners_include_open_fd_numbers() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
+    let port = listener.local_addr().expect("listener address").port();
+    let fd = listener.as_raw_fd() as u64;
+    let pid = std::process::id() as u64;
+
+    let output = vzik()
+        .args(["network", "sockets", "--max-items", "32768"])
+        .output()
+        .expect("run socket inventory");
+    assert!(
+        matches!(output.status.code(), Some(0 | 3)),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = json_lines(&output.stdout);
+    let socket = records
+        .iter()
+        .find(|record| {
+            record["type"] == "data"
+                && record["data_kind"] == "network_socket"
+                && record["data"]["local_port"] == port
+        })
+        .expect("listener socket record");
+    let owners = socket["data"]["processes"]
+        .as_array()
+        .expect("socket owners");
+    assert!(
+        owners.iter().any(|owner| {
+            owner["pid"].as_u64() == Some(pid)
+                && owner["fds"]
+                    .as_array()
+                    .is_some_and(|fds| fds.iter().any(|value| value.as_u64() == Some(fd)))
+        }),
+        "owners: {owners:?}"
+    );
 }
 
 #[test]

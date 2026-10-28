@@ -158,8 +158,8 @@ Current data kinds and key fields:
 | `network.resolvers` | `resolver_directive` | resolver, hosts, NSS, and systemd-resolved directives with source and line |
 | `network.routes` | `network_route` | family, interface, destination, gateway, metric |
 | `network.neighbors` | `network_neighbor` | family, address, link-layer address, state flags, interface |
-| `network.sockets` | `network_socket` | protocol/family, endpoints, state, UID/inode, owners |
-| `network.listeners` | `network_socket` | listening socket fields and bounded owners |
+| `network.sockets` | `network_socket` | protocol/family, endpoints, state, UID/inode, bounded owners with process FDs |
+| `network.listeners` | `network_socket` | listening socket fields and bounded owners with process FDs |
 | `network.firewall` | `firewall_evidence` | runtime legacy table names or static nftables/iptables/UFW rules with source |
 | `mount.list` | `mount` | IDs, device, root, target, filesystem, source, options, namespace |
 | `cgroup.inspect` | `cgroup_membership` | hierarchy, controllers, membership path, self-scope v2 properties |
@@ -183,6 +183,15 @@ Current data kinds and key fields:
 | `filesystem.unix_sockets` | `filesystem_unix_socket` | explicit-root socket path, ownership, mode, device/inode, mount metadata |
 | `file.stat` | `file_metadata` | path, type, size, mode, UID/GID, device/inode, timestamps, link target |
 | `file.read` | `file_chunk` | path, offset, byte count, encoding, content, EOF |
+
+For `network.sockets` and `network.listeners`, optional `processes` entries
+contain `pid`, sorted `fds: u32[]`, and optional byte-string `name` and `exe`.
+Each FD is a descriptor in the collector-visible `/proc` PID namespace whose
+link target matched the socket inode. An owner entry without `fds` is not
+emitted by the native provider; absent `processes` or missing owners mean
+unknown ownership, not no owner. Owner coverage remains bounded by the
+capability's visible-process and FD limits and can degrade independently of
+socket table acquisition.
 
 `network.interfaces` uses sysfs link metadata. If `/sys/class/net` cannot be
 enumerated, it emits a source diagnostic and falls back to `/proc/net/dev`
