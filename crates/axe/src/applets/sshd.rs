@@ -358,11 +358,28 @@ fn prepare(options: &mut Options) -> io::Result<()> {
 
 fn prepare_session_home(workdir: &Path) -> io::Result<PathBuf> {
     let home = workdir.join(SSH_HOME_DIRECTORY);
-    #[cfg(unix)]
-    crate::path_bridge::ensure_private_directory(&home)?;
-    #[cfg(not(unix))]
-    std::fs::create_dir_all(&home)?;
-    home.canonicalize()
+    let result = {
+        #[cfg(unix)]
+        {
+            crate::path_bridge::ensure_private_directory(&home)
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::create_dir_all(&home)
+        }
+    }
+    .and_then(|()| home.canonicalize());
+
+    match result {
+        Ok(home) => Ok(home),
+        Err(error) => {
+            eprintln!(
+                "sshd: private session home unavailable at {}: {error}; using workdir as read-only home",
+                home.display()
+            );
+            Ok(workdir.to_owned())
+        }
+    }
 }
 
 fn normalize_session_path() {

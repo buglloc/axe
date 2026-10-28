@@ -7,7 +7,10 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(label: &str) -> Self {
-        Self::new_in(&std::env::temp_dir(), label)
+        let parent = Path::new(env!("CARGO_BIN_EXE_axe"))
+            .parent()
+            .expect("AXE executable has a parent directory");
+        Self::new_in(parent, label)
     }
 
     fn new_in(parent: &Path, label: &str) -> Self {
