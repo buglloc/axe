@@ -493,12 +493,22 @@ mod tests {
             &external_candidate,
             b"#!/usr/bin/env bash\nprintf x > \"$(dirname \"$0\")/../count\"\n",
         )
-        .expect("write external candidate");
+        .unwrap_or_else(|error| {
+            panic!(
+                "write external candidate {}: {error}",
+                external_candidate.display()
+            )
+        });
         std::fs::set_permissions(
             &external_candidate,
             std::os::unix::fs::PermissionsExt::from_mode(0o700),
         )
-        .expect("make external candidate executable");
+        .unwrap_or_else(|error| {
+            panic!(
+                "make external candidate executable {}: {error}",
+                external_candidate.display()
+            )
+        });
 
         let error = StoreError {
             stage: axe_store_client::StoreStage::Manifest,

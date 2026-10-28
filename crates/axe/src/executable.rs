@@ -58,7 +58,18 @@ pub(crate) const DOCTOR_PROBE_FLAG: &str = "--axe-internal-doctor-probe";
 pub(crate) fn test_link_or_copy(source: &Path, destination: &Path) -> io::Result<()> {
     match fs::hard_link(source, destination) {
         Ok(()) => Ok(()),
-        Err(_) => fs::copy(source, destination).map(|_| ()),
+        Err(link_error) => fs::copy(source, destination)
+            .map(|_| ())
+            .map_err(|copy_error| {
+                io::Error::new(
+                    copy_error.kind(),
+                    format!(
+                        "hard link {} -> {} failed: {link_error}; copy failed: {copy_error}",
+                        source.display(),
+                        destination.display()
+                    ),
+                )
+            }),
     }
 }
 
@@ -1530,7 +1541,9 @@ mod tests {
                         .expect("system clock is after epoch")
                         .as_nanos()
                 ));
-            fs::create_dir_all(&path).expect("create scratch directory");
+            fs::create_dir_all(&path).unwrap_or_else(|error| {
+                panic!("create scratch directory {}: {error}", path.display())
+            });
             Self(path)
         }
     }

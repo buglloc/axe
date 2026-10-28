@@ -1997,7 +1997,8 @@ mod tests {
             .join(format!("axe-preserved-executable-{}", std::process::id()));
         let _ = std::fs::remove_file(&copy);
         crate::executable::test_link_or_copy(&current, &copy).expect("link test binary");
-        let executable = std::fs::File::open(&copy).expect("open copied executable");
+        let executable = std::fs::File::open(&copy)
+            .unwrap_or_else(|error| panic!("open copied executable {}: {error}", copy.display()));
         std::fs::remove_file(&copy).expect("unlink copied executable");
 
         use std::os::fd::AsRawFd as _;
@@ -2988,8 +2989,18 @@ mod tests {
         let mut file = sftp.create("artifact").await.expect("create SFTP file");
         file.write_all(b"scp-compatible payload")
             .await
-            .expect("write SFTP file");
-        file.close().await.expect("close SFTP file");
+            .unwrap_or_else(|error| {
+                panic!(
+                    "write SFTP file {}: {error}",
+                    directory.join("artifact").display()
+                )
+            });
+        file.close().await.unwrap_or_else(|error| {
+            panic!(
+                "close SFTP file {}: {error}",
+                directory.join("artifact").display()
+            )
+        });
 
         assert_eq!(
             sftp.read("artifact").await.expect("read SFTP file"),
