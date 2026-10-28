@@ -1,0 +1,31 @@
+diff --git a/readconf.c b/readconf.c
+--- a/readconf.c
++++ b/readconf.c
+@@ -2912,1 +2912,1 @@
+-		options->strict_host_key_checking = SSH_STRICT_HOSTKEY_ASK;
++		options->strict_host_key_checking = SSH_STRICT_HOSTKEY_OFF;
+@@ -2946,3 +2946,1 @@
+-		    xstrdup(_PATH_SSH_SYSTEM_HOSTFILE);
+-		options->system_hostfiles[options->num_system_hostfiles++] =
+-		    xstrdup(_PATH_SSH_SYSTEM_HOSTFILE2);
++		    xstrdup("/dev/null");
+@@ -2951,7 +2951,1 @@
+-		if (options->verify_host_key_dns <= 0 &&
+-		    (options->num_user_hostfiles == 0 ||
+-		    (options->num_user_hostfiles == 1 && strcmp(options->
+-		    user_hostfiles[0], _PATH_SSH_USER_HOSTFILE) == 0)))
+-			options->update_hostkeys = SSH_UPDATE_HOSTKEYS_YES;
+-		else
+-			options->update_hostkeys = SSH_UPDATE_HOSTKEYS_NO;
++		options->update_hostkeys = SSH_UPDATE_HOSTKEYS_NO;
+@@ -2961,3 +2961,1 @@
+-		    xstrdup(_PATH_SSH_USER_HOSTFILE);
+-		options->user_hostfiles[options->num_user_hostfiles++] =
+-		    xstrdup(_PATH_SSH_USER_HOSTFILE2);
++		    xstrdup("/dev/null");
+@@ -2966,1 +2966,1 @@
+-		options->log_level = SYSLOG_LEVEL_INFO;
++		options->log_level = SYSLOG_LEVEL_ERROR;
+@@ -3035,1 +3035,1 @@
+-		options->warn_weak_crypto = 1;
++		options->warn_weak_crypto = 0;

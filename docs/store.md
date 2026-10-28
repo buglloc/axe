@@ -157,6 +157,8 @@ Uploads and remote streams are explicit network operations and use host TLS trus
 
 `restic` supports local and remote encrypted repositories. It embeds edition CA roots as a fallback when system trust is unavailable; `--cacert` remains available for explicit trust. SFTP and rclone backends require `ssh` and `rclone` on `PATH`. Mounting requires host FUSE support. Self-update is excluded.
 
+The Store OpenSSH client tools (`ssh`, `scp`, and `sftp`) disable host-key verification and known-host persistence by default. Host-key updates, weak-crypto warnings, and informational logging are also disabled; use explicit client options when a connection needs the standard OpenSSH behavior.
+
 `caddy` includes the standard modules for HTTP serving, reverse proxying, and automatic HTTPS. Use `caddy list-modules --versions` to inspect bundled modules. It embeds edition CA roots as a fallback for outgoing TLS connections. Explicit trust pools remain available. Certificate and configuration state needs a writable directory. Binary-replacement commands (`upgrade`, `add-package`, and `remove-package`) are excluded; additional DNS-provider plugins are not bundled.
 
 `layerx` reads Docker-save and OCI archives without a daemon. Live image inspection uses a Docker-compatible Docker or Podman API; `build` also needs the selected engine's CLI on `PATH`. It provides a terminal UI, JSON analysis, efficiency gates with `ci`, and image comparisons with `compare`.

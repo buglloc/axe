@@ -240,6 +240,7 @@
           "--prefix=/usr"
           "--sysconfdir=/etc/ssh"
         ];
+      patches = (old.patches or []) ++ [../patches/openssh-axe-defaults.patch];
       buildPhase = ''
         runHook preBuild
         make SSH_PROGRAM=ssh ssh scp sftp ssh-add ssh-agent ssh-keygen ssh-keyscan
