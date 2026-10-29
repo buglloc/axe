@@ -1,53 +1,52 @@
 +++
 title = "Store patches"
 description = "Patches to AXE Store tools for offline operation and static Linux builds."
-eyebrow = "Store patches"
 +++
 
-AXE Store patches upstream tools when their defaults require network access at startup, depend on the target system, or prevent a static Linux build. The changes are listed below.
+AXE Store patches an upstream tool when it contacts the network at startup, depends on files from the target system, or cannot be built as a static Linux binary.
 
-## Privacy and network defaults
+## Network access at startup
 
 ### `dnsx`
 
-Makes `-disable-update-check` / `-duc` default to `true`. Automatic version checks no longer run during normal startup. The flag remains accepted and the explicit `-update` / `-up` command remains functional.
+`-disable-update-check` / `-duc` defaults to `true`, so version checks do not run at startup. The flag is still accepted, and `-update` / `-up` still update the tool.
 
 ### ProjectDiscovery `cdncheck`
 
-Disables the startup IPv6 connectivity probe in these tools:
-
-- `dnsx`
-- `httpx`
-- `naabu`
-- `nuclei`
-- `subfinder`
+The startup IPv6 connectivity probe is disabled in `dnsx`, `httpx`, `naabu`, `nuclei` and `subfinder`.
 
 ### `httpx`
 
-Disables the automatic version check and built-in DNS resolver fallback. User-supplied resolvers and normal target traffic are unchanged.
+The automatic version check and the built-in DNS resolver fallback are disabled. Resolvers you pass and requests to targets are unchanged.
 
 ### `naabu`
 
-Removes automatic version checks. The legacy update flag remains accepted as a no-op in the Store build.
+Automatic version checks are removed. The old update flag is still accepted and does nothing.
 
 ### `nuclei`
 
-Disables binary and template update checks, points the runtime at bundled templates, and keeps the Store package independent of a writable user template installation.
+Binary and template update checks are disabled. Nuclei uses the bundled templates and does not need a writable template directory.
 
-`subfinder` disables automatic version checks while preserving its explicit update command.
+### `subfinder`
 
-### `gori` and `interactsh-client`
+Automatic version checks are disabled. The explicit update command still works.
 
-`gori` disables startup version checks by default; users can opt in through its settings. `interactsh-client` removes the startup version check.
+### `gori`
 
-## Portability patches
+Startup version checks are off by default and can be enabled in its settings.
+
+### `interactsh-client`
+
+The startup version check is removed.
+
+## Portability
 
 | Tool | Change |
 | --- | --- |
-| `naabu` | Removes runtime packet-capture dependencies for static Linux builds. |
+| `naabu` | Packet-capture runtime dependencies are removed so it builds as a static Linux binary. |
 | `xh` | Uses AXE's bundled CA roots instead of the host trust store. |
 | `grpcurl` | Uses AXE's bundled CA roots by default; `-cacert` replaces them. |
 | `gobuster` | Uses AXE's bundled CA roots when TLS verification is enabled. |
-| `capsh` | Uses the AXE-provided shell instead of requiring a host shell. |
+| `capsh` | Uses the AXE shell, so the host needs no shell of its own. |
 
-These TLS tools use bundled Mozilla roots plus any additional CA bundle selected by the edition. They do not merge certificates from the host trust store.
+The bundled roots for `xh`, `grpcurl` and `gobuster` are the Mozilla set plus any CA bundle the edition adds. Certificates from the host trust store are not used.
