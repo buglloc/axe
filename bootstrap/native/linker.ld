@@ -2,14 +2,16 @@ ENTRY(_start)
 
 PHDRS
 {
-    text PT_LOAD FLAGS(5);
+    text PT_LOAD FILEHDR PHDRS FLAGS(5);
     data PT_LOAD FLAGS(6);
     stack PT_GNU_STACK FLAGS(6);
 }
 
 SECTIONS
 {
-    . = 0x400000;
+    /* Map the ELF and program headers with the code so the file needs no
+       page-alignment padding before .text. */
+    . = 0x400000 + SIZEOF_HEADERS;
     .text : ALIGN(16)
     {
         KEEP(*(.text.start))

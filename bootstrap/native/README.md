@@ -1,8 +1,9 @@
 # Native bootstrap loader
 
 A freestanding Linux loader for x86_64 and AArch64. The output is a static
-`ET_EXEC` ELF of about 8 KiB with no libc, dynamic loader, `INTERP`, or
-`DT_NEEDED`. It uses raw syscalls.
+`ET_EXEC` ELF of about 5 KiB with no libc, dynamic loader, `INTERP`, or
+`DT_NEEDED`. It uses raw syscalls. The linker script maps the ELF headers into
+the code segment, so the file has no page-alignment padding.
 
 ## Build
 
