@@ -35,6 +35,24 @@ _web-inventory axe inventory:
 web-inventory: _prepare-axe-dev-keys
     AXE_EDITION_ROOT="{{edition_root}}" cargo build --locked -p axe
     just _web-inventory {{cargo_target_dir}}/debug/axe {{edition_root}}/web/data/registry.json
+    just _web-bootstrap
+
+# The deployed site reads bootstrap.json from the GitHub release; local builds
+# use the newest staged release instead.
+_web-bootstrap:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
+    target="{{edition_root}}/web/data/bootstrap.json"
+    latest=$(printf '%s\n' "{{out}}"/releases/v*/bootstrap.json |
+        grep -E '/releases/v[0-9]+\.[0-9]+\.[0-9]+/bootstrap\.json$' | sort -V | tail -n 1 || true)
+    if [[ -z "$latest" ]]; then
+        rm -f "$target"
+        echo "web: no staged bootstrap.json under {{out}}/releases; the Bootstrap block is omitted" >&2
+        exit 0
+    fi
+    install -m 0644 "$latest" "$target"
+    echo "web: bootstrap data from $latest" >&2
 
 web-build: web-inventory
     hugo --source web --minify --cleanDestinationDir

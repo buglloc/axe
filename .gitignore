@@ -12,6 +12,7 @@ target/
 /web/public/
 /web/.hugo_build.lock
 /web/data/registry.json
+/web/data/bootstrap.json
 /.axe-*
 /.axe/
 *.tar.gz
