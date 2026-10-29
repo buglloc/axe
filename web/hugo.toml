@@ -50,22 +50,14 @@ copyright = "AXE is open source under the MIT License."
   url = "/tools/"
   weight = 20
 [[menus.main]]
-  name = "Failures"
-  url = "/#failures"
-  weight = 30
-[[menus.main]]
-  name = "Remote"
-  url = "/#remote"
-  weight = 40
-[[menus.main]]
   name = "Patches"
   url = "/patches/"
-  weight = 50
+  weight = 30
 [[menus.main]]
   name = "Changelog"
   url = "/changelog/"
-  weight = 55
+  weight = 40
 [[menus.main]]
   name = "Source"
   url = "https://github.com/buglloc/axe"
-  weight = 60
+  weight = 50
