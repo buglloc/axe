@@ -496,6 +496,7 @@ def stage_bootstrap(version: str, stage: Path, config: dict, default_args: list[
     for target, (_, name) in BOOTSTRAP_NATIVE.items():
         native = {
             "label": "native ELF",
+            "content_base64": base64.b64encode((assets / name).read_bytes()).decode("ascii"),
             "download_url": records[name]["url"],
             "stable_url": records[name]["stable_url"],
             "stable_http_url": records[name]["stable_http_url"],
