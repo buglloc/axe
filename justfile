@@ -30,7 +30,7 @@ build-darwin: build-darwin-arm64
 build-all: build-linux build-darwin
 
 _web-inventory axe inventory:
-    mkdir -p "$(dirname "{{inventory}}")"; tmp=$(mktemp "{{inventory}}.XXXXXX"); store=$(mktemp -d); trap 'rm -f "$tmp"; rm -rf "$store"' EXIT; AXE_STORE_DIR="$store" AXE_STORE_URL=http://127.0.0.1:9 AXE_STORE_ADDRESSES=127.0.0.1 {{axe}} commands | jq -e '{commands: [.commands[] | select(.alias_of == null) | {name, source, category, synopsis}]} | if (.commands | length) > 0 and all(.commands[]; (.synopsis | type) == "string" and (.synopsis | length) > 0) then . else error("commands returned no entries or an entry without synopsis") end' > "$tmp"; mv "$tmp" "{{inventory}}"
+    mkdir -p "$(dirname "{{inventory}}")"; tmp=$(mktemp "{{inventory}}.XXXXXX"); store=$(mktemp -d); trap 'rm -f "$tmp"; rm -rf "$store"' EXIT; AXE_STORE_DIR="$store" AXE_STORE_URL=http://127.0.0.1:9 AXE_STORE_ADDRESSES=127.0.0.1 {{axe}} commands | jq -e '.commands as $all | {commands: [$all[] | select(.alias_of == null) | .name as $name | {name, source, category, synopsis, aliases: [$all[] | select(.alias_of == $name) | .name]}]} | if (.commands | length) > 0 and all(.commands[]; (.synopsis | type) == "string" and (.synopsis | length) > 0) then . else error("commands returned no entries or an entry without synopsis") end' > "$tmp"; mv "$tmp" "{{inventory}}"
 
 web-inventory: _prepare-axe-dev-keys
     AXE_EDITION_ROOT="{{edition_root}}" cargo build --locked -p axe
