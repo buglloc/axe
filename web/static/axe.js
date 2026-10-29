@@ -181,64 +181,171 @@
     });
   });
   const bootstrapData = document.getElementById("bootstrap-data");
-  const bootstrapTarget = document.querySelector("[data-bootstrap-target]");
+  const bootstrapPanel = document.querySelector("[data-bootstrap-panel]");
   const bootstrapCommand = document.querySelector("[data-bootstrap-command]");
-  const bootstrapLabel = document.querySelector("[data-bootstrap-label]");
-  const bootstrapMeta = document.querySelector("[data-bootstrap-meta]");
-  const bootstrapRuntimes = [...document.querySelectorAll("[data-bootstrap-runtime]")];
-  if (bootstrapData && bootstrapTarget && bootstrapCommand) {
+  if (bootstrapData && bootstrapPanel && bootstrapCommand) {
     const data = JSON.parse(bootstrapData.textContent);
-    const runtimeRunners = {
-      python: "python3",
-      node: "node",
-      perl: "perl",
+    const targets = Object.keys(data.targets);
+    const modeTabs = [...document.querySelectorAll("[data-bootstrap-mode]")];
+    const optionButtons = [...document.querySelectorAll("[data-bootstrap-option]")];
+    const modeControls = [...document.querySelectorAll("[data-bootstrap-for]")];
+    const targetSelect = document.querySelector("[data-bootstrap-target]");
+    const label = document.querySelector("[data-bootstrap-label]");
+    const note = document.querySelector("[data-bootstrap-note]");
+    const choice = { fetch: "curl", paste: "python", native: "printf" };
+    let mode = "fetch";
+    let renderToken = 0;
+    // Releases before 0.12.1 publish the Native loader URL without its bytes.
+    const hasLoaderBytes = targets.every((target) => data.targets[target].runtimes.native.content_base64);
+
+    const bytesOf = (base64) => Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    const textOf = (base64) => new TextDecoder().decode(bytesOf(base64));
+    const hexOf = (bytes) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const isAlnum = (byte) => (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122);
+    const isOctalDigit = (byte) => byte >= 48 && byte <= 55;
+    const quote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
+    const kilobytes = (count) => `${(count / 1024).toFixed(1)} KB`;
+
+    // zlib format, which Python's zlib.decompress and Node's inflateSync read.
+    const deflate = async (bytes) => {
+      if (typeof CompressionStream !== "function") return null;
+      const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate"));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
     };
-    let activeRuntime = "shell";
-    const formatBytes = (value) => `${value} B`;
-    const shellQuote = (value) => `'${value.replaceAll("'", "'\"'\"'")}'`;
-    const renderBootstrap = () => {
-      const target = bootstrapTarget.value;
-      const targetData = data.targets[target];
-      const runtime = targetData.runtimes[activeRuntime];
-      let command;
-      let label;
-      if (activeRuntime === "native") {
-        command = [
-          `curl -fL -o axe-bootstrap ${runtime.download_url}`,
-          "chmod +x axe-bootstrap",
-          "./axe-bootstrap",
-        ].join("\n");
-        label = "native ELF";
-      } else {
-        const content = atob(runtime.content_base64);
-        if (activeRuntime === "shell") {
-          command = `sh -c ${shellQuote(content)} --`;
-        } else if (activeRuntime === "python") {
-          command = `${runtimeRunners[activeRuntime]} -c ${shellQuote(`import base64;exec(compile(base64.b64decode(${JSON.stringify(runtime.content_base64)}),\"axe-bootstrap.py\",\"exec\"))`)}`;
-        } else if (activeRuntime === "node") {
-          command = `node -e ${shellQuote(`eval(Buffer.from(${JSON.stringify(runtime.content_base64)},\"base64\").toString())`)}`;
-        } else {
-          const hex = [...content].map((character) => character.charCodeAt(0).toString(16).padStart(2, "0")).join("");
-          command = `perl -e ${shellQuote(`eval pack(\"H*\",\"${hex}\")`)}`;
+
+    // POSIX printf escapes: alphanumerics stay literal, other bytes become the
+    // shortest octal escape that the next character cannot extend.
+    const printfFormat = (bytes) => {
+      let format = "";
+      bytes.forEach((byte, index) => {
+        if (isAlnum(byte)) {
+          format += String.fromCharCode(byte);
+          return;
         }
-        label = runtime.label;
-      }
-      bootstrapCommand.textContent = command;
-      if (bootstrapLabel) bootstrapLabel.textContent = label;
-      if (bootstrapMeta) {
-        bootstrapMeta.textContent = `${target} · ${formatBytes(runtime.size)} raw · ${formatBytes(runtime.base64_size)} base64 · ${formatBytes(runtime.hex_size)} hex`;
-      }
-      bootstrapRuntimes.forEach((button) => {
-        button.setAttribute("aria-pressed", String(button.dataset.bootstrapRuntime === activeRuntime));
+        const next = bytes[index + 1];
+        const digits = byte.toString(8);
+        format += `\\${next !== undefined && isOctalDigit(next) ? digits.padStart(3, "0") : digits}`;
       });
+      return format;
     };
-    bootstrapTarget.addEventListener("change", renderBootstrap);
-    bootstrapRuntimes.forEach((button) => {
-      button.addEventListener("click", () => {
-        activeRuntime = button.dataset.bootstrapRuntime;
-        renderBootstrap();
+
+    const fetchCommand = (tool) => {
+      const url = data.targets[targets[0]].runtimes.shell.url;
+      const download = tool === "curl" ? `curl -fo a ${url}` : `wget -O a ${url}`;
+      return {
+        command: `${download}\nsh a`,
+        label: `${tool}, then sh`,
+        note: "Saves the script as ./a, so run it from a writable directory. Needs HTTPS: without CA certificates, paste the Shell script instead.",
+      };
+    };
+
+    const pasteCommand = async (runtimeName) => {
+      const runtime = data.targets[targets[0]].runtimes[runtimeName];
+      const bytes = bytesOf(runtime.content_base64);
+      if (runtimeName === "shell") {
+        return {
+          command: `sh -c ${quote(textOf(runtime.content_base64))}`,
+          label: "sh",
+          note: "For hosts with curl, wget, Python, Perl, Node.js or bash but without working HTTPS. The script downloads AXE over plain HTTP; the pinned digest protects it.",
+        };
+      }
+      if (runtimeName === "perl") {
+        return {
+          command: `perl -e 'eval pack"H*","${hexOf(bytes)}"or die$@'`,
+          label: "perl",
+          note: "Hex only, so perl-base without Compress::Zlib is enough.",
+        };
+      }
+      const compressed = await deflate(bytes);
+      if (runtimeName === "python") {
+        return {
+          command: compressed
+            ? `python3 -c "import zlib;exec(zlib.decompress(bytes.fromhex('${hexOf(compressed)}')))"`
+            : `python3 -c "exec(bytes.fromhex('${hexOf(bytes)}'))"`,
+          label: "python3",
+          note: "Python 3.6 or later.",
+        };
+      }
+      return {
+        command: compressed
+          ? `node -e "eval(''+require('zlib').inflateSync(Buffer.from('${hexOf(compressed)}','hex')))"`
+          : `node -e "eval(''+Buffer.from('${hexOf(bytes)}','hex'))"`,
+        label: "node",
+        note: "Any Node.js release with the zlib module.",
+      };
+    };
+
+    const nativeCommand = (decoder) => {
+      const target = targetSelect?.value ?? targets[0];
+      const runtime = data.targets[target].runtimes.native;
+      const url = runtime.stable_url;
+      if (!runtime.content_base64) {
+        return {
+          command: `curl -fo b ${url}\nchmod +x b\n./b`,
+          label: `${target}, download`,
+          note: "This release does not include the loader bytes for pasting. Without a shell, download the file and copy it with kubectl cp or docker cp.",
+        };
+      }
+      const bytes = bytesOf(runtime.content_base64);
+      const write = decoder === "printf"
+        ? `printf '${printfFormat(bytes)}' >b`
+        : `base64 -d >b <<E\n${runtime.content_base64.match(/.{1,76}/g).join("\n")}\nE`;
+      return {
+        command: `${write}\nchmod +x b\n./b`,
+        label: `${target}, ${decoder === "printf" ? "sh only" : "base64"}`,
+        note: `Writes the ${runtime.size}-byte loader to ./b and runs it; the directory must allow execution. Without a shell, download ${url} and copy it with kubectl cp or docker cp.`,
+      };
+    };
+
+    const render = async () => {
+      const token = ++renderToken;
+      const result = mode === "fetch"
+        ? fetchCommand(choice.fetch)
+        : mode === "paste" ? await pasteCommand(choice.paste) : nativeCommand(choice.native);
+      if (token !== renderToken) return;
+      bootstrapCommand.textContent = result.command;
+      if (label) label.textContent = `${result.label} · ${result.command.length.toLocaleString("en-US")} characters`;
+      if (note) note.textContent = result.note;
+    };
+
+    const sync = () => {
+      modeTabs.forEach((tab) => {
+        const selected = tab.dataset.bootstrapMode === mode;
+        tab.setAttribute("aria-selected", String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+        if (selected) bootstrapPanel.setAttribute("aria-labelledby", tab.id);
+      });
+      modeControls.forEach((control) => {
+        const needsLoader = control.hasAttribute("data-bootstrap-needs-loader");
+        control.hidden = control.dataset.bootstrapFor !== mode || (needsLoader && !hasLoaderBytes);
+      });
+      optionButtons.forEach((button) => {
+        button.setAttribute("aria-pressed", String(choice[button.dataset.bootstrapOption] === button.dataset.value));
+      });
+      render();
+    };
+
+    modeTabs.forEach((tab, index) => {
+      tab.addEventListener("click", () => {
+        mode = tab.dataset.bootstrapMode;
+        sync();
+      });
+      tab.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const next = modeTabs[(index + (event.key === "ArrowRight" ? 1 : -1) + modeTabs.length) % modeTabs.length];
+        mode = next.dataset.bootstrapMode;
+        sync();
+        next.focus();
       });
     });
-    renderBootstrap();
+    optionButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        choice[button.dataset.bootstrapOption] = button.dataset.value;
+        sync();
+      });
+    });
+    targetSelect?.addEventListener("change", render);
+    sync();
   }
 })();

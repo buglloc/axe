@@ -465,58 +465,87 @@ pre,
   line-height: 1.6;
 }
 
-.bootstrap-controls {
-  display: grid;
-  grid-template-columns: minmax(180px, 0.3fr) minmax(0, 1fr);
-  gap: 24px;
-  align-items: end;
-  margin: 24px 0 16px;
-}
-
-.bootstrap-controls label,
-.bootstrap-label {
-  display: block;
-  color: var(--muted);
-  font-size: 14px;
-}
-
-.bootstrap-controls select {
-  display: block;
-  width: 100%;
-  min-height: 44px;
-  margin-top: 6px;
-  padding: 0 12px;
-  color: var(--foreground);
-  font: inherit;
-  font-size: 15px;
-  border: 1px solid var(--line-strong);
-  border-radius: 0;
-  background: var(--surface);
-}
-
-.bootstrap-runtime-tabs {
+.bootstrap-modes {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
+  margin-top: 20px;
+  border-bottom: 1px solid var(--line);
 }
 
-.bootstrap-runtime-tabs button {
+.bootstrap-modes button {
   min-height: 44px;
   padding: 0 16px;
   color: var(--muted);
   font: inherit;
   font-size: 15px;
+  border: 0;
+  background: transparent;
+}
+
+.bootstrap-modes button:hover { color: var(--foreground); }
+
+.bootstrap-modes button[aria-selected="true"] {
+  color: var(--foreground);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.bootstrap-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: center;
+  margin: 16px 0 12px;
+}
+
+.bootstrap-options [hidden] { display: none; }
+
+.bootstrap-choice {
+  display: flex;
+}
+
+.bootstrap-choice button {
+  min-height: 36px;
+  padding: 4px 14px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
   border: 1px solid var(--line-strong);
   background: transparent;
 }
 
-.bootstrap-runtime-tabs button:hover { color: var(--foreground); border-color: var(--accent-dim); }
+.bootstrap-choice button + button { margin-left: -1px; }
+.bootstrap-choice button:hover { color: var(--foreground); }
 
-.bootstrap-runtime-tabs button[aria-pressed="true"] {
+.bootstrap-choice button[aria-pressed="true"] {
+  position: relative;
   color: var(--background);
   border-color: var(--accent);
   background: var(--accent);
+}
+
+.bootstrap-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.bootstrap-target select {
+  min-height: 36px;
+  padding: 0 36px 0 10px;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background-color: var(--surface);
+}
+
+.install-block pre.bootstrap-command {
+  max-height: 9.5em;
+  overflow-y: auto;
+  word-break: break-all;
 }
 
 /* Commands summary on the landing page */
@@ -949,7 +978,6 @@ pre,
   .diagram-link::after { top: auto; right: -4px; bottom: 0; transform: rotate(135deg); }
   .diagram-link--reverse::after { top: 0; right: -4px; bottom: auto; left: auto; transform: rotate(-45deg); }
   .diagram-link span { bottom: auto; top: 50%; left: 14px; transform: translateY(-50%); }
-  .bootstrap-controls { grid-template-columns: 1fr; }
   .tools-page { padding-top: 32px; }
   .tool-category-filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
   .tool-category-filters button { flex: none; }

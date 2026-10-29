@@ -76,28 +76,39 @@ sha256sum axe</code></pre>
     {{ with hugo.Data.bootstrap }}
     <div class="bootstrap" id="bootstrap">
       <h3 id="bootstrap-title">Bootstrap commands</h3>
-      <p>Use a runtime the host already has. Each command downloads the static AXE release. Native downloads a bootstrap ELF with curl; it fetches AXE from the configured HTTP endpoint, trying IPv6 first and then IPv4.</p>
-      <div class="bootstrap-controls">
-        <label for="bootstrap-target">Target
-          <select id="bootstrap-target" data-bootstrap-target>
-            {{ range $target, $_ := .targets }}<option value="{{ $target }}">{{ $target }}</option>{{ end }}
-          </select>
-        </label>
-        <div>
-          <span class="bootstrap-label" id="bootstrap-runtime-label">Runtime</span>
-          <div class="bootstrap-runtime-tabs" role="group" aria-labelledby="bootstrap-runtime-label">
-            <button type="button" data-bootstrap-runtime="shell" aria-pressed="true">Shell</button>
-            <button type="button" data-bootstrap-runtime="python" aria-pressed="false">Python</button>
-            <button type="button" data-bootstrap-runtime="node" aria-pressed="false">Node</button>
-            <button type="button" data-bootstrap-runtime="perl" aria-pressed="false">Perl</button>
-            <button type="button" data-bootstrap-runtime="native" aria-pressed="false">Native</button>
-          </div>
-        </div>
+      <p>For hosts where the download above does not work. Each program downloads the AXE release for the host's architecture and checks its size and digest before running it.</p>
+      <div class="bootstrap-modes" role="tablist" aria-label="Bootstrap method">
+        <button type="button" role="tab" id="bootstrap-tab-fetch" aria-controls="bootstrap-panel" aria-selected="true" data-bootstrap-mode="fetch">curl or wget</button>
+        <button type="button" role="tab" id="bootstrap-tab-paste" aria-controls="bootstrap-panel" aria-selected="false" tabindex="-1" data-bootstrap-mode="paste">Paste a script</button>
+        <button type="button" role="tab" id="bootstrap-tab-native" aria-controls="bootstrap-panel" aria-selected="false" tabindex="-1" data-bootstrap-mode="native">Native ELF</button>
       </div>
-      <div class="install-block">
-        <div class="install-block__bar"><span data-bootstrap-label>shell</span><button type="button" data-copy-target="bootstrap-command">copy</button></div>
-        <pre id="bootstrap-command"><code data-bootstrap-command>Loading bootstrap command…</code></pre>
-        <p class="install-block__note"><span data-bootstrap-meta></span></p>
+      <div class="bootstrap-panel" id="bootstrap-panel" role="tabpanel" aria-labelledby="bootstrap-tab-fetch" data-bootstrap-panel>
+        <div class="bootstrap-options">
+          <div class="bootstrap-choice" role="group" aria-label="Download tool" data-bootstrap-for="fetch">
+            <button type="button" aria-pressed="true" data-bootstrap-option="fetch" data-value="curl">curl</button>
+            <button type="button" aria-pressed="false" data-bootstrap-option="fetch" data-value="wget">wget</button>
+          </div>
+          <div class="bootstrap-choice" role="group" aria-label="Runtime" data-bootstrap-for="paste" hidden>
+            <button type="button" aria-pressed="true" data-bootstrap-option="paste" data-value="python">Python</button>
+            <button type="button" aria-pressed="false" data-bootstrap-option="paste" data-value="node">Node.js</button>
+            <button type="button" aria-pressed="false" data-bootstrap-option="paste" data-value="perl">Perl</button>
+            <button type="button" aria-pressed="false" data-bootstrap-option="paste" data-value="shell">Shell</button>
+          </div>
+          <div class="bootstrap-choice" role="group" aria-label="Decoder on the host" data-bootstrap-for="native" data-bootstrap-needs-loader hidden>
+            <button type="button" aria-pressed="true" data-bootstrap-option="native" data-value="printf">sh only</button>
+            <button type="button" aria-pressed="false" data-bootstrap-option="native" data-value="base64">base64</button>
+          </div>
+          <label class="bootstrap-target" data-bootstrap-for="native" hidden>Target
+            <select data-bootstrap-target>
+              {{ range $target, $_ := .targets }}<option value="{{ $target }}">{{ $target }}</option>{{ end }}
+            </select>
+          </label>
+        </div>
+        <div class="install-block">
+          <div class="install-block__bar"><span data-bootstrap-label></span><button type="button" data-copy-target="bootstrap-command">copy</button></div>
+          <pre id="bootstrap-command" class="bootstrap-command"><code data-bootstrap-command>Loading bootstrap command…</code></pre>
+          <p class="install-block__note" data-bootstrap-note></p>
+        </div>
       </div>
       <script id="bootstrap-data" type="application/json">{{ . | jsonify | safeJS }}</script>
     </div>
