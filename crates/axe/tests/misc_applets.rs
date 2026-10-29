@@ -526,3 +526,37 @@ fn gzip_rejects_plain_force_input_before_touching_an_existing_destination() {
         b"keep destination\n"
     );
 }
+
+#[test]
+fn positional_invocation_names_the_applet_in_diagnostics() {
+    let scratch = Scratch::new("positional-name");
+    let positional = |applet: &str, args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_axe"))
+            .arg(applet)
+            .args(args)
+            .current_dir(scratch.path())
+            .env_clear()
+            .env("HOME", scratch.path())
+            .env("LC_ALL", "C")
+            .env("PATH", "/nonexistent")
+            .stdin(Stdio::null())
+            .output()
+            .expect("run positional applet")
+    };
+
+    let mut cases = vec![("cat", vec!["missing"], "cat: missing:")];
+    if cfg!(target_os = "linux") {
+        cases.extend([
+            ("mountpoint", vec!["missing"], "mountpoint: missing:"),
+            ("hexdump", vec!["missing"], "hexdump: cannot open 'missing'"),
+            ("dmesg", vec!["--version"], "dmesg "),
+            ("pidwait", vec!["--version"], "pidwait "),
+        ]);
+    }
+    for (applet, args, prefix) in cases {
+        let output = positional(applet, &args);
+        let text = [output.stdout.as_slice(), output.stderr.as_slice()].concat();
+        let text = String::from_utf8_lossy(&text);
+        assert!(text.starts_with(prefix), "{applet}: {text}");
+    }
+}

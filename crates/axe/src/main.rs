@@ -253,6 +253,11 @@ impl<'a> DirectInvocation<'a> {
             return None;
         }
 
+        // Only `axe NAME` puts the applet name at argv[1]; the other routes
+        // either set argv[0] to it or leave it at a later position.
+        if matches!(self.route, Route::Positional) {
+            applets::mark_applet_as_second_arg();
+        }
         sigpipe::restore_for_applet();
         let code = brush_shell::bundled::invoke_installed(name, self.args.iter().cloned())
             .unwrap_or_else(|error| {

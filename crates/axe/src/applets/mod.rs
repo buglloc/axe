@@ -76,6 +76,21 @@ pub fn vzik(args: Vec<std::ffi::OsString>) -> i32 {
     ::vzik::entry(args)
 }
 
+/// Makes uutils diagnostics name the applet instead of the AXE executable.
+///
+/// The uucore crates derive `util_name()` from the process argv, not from the
+/// arguments AXE passes to `uumain`. For `axe NAME ...` the applet name is the
+/// second process argument, which is what uutils' own multicall binary marks
+/// with this flag. Each uucore version keeps a separate flag.
+pub(crate) fn mark_applet_as_second_arg() {
+    uucore::set_utility_is_second_arg();
+    #[cfg(target_os = "linux")]
+    {
+        procps_uucore::set_utility_is_second_arg();
+        util_linux_uucore::set_utility_is_second_arg();
+    }
+}
+
 pub(crate) fn in_process_io_status(result: std::io::Result<()>, error_status: i32) -> i32 {
     match result {
         Ok(()) => 0,
