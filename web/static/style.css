@@ -1201,6 +1201,69 @@ body::before {
 
 .store-mode-summary code { color: var(--accent); }
 .store-mode-summary b { color: var(--foreground); font-weight: 600; }
+.bootstrap-panel {
+  display: grid;
+  gap: 24px;
+  margin-top: 54px;
+}
+
+.bootstrap-controls {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.35fr) minmax(0, 1fr);
+  gap: 28px;
+  align-items: end;
+}
+
+.bootstrap-controls label,
+.bootstrap-label {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.bootstrap-controls select {
+  display: block;
+  width: 100%;
+  min-height: 42px;
+  margin-top: 8px;
+  padding: 0 12px;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--surface);
+}
+
+.bootstrap-runtime-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.bootstrap-runtime-tabs button {
+  min-height: 42px;
+  padding: 0 13px;
+  color: var(--muted);
+  font-size: 11px;
+  border: 1px solid var(--line-strong);
+}
+
+.bootstrap-runtime-tabs button:hover,
+.bootstrap-runtime-tabs button:focus-visible,
+.bootstrap-runtime-tabs button[aria-pressed="true"] {
+  color: var(--background);
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.bootstrap-command-block {
+  width: 100%;
+}
+
 
 .download-section {
   display: grid;
@@ -1341,6 +1404,7 @@ body::before {
   .diagram-link--reverse::after { top: 0; right: -4px; left: auto; bottom: auto; transform: rotate(-45deg); }
   .diagram-link span { bottom: auto; left: 14px; top: 50%; transform: translateY(-50%); }
   .resolution-flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .bootstrap-controls { grid-template-columns: 1fr; gap: 18px; }
   .download-section { grid-template-columns: 1fr; }
   .site-footer { padding-right: 22px; padding-left: 22px; }
 }

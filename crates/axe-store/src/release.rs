@@ -34,6 +34,17 @@ pub struct ReleaseOptions<'a> {
     pub phase: ReleasePhase,
 }
 
+pub struct AssetReleaseOptions<'a> {
+    pub workspace: &'a Path,
+    pub input: &'a Path,
+    pub immutable_key: &'a str,
+    pub stable_key: &'a str,
+    pub backend: Backend,
+    pub directory: Option<&'a Path>,
+    pub config: &'a Path,
+    pub phase: ReleasePhase,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ReleaseRecord {
@@ -117,19 +128,13 @@ pub fn release(options: &ReleaseOptions<'_>) -> Result<usize, String> {
         }
     }
 
-    let mut sink: Box<dyn ReleaseSink> = match options.backend {
-        Backend::Directory => Box::new(DirectoryReleaseSink::new(
-            options
-                .directory
-                .ok_or_else(|| "--directory is required for directory backend".to_string())?,
-            release_prefix,
-        )?),
-        Backend::S3 => Box::new(S3Sink::for_prefix(
-            options.workspace,
-            &config,
-            release_prefix,
-        )?),
-    };
+    let mut sink = release_sink(
+        options.workspace,
+        options.backend,
+        options.directory,
+        &config,
+        release_prefix,
+    )?;
 
     if options.phase != ReleasePhase::StableOnly {
         for artifact in &artifacts {
@@ -172,6 +177,76 @@ pub fn release(options: &ReleaseOptions<'_>) -> Result<usize, String> {
     }
 
     Ok(artifacts.len())
+}
+
+fn release_sink(
+    workspace: &Path,
+    backend: Backend,
+    directory: Option<&Path>,
+    config: &axe_artifact::StoreConfig,
+    release_prefix: &str,
+) -> Result<Box<dyn ReleaseSink>, String> {
+    match backend {
+        Backend::Directory => Ok(Box::new(DirectoryReleaseSink::new(
+            directory.ok_or_else(|| "--directory is required for directory backend".to_string())?,
+            release_prefix,
+        )?)),
+        Backend::S3 => Ok(Box::new(S3Sink::for_prefix(
+            workspace,
+            config,
+            release_prefix,
+        )?)),
+    }
+}
+
+fn validate_asset_key(key: &str, name: &str) -> Result<(), String> {
+    if key.is_empty()
+        || key.starts_with('/')
+        || key.contains('\\')
+        || key.chars().any(|character| character.is_control())
+        || key
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(format!(
+            "{name} must be a relative slash-separated object key"
+        ));
+    }
+    Ok(())
+}
+pub fn release_asset(options: &AssetReleaseOptions<'_>) -> Result<(), String> {
+    let config = read_config(options.config)?;
+    validate_asset_key(options.immutable_key, "immutable_key")?;
+    validate_asset_key(options.stable_key, "stable_key")?;
+    let release_prefix = config.storage.release_prefix.trim_matches('/');
+    let mut sink = release_sink(
+        options.workspace,
+        options.backend,
+        options.directory,
+        &config,
+        release_prefix,
+    )?;
+    let digest = Digest::from_file(options.input)
+        .map_err(|error| format!("digest {}: {error}", options.input.display()))?;
+
+    if options.phase != ReleasePhase::StableOnly {
+        eprintln!(
+            "axe-store: release asset: publishing immutable {}",
+            options.immutable_key
+        );
+        sink.put_immutable(options.immutable_key, options.input, digest)?;
+    }
+
+    if options.phase != ReleasePhase::ImmutableOnly {
+        sink.verify_immutable(options.immutable_key, options.input, digest)?;
+        eprintln!(
+            "axe-store: release asset: updating stable {}",
+            options.stable_key
+        );
+        sink.put_stable(options.stable_key, options.input)?;
+    }
+
+    Ok(())
 }
 
 fn artifact_filename(binary: &str, target: Target) -> String {
@@ -428,5 +503,72 @@ mod tests {
                 original_x86
             );
         }
+    }
+
+    #[test]
+    fn asset_release_uses_explicit_keys_and_rejects_changed_immutable_bytes() {
+        let scratch = Scratch::new();
+        let input = scratch.0.join("shell.sh");
+        let directory = scratch.0.join("published");
+        let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/store.json");
+        let immutable_key = "releases/v0.11.0/b/sh";
+        let stable_key = "b/sh";
+        let original = b"#!/bin/sh\nprintf '%s\\n' bootstrap\n".to_vec();
+        fs::write(&input, &original).expect("write runtime asset");
+        let mut options = AssetReleaseOptions {
+            workspace: &scratch.0,
+            input: &input,
+            immutable_key,
+            stable_key,
+            backend: Backend::Directory,
+            directory: Some(&directory),
+            config: &config,
+            phase: ReleasePhase::ImmutableOnly,
+        };
+
+        release_asset(&options).expect("publish immutable runtime asset");
+        let immutable_path = directory.join("axe").join(immutable_key);
+        let stable_path = directory.join("axe").join(stable_key);
+        assert_eq!(
+            fs::read(&immutable_path).expect("read immutable runtime asset"),
+            original
+        );
+        assert!(!stable_path.exists());
+        options.phase = ReleasePhase::All;
+        release_asset(&options).expect("publish immutable and stable runtime assets");
+        assert_eq!(
+            fs::read(&stable_path).expect("read stable runtime asset"),
+            original
+        );
+
+        fs::write(&immutable_path, b"changed remote bytes").expect("corrupt immutable asset");
+        options.phase = ReleasePhase::StableOnly;
+        let error = release_asset(&options).expect_err("stable phase verifies immutable asset");
+        assert!(error.contains("already exists with different bytes"));
+        assert_eq!(
+            fs::read(&stable_path).expect("read unchanged stable runtime asset"),
+            original
+        );
+
+        fs::write(&immutable_path, &original).expect("restore immutable asset");
+        fs::write(&stable_path, b"old stable bytes").expect("corrupt stable asset");
+        release_asset(&options).expect("publish stable runtime asset");
+        assert_eq!(
+            fs::read(&stable_path).expect("read stable runtime asset"),
+            original
+        );
+
+        fs::write(&input, b"changed local bytes").expect("change runtime asset");
+        options.phase = ReleasePhase::ImmutableOnly;
+        let error = release_asset(&options).expect_err("immutable asset cannot be replaced");
+        assert!(error.contains("already exists with different bytes"));
+        assert_eq!(
+            fs::read(&immutable_path).expect("read unchanged immutable asset"),
+            original
+        );
+        assert_eq!(
+            fs::read(&stable_path).expect("read unchanged stable asset"),
+            original
+        );
     }
 }

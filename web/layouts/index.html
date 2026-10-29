@@ -268,9 +268,44 @@
     <p class="store-mode-summary"><code>AXE_STORE_MODE</code> <b>auto</b> cache + network · <b>cache-only</b> verified cache · <b>off</b> no Store commands. Bundled commands remain available in every mode.</p>
   </section>
 
+  {{ with hugo.Data.bootstrap }}
+  <section class="section bootstrap-section" id="bootstrap" aria-labelledby="bootstrap-title">
+    <div class="section-heading section-heading--compact">
+      <p class="kicker"><span>08</span> Bootstrap AXE</p>
+      <h2 id="bootstrap-title">Bring the shell over the wire.</h2>
+      <p>Choose the runtime already available on the host. The generated bootstrap downloads the static AXE release; Native uses the configured HTTP endpoint with IPv6 first and IPv4 fallback.</p>
+    </div>
+    <div class="bootstrap-panel">
+      <div class="bootstrap-controls">
+        <label for="bootstrap-target">target
+          <select id="bootstrap-target" data-bootstrap-target>
+            {{ range $target, $_ := .targets }}<option value="{{ $target }}">{{ $target }}</option>{{ end }}
+          </select>
+        </label>
+        <div>
+          <span class="bootstrap-label">runtime</span>
+          <div class="bootstrap-runtime-tabs" role="group" aria-label="Bootstrap runtime">
+            <button type="button" data-bootstrap-runtime="shell" aria-pressed="true">Shell</button>
+            <button type="button" data-bootstrap-runtime="python" aria-pressed="false">Python</button>
+            <button type="button" data-bootstrap-runtime="node" aria-pressed="false">Node</button>
+            <button type="button" data-bootstrap-runtime="perl" aria-pressed="false">Perl</button>
+            <button type="button" data-bootstrap-runtime="native" aria-pressed="false">Native</button>
+          </div>
+        </div>
+      </div>
+      <div class="install-block bootstrap-command-block">
+        <div class="install-block__bar"><span data-bootstrap-label>shell</span><button type="button" data-copy-target="bootstrap-command">copy</button></div>
+        <pre id="bootstrap-command"><code data-bootstrap-command>Loading bootstrap command…</code></pre>
+        <p><span data-bootstrap-meta></span><a href="https://github.com/buglloc/axe/releases/latest">release assets →</a></p>
+      </div>
+    </div>
+    <script id="bootstrap-data" type="application/json">{{ . | jsonify }}</script>
+  </section>
+  {{ end }}
+
   <section class="section download-section" id="download" aria-labelledby="download-title">
     <div class="download-copy">
-      <p class="kicker"><span>08</span> Downloads and builds</p>
+      <p class="kicker"><span>09</span> Downloads and builds</p>
       <h2 id="download-title">Get AXE before you need it.</h2>
       <p>Download the current OSS binary from S3. Other targets are listed in GitHub Releases; you can also build from source.</p>
       <div class="target-links" aria-label="AXE releases and source">

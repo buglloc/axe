@@ -146,4 +146,65 @@
       window.setTimeout(() => { button.textContent = originalLabel; }, 1600);
     });
   });
+  const bootstrapData = document.getElementById("bootstrap-data");
+  const bootstrapTarget = document.querySelector("[data-bootstrap-target]");
+  const bootstrapCommand = document.querySelector("[data-bootstrap-command]");
+  const bootstrapLabel = document.querySelector("[data-bootstrap-label]");
+  const bootstrapMeta = document.querySelector("[data-bootstrap-meta]");
+  const bootstrapRuntimes = [...document.querySelectorAll("[data-bootstrap-runtime]")];
+  if (bootstrapData && bootstrapTarget && bootstrapCommand) {
+    const data = JSON.parse(bootstrapData.textContent);
+    const runtimeRunners = {
+      python: "python3",
+      node: "node",
+      perl: "perl",
+    };
+    let activeRuntime = "shell";
+    const formatBytes = (value) => `${value} B`;
+    const shellQuote = (value) => `'${value.replaceAll("'", "'\"'\"'")}'`;
+    const renderBootstrap = () => {
+      const target = bootstrapTarget.value;
+      const targetData = data.targets[target];
+      const runtime = targetData.runtimes[activeRuntime];
+      let command;
+      let label;
+      if (activeRuntime === "native") {
+        command = [
+          `curl -fL -o axe-bootstrap ${runtime.download_url}`,
+          "chmod +x axe-bootstrap",
+          "./axe-bootstrap",
+        ].join("\n");
+        label = "native ELF";
+      } else {
+        const content = atob(runtime.content_base64);
+        if (activeRuntime === "shell") {
+          command = `sh -c ${shellQuote(content)} --`;
+        } else if (activeRuntime === "python") {
+          command = `${runtimeRunners[activeRuntime]} -c ${shellQuote(`import base64;exec(compile(base64.b64decode(${JSON.stringify(runtime.content_base64)}),\"axe-bootstrap.py\",\"exec\"))`)}`;
+        } else if (activeRuntime === "node") {
+          command = `node -e ${shellQuote(`eval(Buffer.from(${JSON.stringify(runtime.content_base64)},\"base64\").toString())`)}`;
+        } else {
+          const hex = [...content].map((character) => character.charCodeAt(0).toString(16).padStart(2, "0")).join("");
+          command = `perl -e ${shellQuote(`eval pack(\"H*\",\"${hex}\")`)}`;
+        }
+        label = runtime.label;
+      }
+      bootstrapCommand.textContent = command;
+      if (bootstrapLabel) bootstrapLabel.textContent = label;
+      if (bootstrapMeta) {
+        bootstrapMeta.textContent = `${target} · ${formatBytes(runtime.size)} raw · ${formatBytes(runtime.base64_size)} base64 · ${formatBytes(runtime.hex_size)} hex`;
+      }
+      bootstrapRuntimes.forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.bootstrapRuntime === activeRuntime));
+      });
+    };
+    bootstrapTarget.addEventListener("change", renderBootstrap);
+    bootstrapRuntimes.forEach((button) => {
+      button.addEventListener("click", () => {
+        activeRuntime = button.dataset.bootstrapRuntime;
+        renderBootstrap();
+      });
+    });
+    renderBootstrap();
+  }
 })();

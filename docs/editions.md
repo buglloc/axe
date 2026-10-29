@@ -14,6 +14,7 @@ mkdir -p target
 mkdir -m 0700 "$AXE_EDITION_ROOT"
 mkdir -p "$AXE_EDITION_ROOT/config" "$AXE_EDITION_ROOT/store/trusted"
 cp config/store.json "$AXE_EDITION_ROOT/config/store.json"
+cp config/bootstrap.json "$AXE_EDITION_ROOT/config/bootstrap.json"
 cp store/bootstrap.json "$AXE_EDITION_ROOT/store/bootstrap.json"
 cp store/trusted/*.pub "$AXE_EDITION_ROOT/store/trusted/"
 cat > "$AXE_EDITION_ROOT/edition.json" <<'JSON'
@@ -34,6 +35,8 @@ install -Dm755 "$AXE_EDITION_ROOT/dist/axe-x86_64-unknown-linux-musl" "$AXE_EDIT
 "$AXE_EDITION_ROOT/bin/axe" --version
 "$AXE_EDITION_ROOT/bin/axe" doctor --json
 ```
+Edit `config/bootstrap.json` in the edition root to set `default_args`, for
+example `["sshd"]`; an empty array keeps the normal `axe` invocation.
 
 The build recipe generates missing development SSH and relay identities in this root without replacing complete pairs. Do not deploy them in production. Do not run `just generate-dev-keys` when reusing Store trust without its private signing key: that recipe requires both. Consumer builds do not need a Store signing key.
 

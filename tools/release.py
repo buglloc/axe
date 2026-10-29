@@ -15,15 +15,24 @@ import stat
 import sys
 import tempfile
 import tomllib
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import urlopen
 
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from bootstrap import generate as bootstrap_generate  # noqa: E402
+from bootstrap.ascon import hexdigest as ascon_hexdigest  # noqa: E402
+
+
 TARGETS = {
     "x86_64-linux": "x86_64-unknown-linux-musl",
     "aarch64-linux": "aarch64-unknown-linux-musl",
     "aarch64-darwin": "aarch64-apple-darwin",
 }
+# Bootstrap Store keys under b/: universal scripts and per-target Native loaders.
+BOOTSTRAP_SCRIPTS = {"shell": "sh", "python": "py", "node": "js", "perl": "pl"}
+BOOTSTRAP_NATIVE = {"x86_64-linux": ("x86_64", "amd64-linux"), "aarch64-linux": ("aarch64", "aarch64-linux")}
 BINARIES = ("axe", "axe-relay", "vzik")
 
 
@@ -213,13 +222,31 @@ def prepare(bump: str) -> None:
     print(f"Prepared {tag}; review {page}, Cargo.toml, Cargo.lock, then commit and push main.")
 
 
-def release_cli(edition: Path, stage: Path, phase: str, directory: Path | None) -> None:
+def release_cli(
+    edition: Path,
+    stage: Path,
+    phase: str,
+    directory: Path | None,
+    *,
+    binaries: tuple[str, ...] = BINARIES,
+    targets: tuple[str, ...] = tuple(TARGETS),
+) -> None:
     producer = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() / "debug" / "axe-store"
-    for binary in BINARIES:
-        command = [str(producer), "--config", str(edition / "config" / "store.json"), "release",
-                   "--binary", binary, "--input", str(stage), "--metadata", str(stage / metadata_name(binary)),
-                   f"--{phase}-only"]
-        for target in TARGETS:
+    for binary in binaries:
+        command = [
+            str(producer),
+            "--config",
+            str(edition / "config" / "store.json"),
+            "release",
+            "--binary",
+            binary,
+            "--input",
+            str(stage),
+            "--metadata",
+            str(stage / metadata_name(binary)),
+            f"--{phase}-only",
+        ]
+        for target in targets:
             command.extend(("--target", target))
         if directory is not None:
             command.extend(("--backend", "directory", "--directory", str(directory)))
@@ -258,6 +285,33 @@ def verify_public_objects(stage: Path, *, stable: bool = False) -> None:
 
             if digest.hexdigest() != expected:
                 raise ReleaseError(f"public release object differs from staged asset: {name}")
+
+
+def verify_native_http_object(stage: Path) -> None:
+    """Every bootstrap falls back to plain HTTP: it must serve the payload
+    directly, without a redirect to HTTPS."""
+
+    bundle = json.loads((stage / "bootstrap-manifest.json").read_text())["bundle"]
+    for target, manifest in bundle["targets"].items():
+        url = f"http://{manifest['host']}:{manifest['ports']['http']}{manifest['path']}"
+        payload = stage / asset_name("axe", target)
+        digest = hashlib.sha256()
+        with urlopen(url, timeout=60) as response:
+            if response.status != 200 or response.geturl() != url:
+                raise ReleaseError(
+                    f"Native bootstrap HTTP object redirected or unreadable: {url}"
+                )
+            remaining = payload.stat().st_size
+            while remaining:
+                block = response.read(min(1024 * 1024, remaining))
+                if not block:
+                    raise ReleaseError(f"truncated Native bootstrap HTTP payload: {url}")
+                digest.update(block)
+                remaining -= len(block)
+            if response.read(1):
+                raise ReleaseError(f"oversized Native bootstrap HTTP payload: {url}")
+        if digest.hexdigest() != sha256(payload):
+            raise ReleaseError(f"Native bootstrap HTTP payload differs from staged axe: {url}")
 
 
 def render_downloads(readme: str, tag: str, records: dict, assets: dict) -> str:
@@ -329,6 +383,191 @@ def verify_remote_source(commit: str) -> None:
         raise ReleaseError("GitHub CLI is not targeting the public buglloc/axe repository")
 
 
+BOOTSTRAP_FILES = ("bootstrap.json", "bootstrap-manifest.json")
+
+
+def bootstrap_asset_names() -> set[str]:
+    return set(BOOTSTRAP_FILES)
+
+
+def read_bootstrap_config(edition: Path) -> list[str]:
+    """Return the edition's default bootstrap arguments; generate.py validates them."""
+
+    path = edition / "config" / "bootstrap.json"
+    if not path.is_file():
+        return []
+
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict) or set(value) - {"default_args"}:
+        raise ReleaseError(f"{path} may contain only default_args")
+    return value.get("default_args", [])
+
+
+def store_url(config: dict, key: str, scheme: str = "https") -> str:
+    storage = config["storage"]
+    endpoint = urlsplit(storage["endpoint"])
+    path = f"/{storage['bucket'].strip('/')}/{storage['release_prefix'].strip('/')}/{key.lstrip('/')}"
+    return urlunsplit((scheme, endpoint.netloc, path, "", ""))
+
+
+def bootstrap_bundle(version: str, out: Path, config: dict, default_args: list[str]) -> dict:
+    """Describe the released axe payloads for bootstrap/generate.py."""
+
+    endpoint = urlsplit(config["storage"]["endpoint"])
+    if endpoint.scheme != "https" or not endpoint.hostname:
+        raise ReleaseError("bootstrap release requires an HTTPS Store endpoint")
+
+    targets = {}
+    for target in BOOTSTRAP_NATIVE:
+        payload = (out / asset_name("axe", target)).read_bytes()
+        targets[target] = {
+            "host": endpoint.hostname,
+            "path": urlsplit(store_url(config, f"releases/v{version}/{target}/axe")).path,
+            "ports": {"https": endpoint.port or 443, "http": 80},
+            "addresses": list(config["consumer"]["addresses"]),
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            # Pure Python and slow (~1 min per target): compute once.
+            "ascon_hash256": ascon_hexdigest(payload),
+        }
+
+    try:
+        return bootstrap_generate.validate(
+            {"version": version, "default_args": default_args, "targets": targets}
+        )
+    except bootstrap_generate.BundleError as error:
+        raise ReleaseError(f"invalid bootstrap configuration: {error}") from error
+
+
+def _size_metadata(size: int) -> dict:
+    return {"size": size, "base64_size": (size + 2) // 3 * 4, "hex_size": size * 2}
+
+
+def stage_bootstrap(version: str, stage: Path, config: dict, default_args: list[str]) -> None:
+    """Build every bootstrap asset from the axe payloads in *stage* into
+    stage/.bootstrap-assets, and write bootstrap.json (website) and
+    bootstrap-manifest.json (publisher)."""
+
+    bundle = bootstrap_bundle(version, stage, config, default_args)
+    assets = stage / ".bootstrap-assets"
+    work = stage / ".bootstrap-work"
+    assets.mkdir()
+    work.mkdir()
+
+    for name, data in bootstrap_generate.render_scripts(bundle).items():
+        (assets / name).write_bytes(data)
+    for target, (arch, name) in BOOTSTRAP_NATIVE.items():
+        header = work / f"{target}.h"
+        header.write_text(bootstrap_generate.native_header(bundle, target), encoding="ascii")
+        run(str(ROOT / "bootstrap/native/build.sh"), arch, str(header), str(assets / name))
+
+    records = {}
+    for path in sorted(assets.iterdir()):
+        immutable_key = f"releases/v{version}/b/{path.name}"
+        stable_key = f"b/{path.name}"
+        records[path.name] = {
+            "immutable_key": immutable_key,
+            "stable_key": stable_key,
+            "url": store_url(config, immutable_key),
+            "stable_url": store_url(config, stable_key),
+            "http_url": store_url(config, immutable_key, "http"),
+            "stable_http_url": store_url(config, stable_key, "http"),
+            "sha256": sha256(path),
+            "size": path.stat().st_size,
+        }
+
+    def script(runtime: str, label: str) -> dict:
+        name = BOOTSTRAP_SCRIPTS[runtime]
+        return {
+            "label": label,
+            "content_base64": base64.b64encode((assets / name).read_bytes()).decode("ascii"),
+            "url": records[name]["stable_url"],
+            "http_url": records[name]["stable_http_url"],
+            **_size_metadata(records[name]["size"]),
+        }
+
+    scripts = {
+        "shell": script("shell", "POSIX shell bootstrap"),
+        "python": script("python", "Python bootstrap"),
+        "node": script("node", "Node.js bootstrap"),
+        "perl": script("perl", "Perl bootstrap"),
+    }
+    document = {"version": version, "default_args": bundle["default_args"], "targets": {}}
+    for target, (_, name) in BOOTSTRAP_NATIVE.items():
+        native = {
+            "label": "native ELF",
+            "download_url": records[name]["url"],
+            "stable_url": records[name]["stable_url"],
+            "stable_http_url": records[name]["stable_http_url"],
+            **_size_metadata(records[name]["size"]),
+        }
+        payload = {key: bundle["targets"][target][key] for key in ("size", "sha256")}
+        document["targets"][target] = {**payload, "runtimes": {**scripts, "native": native}}
+
+    atomic_write(stage / "bootstrap.json", json.dumps(document, sort_keys=True, indent=2) + "\n")
+    atomic_write(
+        stage / "bootstrap-manifest.json",
+        json.dumps({"version": version, "assets": records, "bundle": bundle}, sort_keys=True, indent=2) + "\n",
+    )
+    shutil.rmtree(work)
+
+
+def bootstrap_asset_records(stage: Path) -> dict[str, dict]:
+    document = json.loads((stage / "bootstrap-manifest.json").read_text())
+    return document["assets"]
+
+
+def release_asset_cli(
+    edition: Path,
+    stage: Path,
+    phase: str,
+    directory: Path | None,
+) -> None:
+    producer = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() / "debug" / "axe-store"
+    for name, record in bootstrap_asset_records(stage).items():
+        command = [
+            str(producer),
+            "--config",
+            str(edition / "config" / "store.json"),
+            "release-asset",
+            "--input",
+            str(stage / ".bootstrap-assets" / name),
+            "--immutable-key",
+            record["immutable_key"],
+            "--stable-key",
+            record["stable_key"],
+            f"--{phase}-only",
+        ]
+        if directory is not None:
+            command.extend(("--backend", "directory", "--directory", str(directory)))
+        run(*command, cwd=edition)
+
+
+def verify_bootstrap_assets(stage: Path, *, stable: bool = False) -> None:
+    for name, record in bootstrap_asset_records(stage).items():
+        source = stage / ".bootstrap-assets" / name
+        expected = sha256(source)
+        if expected != record["sha256"] or source.stat().st_size != record["size"]:
+            raise ReleaseError(f"staged bootstrap asset changed: {name}")
+        url = record["stable_url"] if stable else record["url"]
+        if not url.startswith("https://"):
+            raise ReleaseError(f"bootstrap asset URL is not HTTPS: {url}")
+        digest = hashlib.sha256()
+        with urlopen(url, timeout=60) as response:
+            if response.status != 200 or response.geturl() != url:
+                raise ReleaseError(f"bootstrap asset unreadable at expected URL: {url}")
+            remaining = record["size"]
+            while remaining:
+                block = response.read(min(1024 * 1024, remaining))
+                if not block:
+                    raise ReleaseError(f"truncated bootstrap asset: {name}")
+                digest.update(block)
+                remaining -= len(block)
+            if response.read(1):
+                raise ReleaseError(f"oversized bootstrap asset: {name}")
+        if digest.hexdigest() != expected:
+            raise ReleaseError(f"bootstrap asset differs from staged asset: {name}")
+
 def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path) -> Path:
     stage = out / "releases" / f"v{version}"
     index = edition / "store" / "bootstrap-index.cbor.zst"
@@ -347,12 +586,18 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
             or manifest["notes"] != hashlib.sha256(notes.encode()).hexdigest()
         ):
             raise ReleaseError("staged release inputs changed; do not reuse or move an existing tag")
-        expected_assets = {asset_name(binary, target) for binary in BINARIES for target in TARGETS}
+        expected_assets = (
+            {asset_name(binary, target) for binary in BINARIES for target in TARGETS}
+            | bootstrap_asset_names()
+        )
         if not expected_assets.issubset(manifest["assets"]):
-            raise ReleaseError("staged release does not contain every binary and target")
+            raise ReleaseError("staged release does not contain every binary and bootstrap asset")
         for name, digest in manifest["assets"].items():
             if sha256(stage / name) != digest:
                 raise ReleaseError(f"staged release asset changed: {name}")
+        for name, record in bootstrap_asset_records(stage).items():
+            if sha256(stage / ".bootstrap-assets" / name) != record["sha256"]:
+                raise ReleaseError(f"staged bootstrap asset changed: {name}")
         return stage
     if stage.exists():
         raise ReleaseError(f"incomplete release staging directory: {stage}; inspect before retry")
@@ -377,10 +622,14 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
     if f"axe {version}+{commit[:12]} (edition oss;" not in output:
         raise ReleaseError(f"built binary has wrong version, source commit or edition: {output}")
 
+    config = json.loads((edition / "config" / "store.json").read_text())
+    default_args = read_bootstrap_config(edition)
+
     stage.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".release-stage-", dir=stage.parent) as temporary:
         pending = Path(temporary)
-        assets = {}
+
+        assets: dict[str, str] = {}
         for name in (asset_name(binary, target) for binary in BINARIES for target in TARGETS):
             source = out / name
             if not source.is_file():
@@ -388,13 +637,38 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
             shutil.copy2(source, pending / name)
             assets[name] = sha256(pending / name)
 
+        stage_bootstrap(version, pending, config, default_args)
+        for name in BOOTSTRAP_FILES:
+            assets[name] = sha256(pending / name)
+
         run("just", "_web-inventory", str(pending / asset_name("axe", "x86_64-linux")), str(pending / "registry.json"))
         assets["registry.json"] = sha256(pending / "registry.json")
 
+        checksums = dict(assets)
+        checksums.update(
+            {f"b/{name}": record["sha256"] for name, record in bootstrap_asset_records(pending).items()}
+        )
         atomic_write(pending / "notes.md", notes)
-        atomic_write(pending / "SHA256SUMS", "".join(f"{digest}  {name}\n" for name, digest in sorted(assets.items())))
+        atomic_write(
+            pending / "SHA256SUMS",
+            "".join(f"{digest}  {name}\n" for name, digest in sorted(checksums.items())),
+        )
         assets["SHA256SUMS"] = sha256(pending / "SHA256SUMS")
-        atomic_write(pending / "manifest.json", json.dumps({"version": version, "commit": commit, "edition": "oss", "snapshot": snapshot, "notes": hashlib.sha256(notes.encode()).hexdigest(), "assets": assets}, indent=2) + "\n")
+        atomic_write(
+            pending / "manifest.json",
+            json.dumps(
+                {
+                    "version": version,
+                    "commit": commit,
+                    "edition": "oss",
+                    "snapshot": snapshot,
+                    "notes": hashlib.sha256(notes.encode()).hexdigest(),
+                    "assets": assets,
+                },
+                indent=2,
+            )
+            + "\n",
+        )
         pending.rename(stage)
     return stage
 
@@ -441,7 +715,9 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
     stage = stage_assets(version, commit, out, edition, page)
     if directory is not None:
         release_cli(edition, stage, "immutable", directory)
+        release_asset_cli(edition, stage, "immutable", directory)
         release_cli(edition, stage, "stable", directory)
+        release_asset_cli(edition, stage, "stable", directory)
         print(f"Verified local directory release {tag} at {directory}; no tag, GitHub, or S3 changes")
         return
 
@@ -458,6 +734,7 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
         raise ReleaseError("GitHub release body differs from reviewed notes")
 
     release_cli(edition, stage, "immutable", None)
+    release_asset_cli(edition, stage, "immutable", None)
     records = release_records(stage)
     assets = json.loads((stage / "manifest.json").read_text())["assets"]
     baseline = subprocess.run(("git", "show", "HEAD:README.md"), cwd=ROOT, check=True, capture_output=True, text=True).stdout
@@ -465,6 +742,8 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
     if dirty and "README.md" in {line[3:] for line in dirty.splitlines()} and (ROOT / "README.md").read_text() != readme:
         raise ReleaseError("README changes are not the expected staged download table")
     verify_public_objects(stage)
+    verify_bootstrap_assets(stage)
+    verify_native_http_object(stage)
 
     expected = json.loads((stage / "manifest.json").read_text())["assets"]
     for name, digest in expected.items():
@@ -478,7 +757,9 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
     if release["isDraft"]:
         run("gh", "release", "edit", tag, "--draft=false")
     release_cli(edition, stage, "stable", None)
+    release_asset_cli(edition, stage, "stable", None)
     verify_public_objects(stage, stable=True)
+    verify_bootstrap_assets(stage, stable=True)
 
     data = (stage / "axe-releases.json").read_text()
     records = release_records(stage)

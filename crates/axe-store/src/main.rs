@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use build_pipeline::{BuildOptions, build};
 use publish::{Backend, DiagnoseUploadOptions, PublishOptions, diagnose_upload, publish};
-use release::{ReleaseOptions, ReleasePhase, release};
+use release::{AssetReleaseOptions, ReleaseOptions, ReleasePhase, release, release_asset};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -38,6 +38,7 @@ enum Command {
     Publish(PublishArgs),
     DiagnoseUpload(DiagnoseUploadArgs),
     Release(ReleaseArgs),
+    ReleaseAsset(ReleaseAssetArgs),
     Sync(SyncArgs),
 }
 
@@ -110,6 +111,24 @@ struct ReleaseArgs {
     binary: ReleaseBinary,
     #[arg(long)]
     target: Vec<Target>,
+    #[arg(long, value_enum, default_value = "s3")]
+    backend: BackendArg,
+    #[arg(long)]
+    directory: Option<PathBuf>,
+    #[arg(long, conflicts_with = "stable_only")]
+    immutable_only: bool,
+    #[arg(long)]
+    stable_only: bool,
+}
+
+#[derive(Clone, Debug, clap::Args)]
+struct ReleaseAssetArgs {
+    #[arg(long)]
+    input: PathBuf,
+    #[arg(long)]
+    immutable_key: String,
+    #[arg(long)]
+    stable_key: String,
     #[arg(long, value_enum, default_value = "s3")]
     backend: BackendArg,
     #[arg(long)]
@@ -253,6 +272,25 @@ fn run(cli: Cli) -> Result<(), String> {
                 "published {published} {} release artifacts",
                 args.binary.as_str()
             );
+        }
+        Command::ReleaseAsset(args) => {
+            release_asset(&AssetReleaseOptions {
+                workspace: &workspace,
+                input: &args.input,
+                immutable_key: &args.immutable_key,
+                stable_key: &args.stable_key,
+                backend: args.backend.into(),
+                directory: args.directory.as_deref(),
+                config: &cli.config,
+                phase: if args.immutable_only {
+                    ReleasePhase::ImmutableOnly
+                } else if args.stable_only {
+                    ReleasePhase::StableOnly
+                } else {
+                    ReleasePhase::All
+                },
+            })?;
+            println!("published bootstrap asset {}", args.immutable_key);
         }
         Command::Sync(args) => {
             run_build(&workspace, &args.build)?;

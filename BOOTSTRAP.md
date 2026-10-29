@@ -53,6 +53,41 @@ keys/store/s3_secret_access_key
 
 Container Store recipes mount these files rather than inheriting host AWS credentials. The local AXE release publisher can use AWS environment variables instead; see [docs/release.md](docs/release.md#inputs-and-trust). Set the endpoint, region, bucket, prefixes, and pinned A/AAAA addresses in `config/store.json`. See [Store publication](docs/store.md#publication) for commands and safeguards.
 
+## Bootstrap release artifacts
+
+Each release also builds bootstrap programs that fetch and run `axe` on a host
+without it: universal Shell, Python, Node.js, and Perl scripts, and a static
+Native ELF loader per Linux target. They are generated from the released `axe`
+payloads and published under `releases/v<VERSION>/b/`, with stable aliases:
+
+```text
+b/sh
+b/py
+b/js
+b/pl
+b/amd64-linux
+b/aarch64-linux
+```
+
+Every program connects to the pinned `consumer.addresses` from
+`config/store.json` (IPv6 first) and checks the pinned size and digest before
+running anything. The plain-HTTP form of the Store endpoint must return objects
+directly, without redirecting to HTTPS; the publisher verifies this. Transport,
+verification, and execution details are in
+[bootstrap/README.md](bootstrap/README.md).
+
+The optional edition-local `config/bootstrap.json` sets the arguments used when
+a bootstrap program receives none:
+
+```json
+{
+  "default_args": ["sshd"]
+}
+```
+
+An empty array runs plain `axe`. At most eight printable ASCII arguments are
+allowed.
+
 ## Relay endpoints and identities
 
 The OSS edition has no default relay. Configure endpoints in `edition.json` if needed. The default transport is TCP; `enabled_by_default` requires a TCP endpoint and a token of at least 32 bytes. Generate deployment-specific credentials on a controlled machine:

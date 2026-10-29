@@ -59,6 +59,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release download "${{ needs.registry.outputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern registry.json --dir web/data
 
+      - name: Download bootstrap inventory when published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release download "${{ needs.registry.outputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern bootstrap.json --dir web/data; then
+            echo "::notice::Release has no bootstrap.json; Bootstrap UI is omitted."
+          fi
+
       - name: Build website
         run: hugo --source web --gc --minify --cleanDestinationDir
 

@@ -315,7 +315,10 @@ vendor-test:
 check: _prepare-axe-dev-keys check-store-bootstrap check-vendor
     AXE_EDITION_ROOT="{{edition_root}}" cargo check --locked --workspace --all-targets --all-features
 
-smoke: _require-reference-tools _prepare-axe-dev-keys vendor-test
+bootstrap-test: _require-reference-tools
+    python3 -m unittest discover -s "{{source_root}}/bootstrap"
+
+smoke: _require-reference-tools _prepare-axe-dev-keys vendor-test bootstrap-test
     AXE_EDITION_ROOT="{{edition_root}}" cargo test --locked --workspace --all-features
 
 applet-parity: _require-reference-tools _prepare-axe-dev-keys
