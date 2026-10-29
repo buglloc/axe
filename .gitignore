@@ -8,7 +8,6 @@ target/
 /store/dist/
 /store/.axe-store-stage*/
 /store/.axe-store-work*/
-/tools/__pycache__/
 *.tar
 /web/public/
 /web/.hugo_build.lock
@@ -16,3 +15,4 @@ target/
 /.axe-*
 /.axe/
 *.tar.gz
+__pycache__
