@@ -13,7 +13,7 @@ copyright = "AXE is open source under the MIT License."
     noClasses = false
 
 [params]
-  subtitle = "A portable rescue shell for Linux systems with nothing useful left."
+  subtitle = "A rescue shell in a single executable: interactive shell, Unix tools, host diagnostics, certificate-only SSH and a verified on-demand tool store."
   keywords = "rescue shell, static linux tools, ssh server, incident response, portable shell"
   contentTypeName = "pages"
   showMenuItems = 6
@@ -46,33 +46,25 @@ copyright = "AXE is open source under the MIT License."
     target = "data"
 
 [[menus.main]]
-  name = "Survival"
-  url = "/#survival"
-  weight = 10
-[[menus.main]]
-  name = "Tools"
-  url = "/#tools"
+  name = "Commands"
+  url = "/tools/"
   weight = 20
+[[menus.main]]
+  name = "Failures"
+  url = "/#failures"
+  weight = 30
 [[menus.main]]
   name = "Remote"
   url = "/#remote"
-  weight = 30
+  weight = 40
 [[menus.main]]
   name = "Patches"
   url = "/patches/"
-  weight = 40
+  weight = 50
 [[menus.main]]
   name = "Changelog"
   url = "/changelog/"
-  weight = 45
-[[menus.main]]
-  name = "Bootstrap"
-  url = "/#bootstrap"
-  weight = 48
-[[menus.main]]
-  name = "Download"
-  url = "/#download"
-  weight = 50
+  weight = 55
 [[menus.main]]
   name = "Source"
   url = "https://github.com/buglloc/axe"

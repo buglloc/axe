@@ -1,0 +1,67 @@
+{{ define "main" }}
+{{ $commands := hugo.Data.registry.commands }}
+{{ $bundledCommands := where $commands "source" "bundled" }}
+{{ $storeCommands := where $commands "source" "store" }}
+{{ $categoryLabels := dict }}
+{{ range hugo.Data.tool_filters.filters }}
+  {{ $categoryLabels = merge $categoryLabels (dict .id .label) }}
+{{ end }}
+
+<main id="main" class="landing tools-page">
+  <div class="section-heading tools-heading">
+    <h1>{{ .Title }}</h1>
+    <p>{{ len $bundledCommands }} commands are bundled in the executable and work offline. {{ len $storeCommands }} more come from AXE Store: they download on first use and stay in a private, verified cache.</p>
+  </div>
+
+  <div class="tool-filters">
+    <label class="tool-search">
+      <span class="sr-only">Filter by name, alias or description</span>
+      <input type="search" placeholder="Filter by name, alias or description" autocomplete="off" spellcheck="false" data-command-search>
+      <kbd aria-hidden="true">/</kbd>
+    </label>
+
+    <div class="tool-controls">
+      <div class="tool-source-tabs" role="group" aria-label="Filter by source">
+        <button class="is-active" type="button" data-source-filter="all">all</button>
+        <button type="button" data-source-filter="bundled">bundled</button>
+        <button type="button" data-source-filter="store">store</button>
+      </div>
+      <p class="tool-summary" aria-live="polite"><b data-visible-tools>{{ len $commands }}</b> of {{ len $commands }} commands</p>
+      <button class="tool-reset" type="button" data-tool-reset hidden>Reset filters</button>
+    </div>
+
+    <div class="tool-category-filters" role="group" aria-label="Filter by category">
+      <button class="is-active" type="button" data-category-clear>all categories</button>
+      {{ range hugo.Data.tool_filters.filters }}
+      <button type="button" data-category-filter="{{ .id }}">{{ .label }}</button>
+      {{ end }}
+    </div>
+  </div>
+
+  <table class="tool-table">
+    <caption class="sr-only">AXE commands</caption>
+    <colgroup><col class="tool-table__col-name"><col><col class="tool-table__col-source"><col class="tool-table__col-category"></colgroup>
+    <thead>
+      <tr><th scope="col">Command</th><th scope="col">Description</th><th scope="col">Source</th><th scope="col" class="tool-table__category">Category</th></tr>
+    </thead>
+    <tbody>
+      {{ range $commands }}
+      {{ if not (isset $categoryLabels .category) }}{{ errorf "command %q has unmapped web category %q" .name .category }}{{ end }}
+      {{ $aliases := .aliases | default slice }}
+      <tr id="cmd-{{ .name }}" data-command data-source="{{ .source }}" data-category="{{ .category }}" data-search="{{ .name | lower }} {{ delimit $aliases " " | lower }} {{ .synopsis | lower }} {{ index $categoryLabels .category | lower }} {{ .source }}">
+        <th scope="row" class="tool-table__name">
+          <a href="#cmd-{{ .name }}"><code>{{ .name }}</code></a>
+          {{ with $aliases }}<small>also {{ range $index, $alias := . }}{{ if $index }}, {{ end }}<code>{{ $alias }}</code>{{ end }}</small>{{ end }}
+        </th>
+        <td class="tool-table__synopsis">{{ .synopsis }}</td>
+        <td><span class="tool-source tool-source--{{ .source }}">{{ .source }}</span></td>
+        <td class="tool-table__category">{{ index $categoryLabels .category }}</td>
+      </tr>
+      {{ end }}
+    </tbody>
+  </table>
+  <p class="tool-empty" data-tool-empty hidden>No commands match. <button type="button" data-tool-reset>Reset filters</button></p>
+  <p class="tool-hint"><kbd>/</kbd> focuses the filter, <kbd>Esc</kbd> resets it. The page URL keeps the current filters.</p>
+  <noscript><p class="tool-hint">Filters need JavaScript; the full list is shown.</p></noscript>
+</main>
+{{ end }}

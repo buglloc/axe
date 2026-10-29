@@ -30,6 +30,9 @@
   const search = document.querySelector("[data-command-search]");
   const visibleCount = document.querySelector("[data-visible-tools]");
   const emptyState = document.querySelector("[data-tool-empty]");
+  const resetButtons = [...document.querySelectorAll("[data-tool-reset]")];
+  const sources = new Set(sourceButtons.map((button) => button.dataset.sourceFilter));
+  const categories = new Set(categoryButtons.map((button) => button.dataset.categoryFilter));
   const activeCategories = new Set();
   let activeSource = "all";
 
@@ -52,8 +55,20 @@
     categoryClear?.setAttribute("aria-pressed", String(allActive));
   };
 
+  const currentQuery = () => search?.value.trim() ?? "";
+
+  const writeUrl = () => {
+    const params = new URLSearchParams();
+    if (currentQuery()) params.set("q", currentQuery());
+    if (activeSource !== "all") params.set("source", activeSource);
+    if (activeCategories.size) params.set("category", [...activeCategories].join(","));
+    const query = params.toString().replaceAll("%2C", ",");
+    const url = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+    window.history.replaceState(null, "", url);
+  };
+
   const updateToolFilter = () => {
-    const query = search?.value.trim().toLowerCase() ?? "";
+    const query = currentQuery().toLowerCase();
     let commandCount = 0;
 
     for (const command of commands) {
@@ -66,55 +81,74 @@
       if (visible) commandCount += 1;
     }
 
+    const filtered = Boolean(query) || activeSource !== "all" || activeCategories.size > 0;
     if (visibleCount) visibleCount.textContent = String(commandCount);
     if (emptyState) emptyState.hidden = commandCount !== 0;
+    resetButtons.forEach((button) => {
+      if (!emptyState?.contains(button)) button.hidden = !filtered;
+    });
+    writeUrl();
   };
 
-  sourceButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      activeSource = button.dataset.sourceFilter ?? "all";
-      syncSourceButtons();
-      updateToolFilter();
-    });
-  });
-  categoryButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      const category = button.dataset.categoryFilter;
-      if (activeCategories.has(category)) activeCategories.delete(category);
-      else activeCategories.add(category);
-      syncCategoryButtons();
-      updateToolFilter();
-    });
-  });
-  categoryClear?.addEventListener("click", () => {
+  const resetFilters = () => {
+    activeSource = "all";
     activeCategories.clear();
+    if (search) search.value = "";
+    syncSourceButtons();
     syncCategoryButtons();
     updateToolFilter();
-  });
-  search?.addEventListener("input", updateToolFilter);
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
-      const target = event.target;
-      const editing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
-      if (!editing) {
-        event.preventDefault();
-        search?.focus();
-      }
-    } else if (event.key === "Escape") {
-      activeSource = "all";
+  };
+
+  if (commands.length) {
+    const params = new URLSearchParams(window.location.search);
+    const source = params.get("source");
+    if (source && sources.has(source)) activeSource = source;
+    for (const category of (params.get("category") ?? "").split(",")) {
+      if (categories.has(category)) activeCategories.add(category);
+    }
+    if (search) search.value = params.get("q") ?? "";
+
+    sourceButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        activeSource = button.dataset.sourceFilter ?? "all";
+        syncSourceButtons();
+        updateToolFilter();
+      });
+    });
+    categoryButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const category = button.dataset.categoryFilter;
+        if (activeCategories.has(category)) activeCategories.delete(category);
+        else activeCategories.add(category);
+        syncCategoryButtons();
+        updateToolFilter();
+      });
+    });
+    categoryClear?.addEventListener("click", () => {
       activeCategories.clear();
-      if (search) {
-        search.value = "";
-        search.blur();
-      }
-      syncSourceButtons();
       syncCategoryButtons();
       updateToolFilter();
-    }
-  });
-  syncSourceButtons();
-  syncCategoryButtons();
-  updateToolFilter();
+    });
+    resetButtons.forEach((button) => button.addEventListener("click", resetFilters));
+    search?.addEventListener("input", updateToolFilter);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const target = event.target;
+        const editing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
+        if (!editing) {
+          event.preventDefault();
+          search?.focus();
+        }
+      } else if (event.key === "Escape") {
+        resetFilters();
+        search?.blur();
+      }
+    });
+    syncSourceButtons();
+    syncCategoryButtons();
+    updateToolFilter();
+  }
+
   const copyText = async (text) => {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
