@@ -2,6 +2,26 @@
 title = "Changelog"
 +++
 
+## [v0.12.0](https://github.com/buglloc/axe/releases/tag/v0.12.0) — 2026-10-29
+
+### Highlights
+
+- Added bootstrap loaders for hosts without AXE: universal Shell, Python, Node.js, and Perl scripts, plus freestanding Native ELF loaders for Linux x86_64 and aarch64. Each loader downloads and runs the corresponding static `axe` release. ([956b142](956b142e1f9552e7a0209609b8ad8da349d78bb2))
+- Bootstrap loaders connect to pinned Store addresses, prefer IPv6 without DNS, verify the expected payload size and digest, and do not execute a mismatching download. Scripts use SHA-256; Native ELF loaders use Ascon-Hash256. ([956b142](956b142e1f9552e7a0209609b8ad8da349d78bb2))
+
+### Changes
+
+- Added release assets under immutable `releases/v<VERSION>/b/` keys with stable `b/` aliases: Shell, Python, Node.js, Perl, and per-target Native ELF loaders. ([956b142](956b142e1f9552e7a0209609b8ad8da349d78bb2))
+- Added configurable bootstrap `default_args` for invocations without arguments. ([956b142](956b142e1f9552e7a0209609b8ad8da349d78bb2))
+- Added bootstrap commands to the website, with target and runtime selection and displayed artifact sizes. ([956b142](956b142e1f9552e7a0209609b8ad8da349d78bb2), [040b65a](040b65a59d78206670bfd89a99cc5ca7523b1f52))
+- The website command list moved to `/tools/`. It shows command aliases, links to each command, and keeps search and filters in the page URL. ([8a688c0](8a688c03c03d11c00d7e3b2c30c0879e093bb553), [040b65a](040b65a59d78206670bfd89a99cc5ca7523b1f52))
+- The release publisher now verifies that the plain-HTTP Native payload endpoint serves the object directly without redirecting to HTTPS. ([956b142](956b142e1f9552e7a0209609b8ad8da349d78bb2))
+- Python cache directories are now ignored by version control. ([34bba4e](34bba4e2e3d6e07c1e0afe2878d135689368202a))
+
+### Fixes
+
+- `axe NAME` now names the applet in diagnostics and `--version` output instead of `axe` or the full executable path. For example, `axe cat missing` reports `cat: missing: No such file or directory`, and `axe dmesg --version` prints `dmesg 0.0.1`. ([029cef6](029cef60a2caf5a09e653b199842e32882ff3a93))
+
 ## [v0.11.0](https://github.com/buglloc/axe/releases/tag/v0.11.0) — 2026-10-28
 
 ### Highlights
