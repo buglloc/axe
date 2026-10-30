@@ -20,7 +20,7 @@ an output that is not `ET_EXEC` or has `INTERP` or `DT_NEEDED`.
 | --- | --- |
 | `loader.c` | network, Ascon-Hash256, and exec logic |
 | `types.h` | fixed-width types |
-| `linker.ld` | two `PT_LOAD` segments and a non-executable stack |
+| `linker.ld` | one RX `PT_LOAD` segment containing the ELF headers, code, and read-only data, plus a non-executable stack |
 | `<arch>/arch.h` | syscall numbers and the syscall wrapper |
 | `<arch>/start.S` | `_start`: passes `argc`, `argv`, `envp` to `loader_main` |
 
