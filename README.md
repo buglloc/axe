@@ -6,10 +6,10 @@ Run that executable as an interactive [Brush](https://github.com/reubeno/brush) 
 
 ## Quick start
 
-Download the Linux x86_64 release binary:
+Download the stable Linux x86_64 release binary:
 
 ```bash
-curl -fL https://storage.yandexcloud.net/axe-store/axe/releases/v0.4.0/x86_64-linux/axe -o axe
+curl -fL https://storage.yandexcloud.net/axe-store/axe/stable/x86_64-linux/axe -o axe
 ```
 
 Compare `sha256sum axe` with the SHA-256 in [Downloads](#downloads) before running it. For other platforms, choose the corresponding binary below.
