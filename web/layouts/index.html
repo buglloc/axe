@@ -100,7 +100,7 @@ sha256sum axe</code></pre>
           </div>
           <label class="bootstrap-target" data-bootstrap-for="native" hidden>Target
             <select data-bootstrap-target>
-              {{ range $target, $_ := .targets }}<option value="{{ $target }}">{{ $target }}</option>{{ end }}
+              {{ $targets := .targets }}{{ range $target := slice "x86_64-linux" "aarch64-linux" }}{{ with index $targets $target }}<option value="{{ $target }}">{{ $target }}</option>{{ end }}{{ end }}
             </select>
           </label>
         </div>

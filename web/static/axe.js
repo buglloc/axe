@@ -185,7 +185,11 @@
   const bootstrapCommand = document.querySelector("[data-bootstrap-command]");
   if (bootstrapData && bootstrapPanel && bootstrapCommand) {
     const data = JSON.parse(bootstrapData.textContent);
-    const targets = Object.keys(data.targets);
+    const preferredTargets = ["x86_64-linux", "aarch64-linux"];
+    const targets = [
+      ...preferredTargets.filter((target) => data.targets[target]),
+      ...Object.keys(data.targets).filter((target) => !preferredTargets.includes(target)),
+    ];
     const modeTabs = [...document.querySelectorAll("[data-bootstrap-mode]")];
     const optionButtons = [...document.querySelectorAll("[data-bootstrap-option]")];
     const modeControls = [...document.querySelectorAll("[data-bootstrap-for]")];
