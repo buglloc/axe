@@ -39,6 +39,185 @@ fn invalid_request_has_structured_process_error() {
 }
 
 #[test]
+fn bare_monitor_prints_help_without_collecting() {
+    let output = vzik().arg("monitor").output().expect("run monitor help");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let help = String::from_utf8(output.stdout).expect("UTF-8 monitor help");
+    assert!(help.contains("Usage: vzik monitor <COMMAND>"));
+    assert!(help.contains("Commands:"));
+    assert!(help.contains("files"));
+}
+
+#[test]
+fn capture_help_uses_generated_option_layout() {
+    let output = vzik()
+        .args(["capture", "--help"])
+        .output()
+        .expect("run capture help");
+
+    assert_eq!(output.status.code(), Some(0));
+    let help = String::from_utf8(output.stdout).expect("UTF-8 capture help");
+    assert!(help.contains("Usage:"));
+    assert!(help.contains("Options:"));
+    assert!(help.contains("--output-dir <DIR>"));
+    assert!(help.contains("Output options may appear before or after"));
+}
+
+#[test]
+fn monitor_emits_versioned_stream_and_file_events() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!("vzik-monitor-{nonce}"));
+    fs::create_dir(&directory).expect("create monitor directory");
+
+    let child = vzik()
+        .args([
+            "monitor",
+            "files",
+            directory.to_str().expect("UTF-8 temporary path"),
+            "--duration",
+            "1500ms",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn monitor");
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    fs::write(directory.join("changed"), b"changed").expect("write monitored file");
+    let output = child.wait_with_output().expect("wait for monitor");
+    fs::remove_dir_all(&directory).expect("remove monitor directory");
+
+    assert!(
+        matches!(output.status.code(), Some(0 | 3)),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = json_lines(&output.stdout);
+    assert!(records.iter().all(|record| {
+        record["schema"] == "raskop/vzik-monitor" && record["schema_version"] == 1
+    }));
+    assert_eq!(records[0]["type"], "stream_start");
+    assert_eq!(records[0]["event_classes"]["files"]["detection"], "exact");
+    assert!(records.iter().any(|record| {
+        record["type"] == "event"
+            && record["class"] == "files"
+            && record["event"] == "content_modified"
+    }));
+    assert_eq!(records.last().expect("stream end")["type"], "stream_end");
+}
+
+#[test]
+fn monitor_process_and_socket_subcommands_exclude_other_backends() {
+    for (selection, expected) in [("process", "process"), ("sockets", "sockets")] {
+        let output = vzik()
+            .args(["monitor", selection, "--duration", "100ms"])
+            .output()
+            .expect("run selected monitor");
+        assert!(
+            matches!(output.status.code(), Some(0 | 3)),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let records = json_lines(&output.stdout);
+        let start = &records[0];
+        assert_eq!(start["type"], "stream_start");
+        assert!(start["event_classes"].get(expected).is_some());
+        assert!(start["event_classes"].get("files").is_none());
+        for record in &records {
+            if record["type"] == "snapshot_state" {
+                assert_eq!(record["class"], expected);
+            }
+        }
+        if expected == "process" {
+            let process_snapshot = records
+                .iter()
+                .find(|record| record["type"] == "snapshot_state" && record["class"] == "process")
+                .expect("process snapshot");
+            let process = process_snapshot["items"]
+                .as_array()
+                .and_then(|items| items.first())
+                .expect("process snapshot item");
+            assert!(process["executable"]["display"].is_string());
+            assert!(process["argv"].is_array());
+            assert!(process.get("environment").is_none());
+        }
+        let end = records.last().expect("stream end");
+        assert_eq!(end["type"], "stream_end");
+        assert!(end["classes"].get("files").is_none());
+        assert!(end["classes"].get(expected).is_some());
+        let excluded = if expected == "process" {
+            "sockets"
+        } else {
+            "process"
+        };
+        assert!(end["classes"].get(excluded).is_none());
+    }
+}
+
+#[test]
+fn monitor_all_subcommand_includes_all_backends() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!("vzik-monitor-all-{nonce}"));
+    fs::create_dir(&directory).expect("create monitor directory");
+
+    let output = vzik()
+        .args([
+            "monitor",
+            "all",
+            "--files",
+            directory.to_str().expect("UTF-8 temporary path"),
+            "--duration",
+            "100ms",
+        ])
+        .output()
+        .expect("run all monitor");
+    fs::remove_dir_all(&directory).expect("remove monitor directory");
+
+    assert!(
+        matches!(output.status.code(), Some(0 | 3)),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = json_lines(&output.stdout);
+    let start = &records[0];
+    assert_eq!(start["type"], "stream_start");
+    for class in ["process", "files", "sockets"] {
+        assert!(start["event_classes"].get(class).is_some());
+    }
+    let end = records.last().expect("stream end");
+    assert_eq!(end["type"], "stream_end");
+    for class in ["process", "files", "sockets"] {
+        assert!(end["classes"].get(class).is_some());
+    }
+}
+
+#[test]
+fn monitor_rejects_root_and_file_only_options_in_wrong_positions() {
+    for arguments in [
+        vec!["monitor", "--filter", "/tmp"],
+        vec!["monitor", "--only", "process"],
+        vec!["monitor", "process", "--glob", "*.log"],
+        vec!["monitor", "sockets", "--files", "/tmp"],
+        vec!["monitor", "all", "/tmp"],
+        vec!["monitor", "files", "--files", "/tmp"],
+    ] {
+        let output = vzik()
+            .args(arguments)
+            .output()
+            .expect("run invalid monitor");
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
 fn network_socket_owners_include_open_fd_numbers() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
     let port = listener.local_addr().expect("listener address").port();

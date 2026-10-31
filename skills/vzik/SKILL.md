@@ -21,6 +21,7 @@ vzik capabilities process.inspect
 vzik capabilities user.list
 vzik capabilities file.read
 vzik process list --help
+vzik monitor --help
 vzik capture --help
 ```
 
@@ -32,11 +33,42 @@ command string.
 
 ## Workflow
 
-For initial host orientation, capture `overview`, inspect its field statuses
+For an initial host orientation, capture `overview`, inspect its field statuses
 and terminal coverage, then choose a follow-up from the table below.
 Do not use `collect` or active `axe doctor` probes merely for orientation.
 `doctor` reuses the same passive environment observations, but also tests
 AXE execution and storage behavior.
+
+`monitor` is separate from protocol-v4 collection. Run one explicit
+subcommand directly when a bounded live interval is required:
+
+```sh
+vzik monitor files "$path" --duration 30s
+vzik monitor process --duration 30s
+vzik monitor sockets --duration 30s
+vzik monitor all --files "$path" --duration 30s
+```
+
+`process` and `sockets` monitor their host-wide classes. `files PATH...`
+monitors one or more recursive roots, and `all --files PATH...` selects all
+three classes with one or more repeatable file roots. `--glob PATTERN` is
+valid only for `files` and `all`. Bare `vzik monitor` prints help without
+collecting.
+
+Read `stream_start.event_classes` before interpreting events. `event` records
+carry `detection`; `exact` means a kernel event and `sampled` means a snapshot
+or diff observation. `gap` records are loss, not empty periods. Wait for
+`stream_end` and branch on `collection_outcome`; status `3` is expected for a
+selected sampled socket class, a sampled process fallback, unavailable sources,
+or any gap. Process records always include bounded `executable` and `argv`;
+process output is sensitive. Use `--full` only when bounded environment values
+are required. File paths are recursive and do not follow symlinks;
+privileged runs may use fanotify with process attribution, while unprivileged
+runs use inotify without attribution.
+
+The full monitor-v1 record contract is in
+[references/monitor-v1.md](references/monitor-v1.md).
+
 
 1. Choose scope before collection. For a named question, select the smallest
    targeted capability from the table below; do not run the broad baseline

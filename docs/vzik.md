@@ -5,7 +5,10 @@
 ```bash
 vzik --version
 vzik overview
-vzik process inspect 1234
+vzik monitor process --duration 30s
+vzik monitor files /var/log --duration 30s
+vzik monitor sockets --duration 30s
+vzik monitor all --files /var/log --duration 30s
 vzik collect
 vzik network listeners --max-items 4096
 vzik security posture
@@ -25,6 +28,8 @@ vzik summarize baseline-evidence/capture.jsonl
 `process inspect PID` reads one visible Linux process without enumerating processes. It adds memory, cumulative CPU ticks, threads, resource limits, I/O counters, bounded FD/fdinfo inventory with namespace-local socket and same-process pipe mappings, executable file metadata, LSM label, ancestry, session, and TTY data to the existing security context. Missing or denied optional sources produce partial evidence; an unreadable mandatory stat or detected PID reuse produces no process detail. It does not read environment variables, process memory, memory maps, or smaps. Command lines, executable paths, and FD targets can still contain secrets.
 
 Both commands are targeted capabilities, not additions to the security `collect` profile. Detailed field types, units, missing-value semantics, and scope are maintained in the [Vzik skill reference](../skills/vzik/references/protocol-v4.md); discovery remains compact and does not embed full result schemas.
+
+`monitor` is a Linux-only long-running command. Bare `vzik monitor` prints help without collecting. Use one explicit subcommand: `process [COMMON_OPTIONS]`, `files PATH... [--glob PATTERN] [COMMON_OPTIONS]`, `sockets [COMMON_OPTIONS]`, or `all --files PATH... [--glob PATTERN] [COMMON_OPTIONS]`. `--glob` is valid only for `files` and `all`; `files` takes one or more recursive roots as positional paths, while `all` takes one or more repeatable `--files PATH` options. File paths are recursive and symlinks are not followed. Process and socket classes remain host-wide within visible namespaces. The JSONL stream uses schema `raskop/vzik-monitor` version `1`, with `stream_start`, an initial and optional periodic snapshot, `event`, `gap`, `diagnostic`, and `stream_end` records. Process connector events are exact when available; `/proc` scanning is sampled. Files use fanotify filesystem marks with process attribution when privileged, and recursive inotify without attribution otherwise. Sockets use sampled `/proc/net` diffs. Process records always include bounded `executable` and `argv`; process output is sensitive, and `--full` adds bounded environment data. A selected sampled class, unavailable source, gap, or eviction produces exit status `3`; a closed stdout returns `141`.
 
 Collection writes protocol-v4 JSONL. A final `stream_end` closes the stream, but does not guarantee complete coverage: inspect its `collection_outcome`, `truncated`, capability coverage, and capabilities that were not started. A closed degraded collection exits with status `3`; complete collection exits with status `0`. A stream without `stream_end` is incomplete. Use `validate` to check saved streams and `summarize` to inspect coverage.
 

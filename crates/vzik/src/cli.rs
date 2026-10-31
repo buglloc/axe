@@ -1,13 +1,13 @@
-use std::ffi::{OsStr, OsString};
-use std::fmt;
-use std::path::PathBuf;
-
 use clap_builder::builder::{NonEmptyStringValueParser, OsStringValueParser, ValueParser};
 use clap_builder::error::ErrorKind;
 use clap_builder::parser::ValueSource;
 use clap_builder::{Arg, ArgAction, ArgMatches, Command};
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::ffi::{OsStr, OsString};
+use std::fmt;
+use std::path::PathBuf;
+use std::time::Duration;
 
 const SAFE_DEADLINE_SECONDS: u64 = 2400;
 const TARGETED_DEADLINE_SECONDS: u64 = 600;
@@ -1208,6 +1208,42 @@ pub enum CaptureDestination {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum MonitorClass {
+    Process,
+    Files,
+    Sockets,
+}
+
+impl MonitorClass {
+    pub(crate) const ALL: [Self; 3] = [Self::Process, Self::Files, Self::Sockets];
+
+    pub(crate) const fn id(self) -> &'static str {
+        match self {
+            Self::Process => "process",
+            Self::Files => "files",
+            Self::Sockets => "sockets",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MonitorOptions {
+    pub filters: Vec<PathBuf>,
+    pub path_glob: Option<String>,
+    pub classes: Vec<MonitorClass>,
+    pub duration: Option<Duration>,
+    pub snapshot_interval: Option<Duration>,
+    pub max_events: Option<u64>,
+    pub full: bool,
+    pub verbose: bool,
+}
+
+#[derive(Debug)]
+pub struct MonitorExecution {
+    pub options: MonitorOptions,
+}
+
 #[derive(Debug)]
 pub struct CliError {
     message: String,
@@ -1273,6 +1309,7 @@ pub enum Action {
     Help(String),
     Execute(Execution),
     Capture(CaptureExecution),
+    Monitor(MonitorExecution),
     Validate(PathBuf),
     Summarize(PathBuf),
     Capabilities(Option<CapabilityId>),
@@ -1290,6 +1327,238 @@ pub fn parse(mut argv: Vec<OsString>) -> Result<Action, CliError> {
     }
 
     parse_core(program, argv)
+}
+
+fn parse_monitor_matches(matches: &ArgMatches) -> Result<Action, String> {
+    let (command, matches) = matches
+        .subcommand()
+        .ok_or_else(|| "a monitor command is required".to_owned())?;
+    let (classes, filters) = match command {
+        "process" => (vec![MonitorClass::Process], Vec::new()),
+        "files" => (
+            vec![MonitorClass::Files],
+            path_values(matches, "path", "PATH")?,
+        ),
+        "sockets" => (vec![MonitorClass::Sockets], Vec::new()),
+        "all" => (
+            MonitorClass::ALL.to_vec(),
+            path_values(matches, "files", "--files")?,
+        ),
+        _ => return Err(format!("unknown monitor command: {command}")),
+    };
+
+    let path_glob = matches
+        .try_get_one::<String>("glob")
+        .ok()
+        .flatten()
+        .cloned();
+    let duration = matches
+        .get_one::<String>("duration")
+        .map(|value| parse_duration(value).map_err(|error| format!("--duration: {error}")))
+        .transpose()?;
+    let snapshot_interval = matches
+        .get_one::<String>("snapshot-interval")
+        .map(|value| parse_duration(value).map_err(|error| format!("--snapshot-interval: {error}")))
+        .transpose()?;
+    let max_events = matches
+        .get_one::<String>("max-events")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| "--max-events must be a positive integer".to_owned())
+        })
+        .transpose()?;
+
+    Ok(Action::Monitor(MonitorExecution {
+        options: MonitorOptions {
+            filters,
+            path_glob,
+            classes,
+            duration,
+            snapshot_interval,
+            max_events,
+            full: matches.get_flag("full"),
+            verbose: matches.get_flag("verbose"),
+        },
+    }))
+}
+
+fn path_values(matches: &ArgMatches, name: &str, label: &str) -> Result<Vec<PathBuf>, String> {
+    matches
+        .get_many::<OsString>(name)
+        .ok_or_else(|| format!("{label} requires at least one path"))?
+        .map(|value| bounded_path(value, TARGET_PATH.max_bytes, label))
+        .collect()
+}
+
+fn monitor_command() -> Command {
+    Command::new("monitor")
+        .about("Monitor process, file, and socket state through explicit subcommands")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(monitor_common(
+            Command::new("process").about("Monitor process state"),
+        ))
+        .subcommand(
+            monitor_common(
+                Command::new("files")
+                    .about("Monitor recursive file state")
+                    .arg(
+                        Arg::new("path")
+                            .value_name("PATH")
+                            .help("Recursive file-monitor root (repeatable)")
+                            .required(true)
+                            .num_args(1..)
+                            .value_parser(OsStringValueParser::new()),
+                    ),
+            )
+            .arg(
+                Arg::new("glob")
+                    .long("glob")
+                    .value_name("PATTERN")
+                    .help("Filter file paths relative to each root")
+                    .value_parser(NonEmptyStringValueParser::new()),
+            ),
+        )
+        .subcommand(monitor_common(
+            Command::new("sockets").about("Monitor socket state"),
+        ))
+        .subcommand(
+            monitor_common(
+                Command::new("all")
+                    .about("Monitor process, file, and socket state")
+                    .arg(
+                        Arg::new("files")
+                            .long("files")
+                            .value_name("PATH")
+                            .help("Recursive file-monitor root (repeatable)")
+                            .required(true)
+                            .num_args(1..)
+                            .action(ArgAction::Append)
+                            .value_parser(OsStringValueParser::new()),
+                    ),
+            )
+            .arg(
+                Arg::new("glob")
+                    .long("glob")
+                    .value_name("PATTERN")
+                    .help("Filter file paths relative to each root")
+                    .value_parser(NonEmptyStringValueParser::new()),
+            ),
+        )
+}
+
+fn monitor_common(mut command: Command) -> Command {
+    command = command
+        .arg(
+            Arg::new("duration")
+                .long("duration")
+                .value_name("DURATION")
+                .help("Stop after e.g. 500ms, 30s, 5m")
+                .value_parser(NonEmptyStringValueParser::new()),
+        )
+        .arg(
+            Arg::new("snapshot-interval")
+                .long("snapshot-interval")
+                .value_name("DURATION")
+                .help("Repeat bounded state snapshots")
+                .value_parser(NonEmptyStringValueParser::new()),
+        )
+        .arg(
+            Arg::new("max-events")
+                .long("max-events")
+                .value_name("N")
+                .help("Stop after N event records")
+                .value_parser(NonEmptyStringValueParser::new()),
+        )
+        .arg(
+            Arg::new("full")
+                .long("full")
+                .help("Include bounded environment")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("verbose")
+                .long("verbose")
+                .help("Include source and resource diagnostics")
+                .action(ArgAction::SetTrue),
+        );
+    command
+}
+
+fn capture_command() -> Command {
+    Command::new("capture")
+        .about("Collect, validate, seal, verify, and summarize evidence")
+        .arg(
+            Arg::new("output-dir")
+                .long("output-dir")
+                .value_name("DIR")
+                .help("Create a new private directory for capture.jsonl, receipt.json, and stderr.jsonl")
+                .value_parser(OsStringValueParser::new()),
+        )
+        .arg(
+            Arg::new("output")
+                .long("output")
+                .value_name("PATH")
+                .help("Capture JSONL output path")
+                .value_parser(OsStringValueParser::new()),
+        )
+        .arg(
+            Arg::new("receipt")
+                .long("receipt")
+                .value_name("PATH")
+                .help("Capture receipt path used with --output")
+                .value_parser(OsStringValueParser::new()),
+        )
+        .arg(
+            Arg::new("stderr")
+                .long("stderr")
+                .value_name("PATH")
+                .help("Saved diagnostics path used with --output")
+                .value_parser(OsStringValueParser::new()),
+        )
+        .after_help(
+            "Output options may appear before or after the collection command, but before --.\n\
+             Use one collection command after `vzik capture`, for example:\n\
+               vzik capture overview --output-dir evidence\n\
+               vzik capture process inspect 1234 --output-dir process-evidence\n\
+               vzik capture collect --output baseline.jsonl --receipt baseline.receipt.json",
+        )
+}
+
+fn render_capture_help(program: &OsString) -> Result<String, String> {
+    let mut output = Vec::new();
+    capture_command()
+        .bin_name(format!("{} capture", program.to_string_lossy()))
+        .write_long_help(&mut output)
+        .map_err(|error| format!("cannot render capture help: {error}"))?;
+    String::from_utf8(output).map_err(|_| "generated help is not UTF-8".into())
+}
+
+pub(crate) fn parse_duration(value: &str) -> Result<Duration, &'static str> {
+    let (number, multiplier) = if let Some(value) = value.strip_suffix("ms") {
+        (value, 1_u64)
+    } else if let Some(value) = value.strip_suffix('s') {
+        (value, 1_000)
+    } else if let Some(value) = value.strip_suffix('m') {
+        (value, 60_000)
+    } else if let Some(value) = value.strip_suffix('h') {
+        (value, 3_600_000)
+    } else {
+        return Err("expected a positive duration ending in ms, s, m, or h");
+    };
+    let number = number
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or("duration must be a positive integer")?;
+    Ok(Duration::from_millis(
+        number
+            .checked_mul(multiplier)
+            .ok_or("duration is too large")?,
+    ))
 }
 
 fn parse_core(program: OsString, argv: Vec<OsString>) -> Result<Action, CliError> {
@@ -1319,6 +1588,7 @@ fn parse_core(program: OsString, argv: Vec<OsString>) -> Result<Action, CliError
         .subcommand()
         .ok_or_else(|| CliError::from("a command is required"))?;
     match command {
+        "monitor" => parse_monitor_matches(matches).map_err(CliError::from),
         "validate" => Ok(Action::Validate(path_value(matches, TARGET_PATH)?)),
         "summarize" => Ok(Action::Summarize(path_value(matches, TARGET_PATH)?)),
         "capabilities" => {
@@ -1334,19 +1604,8 @@ fn parse_core(program: OsString, argv: Vec<OsString>) -> Result<Action, CliError
 }
 
 fn parse_capture(program: OsString, arguments: &[OsString]) -> Result<Action, CliError> {
-    const HELP: &str = "Usage: vzik capture <COLLECTION COMMAND> --output-dir DIR\n\
-                       \x20      vzik capture <COLLECTION COMMAND> --output PATH --receipt PATH [--stderr PATH]\n\
-                       Output options may appear before or after collection arguments, but before --.\n\
-                       --output-dir creates a new private directory containing capture.jsonl, receipt.json, and stderr.jsonl.\n\
-                       It cannot be combined with --output, --receipt, or --stderr. Existing paths are never reused.\n\
-                       The command validates the complete stream, seals and verifies the receipt, then writes a JSON coverage summary.\n\
-                       Files are written directly; interruption can leave capture or stderr without a receipt.\n\
-                       Examples:\n\
-                         vzik capture overview --output-dir evidence\n\
-                         vzik capture process inspect 1234 --output-dir process-evidence\n\
-                         vzik capture collect --output baseline.jsonl --receipt baseline.receipt.json\n";
     if arguments.is_empty() {
-        return Ok(Action::Help(HELP.to_owned()));
+        return Ok(Action::Help(render_capture_help(&program)?));
     }
 
     let mut output_dir = None;
@@ -1361,7 +1620,7 @@ fn parse_capture(program: OsString, arguments: &[OsString]) -> Result<Action, Cl
             break;
         }
         let destination = match arguments[index].to_str() {
-            Some("-h" | "--help") => return Ok(Action::Help(HELP.to_owned())),
+            Some("-h" | "--help") => return Ok(Action::Help(render_capture_help(&program)?)),
             Some("--output-dir") => Some((&mut output_dir, "--output-dir")),
             Some("--output") => Some((&mut output, "--output")),
             Some("--receipt") => Some((&mut receipt, "--receipt")),
@@ -1669,10 +1928,8 @@ fn root_command() -> Command {
         )
         .subcommand_required(true)
         .arg_required_else_help(true)
-        .subcommand(
-            Command::new("capture")
-                .about("Collect, validate, seal, verify, and summarize evidence"),
-        )
+        .subcommand(monitor_command())
+        .subcommand(capture_command())
         .subcommand(add_global_limit_args(
             Command::new("collect").about("Collect the bounded baseline-v3 security profile"),
             true,
@@ -2257,5 +2514,76 @@ mod tests {
             ]))
             .is_err()
         );
+    }
+
+    #[test]
+    fn monitor_subcommands_select_classes_and_validate_file_options() {
+        assert!(matches!(
+            parse(args(&["vzik", "monitor"])),
+            Ok(Action::Help(_))
+        ));
+
+        let Action::Monitor(execution) =
+            parse(args(&["vzik", "monitor", "process", "--duration", "1s"]))
+                .expect("process monitor")
+        else {
+            panic!("expected monitor action");
+        };
+        assert_eq!(execution.options.classes, vec![MonitorClass::Process]);
+        assert!(execution.options.filters.is_empty());
+
+        let Action::Monitor(execution) = parse(args(&[
+            "vzik", "monitor", "files", "/tmp/one", "/tmp/two", "--glob", "*.log",
+        ]))
+        .expect("files monitor") else {
+            panic!("expected monitor action");
+        };
+        assert_eq!(execution.options.classes, vec![MonitorClass::Files]);
+        assert_eq!(
+            execution.options.filters,
+            vec![PathBuf::from("/tmp/one"), PathBuf::from("/tmp/two")]
+        );
+        assert_eq!(execution.options.path_glob.as_deref(), Some("*.log"));
+
+        let Action::Monitor(execution) =
+            parse(args(&["vzik", "monitor", "sockets"])).expect("socket monitor")
+        else {
+            panic!("expected monitor action");
+        };
+        assert_eq!(execution.options.classes, vec![MonitorClass::Sockets]);
+        assert!(execution.options.filters.is_empty());
+
+        let Action::Monitor(execution) = parse(args(&[
+            "vzik",
+            "monitor",
+            "all",
+            "--files",
+            "/tmp/one",
+            "--files=/tmp/two",
+            "--glob=*.log",
+        ]))
+        .expect("all monitor") else {
+            panic!("expected monitor action");
+        };
+        assert_eq!(execution.options.classes, MonitorClass::ALL.to_vec());
+        assert_eq!(
+            execution.options.filters,
+            vec![PathBuf::from("/tmp/one"), PathBuf::from("/tmp/two")]
+        );
+        assert_eq!(execution.options.path_glob.as_deref(), Some("*.log"));
+
+        for argv in [
+            &["vzik", "monitor", "--filter", "/tmp"][..],
+            &["vzik", "monitor", "--only", "process"][..],
+            &["vzik", "monitor", "--exclude", "files"][..],
+            &["vzik", "monitor", "process", "--glob", "*.log"][..],
+            &["vzik", "monitor", "sockets", "--files", "/tmp"][..],
+            &["vzik", "monitor", "all", "/tmp"][..],
+            &["vzik", "monitor", "files", "--files", "/tmp"][..],
+            &["vzik", "monitor", "files"][..],
+            &["vzik", "monitor", "all"][..],
+        ] {
+            assert!(parse(args(argv)).is_err(), "accepted invalid monitor argv");
+        }
     }
 }

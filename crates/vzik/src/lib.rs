@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 
 mod capture;
 mod cli;
@@ -6,6 +6,8 @@ mod discovery;
 pub mod environment;
 #[cfg(target_os = "linux")]
 mod inventory;
+#[cfg(target_os = "linux")]
+mod monitor;
 mod overview;
 #[cfg(target_os = "linux")]
 pub mod procfs;
@@ -95,6 +97,27 @@ where
             "write_capabilities",
             stderr,
         ),
+        #[cfg(target_os = "linux")]
+        cli::Action::Monitor(request) => monitor::run(request.options, stdout, interruption),
+        #[cfg(not(target_os = "linux"))]
+        cli::Action::Monitor(_) => {
+            let record = json!({
+                "schema":"raskop/vzik-monitor",
+                "schema_version":1,
+                "type":"stream_end",
+                "collection_outcome":"unsupported",
+                "stop_reason":"unsupported",
+                "completion":false,
+            });
+            match serde_json::to_writer(&mut *stdout, &record).and_then(|_| stdout.write_all(b"\n"))
+            {
+                Ok(()) => 4,
+                Err(error) => {
+                    write_io_error(stderr, "write_monitor_unsupported", &error);
+                    5
+                }
+            }
+        }
         cli::Action::Execute(execution) => {
             match protocol::execute_controlled(stdout, execution, interruption) {
                 Ok(completion) => completion.exit_code(),
