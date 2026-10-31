@@ -54,6 +54,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `grpcurl` | `network/grpcurl` | Call and inspect gRPC services | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `helm` | `containers/helm` | Install and manage Kubernetes applications with charts | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `httpx` | `network/httpx` | Probe HTTP services and discover live targets | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `ip` | `network/ip` | Inspect and configure Linux networking with iproute2 | `aarch64-linux`, `x86_64-linux` |
 | `interactsh-client` | `security/interactsh-client` | Generate out-of-band testing payloads and collect interactions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `jq` | `text/jq` | Process JSON | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `katana` | `security/katana` | Crawl web applications and discover URLs and endpoints | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |

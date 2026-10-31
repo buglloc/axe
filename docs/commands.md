@@ -77,7 +77,7 @@ Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-sty
 | `storage` — Storage & backup | `blkid`, `blockdev`, `dd`, `df`, `du`, `iostat`, `lsblk`, `lslocks`, `mount`, `mountpoint`, `sync`, `umount` |
 | `process` — Processes | `hugetop`, `fuser`, `kill`, `killall`, `lsof`, `nice`, `nohup`, `pgrep`, `pidof`, `pidwait`, `pkill`, `pmap`, `ps`, `pstree`, `pwdx`, `skill`, `snice`, `timeout`, `top`, `watch`, `xargs` |
 | `system` — Host & system | `arch`, `date`, `dmesg`, `free`, `hostid`, `hostname`, `dnsdomainname`, `ipcs`, `last`, `logname`, `lsmod`, `lspci`, `lsscsi`, `lsusb`, `modinfo`, `nproc`, `pinky`, `slabtop`, `sysctl`, `tload`, `uname`, `uptime`, `users`, `vmstat`, `vzik`, `w`, `who` |
-| `network` — Network & remote access | `http`, `arp`, `ifconfig`, `ip`, `ipaddr`, `iplink`, `ipneigh`, `iproute`, `iprule`, `ipcalc`, `host`, `nslookup`, `ping`, `ping6`, `traceroute`, `traceroute6` |
+| `network` — Network & remote access | `arp`, `host`, `http`, `ifconfig`, `ipcalc`, `nslookup`, `ping`, `ping6`, `route`, `traceroute`, `traceroute6` |
 | `containers` — Containers & orchestration | `chroot` |
 | `debugging` — Debugging & binary analysis | `file`, `goblin`, `strings` |
 | `security` — Security & permissions | `chgrp`, `chmod`, `chown`, `groups`, `id`, `shred`, `whoami` |
@@ -289,14 +289,15 @@ For `mount`, `-o encryption`, `-N`, `-T`, and `-F` are not supported.
 
 ## Process and network compatibility
 
-The bundled `ip` renders tunnel link addresses as IPv4 or IPv6 addresses, matching iproute2 in text and JSON output. Ethernet and other hardware addresses use colon-separated hexadecimal bytes.
+The Store `ip` command is the iproute2 implementation on Linux. It supports
+network inspection and configuration when Store delivery is available.
 
-`ip` provides read-only inspection with text and JSON output. It accepts
-`-j`/`-json`, pretty JSON (`-p`), brief (`-br`/`-brief`), oneline (`-o`/`-oneline`),
-and numeric names (`-N`). `route get` accepts `from`, `mark`, `uid`, `dev` and
-`oif` selectors without loading a full route dump; `iif` is not supported.
-Mutation verbs, detail/resolve options and unsupported address families are
-rejected. `arp` displays the kernel's `/proc/net/arp` table with net-tools ATF flags.
+The bundled `ifconfig`, `arp`, and `route` commands remain available without
+Store delivery. `ifconfig` displays interface configuration, `arp` displays
+the kernel's `/proc/net/arp` table with net-tools ATF flags, and `route`
+provides read-only routing-table inspection. `route -n` selects numeric
+output; `route -A inet` and `route -A inet6` select an address family.
+Route mutation, cache-table inspection, and unsupported options are rejected.
 
 The bundled `ps` accepts BSD option clusters such as `aux` and `auxww`. `a` selects processes with a terminal, `x` selects the current user's processes including those without a terminal, and `ax` or `aux` selects all processes visible through `/proc`, including other users' processes without a terminal.
 

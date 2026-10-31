@@ -221,7 +221,7 @@ fn cases(scratch: &Scratch) -> Vec<(&'static str, Vec<OsString>, Vec<u8>)> {
         ("strings", vec![os(&strings_file)], Vec::new()),
         ("file", vec![os(&file_bin)], Vec::new()),
         #[cfg(target_os = "linux")]
-        ("ip", vec![OsString::from("link")], Vec::new()),
+        ("route", vec![OsString::from("-n")], Vec::new()),
     ]
 }
 

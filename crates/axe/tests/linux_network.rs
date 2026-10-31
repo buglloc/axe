@@ -2,8 +2,7 @@
 
 use std::fs::File;
 use std::net::Ipv6Addr;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::fs::MetadataExt;
+use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
@@ -46,40 +45,60 @@ fn describe(output: &Output) -> String {
 }
 
 #[test]
-fn ip_link_selectors_and_device_errors_use_actual_axe() {
-    let output = axe("ip", &["-j", "link", "show", "dev", "lo"])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", describe(&output));
-    let links: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(links.as_array().unwrap().len(), 1);
-    assert_eq!(links[0]["ifname"], "lo");
-    for args in [
-        vec!["link", "show", "dev", "axe-no-device"],
-        vec!["route", "get", "127.0.0.1", "dev", "axe-no-device"],
+fn bundled_route_accepts_read_only_queries_and_rejects_mutations() {
+    for (args, output_required) in [
+        (vec![], true),
+        (vec!["-n"], true),
+        (vec!["-A", "inet"], true),
+        (vec!["-A", "inet6"], false),
+        (vec!["show", "table", "main"], true),
+        (vec!["-n", "show", "dev", "lo"], false),
     ] {
-        let output = axe("ip", &args).output().unwrap();
-        assert_eq!(output.status.code(), Some(1), "{}", describe(&output));
-        assert!(output.stdout.is_empty());
+        let output = axe("route", &args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "route {args:?}: {}",
+            describe(&output)
+        );
+        if output_required {
+            assert!(
+                !output.stdout.is_empty(),
+                "route {args:?}: {}",
+                describe(&output)
+            );
+        }
     }
-    let output = axe("ip", &["link", "s", "dev", "lo", "up"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{}", describe(&output));
-    assert!(output.stdout.is_empty());
+    for (args, code) in [
+        (vec!["show", "dev", "axe-no-device"], 1),
+        (vec!["show", "table", "not-a-table"], 255),
+        (vec!["add", "10.0.0.0/8", "dev", "lo"], 1),
+        (vec!["delete", "10.0.0.0/8"], 1),
+    ] {
+        let output = axe("route", &args).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "route {args:?}: {}",
+            describe(&output)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "route {args:?}: {}",
+            describe(&output)
+        );
+        assert!(
+            !output.stderr.is_empty(),
+            "route {args:?}: {}",
+            describe(&output)
+        );
+    }
+    let output = axe("route", &["--help"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{}", describe(&output));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Read-only"));
 }
 
 #[test]
-fn actual_applets_reject_invalid_selectors_and_keep_net_tools_errors() {
-    for args in [
-        vec!["route", "show", "table", "not-a-table"],
-        vec!["address", "show", "scope"],
-        vec!["-d", "link", "show"],
-    ] {
-        let output = axe("ip", &args).output().unwrap();
-        assert_eq!(output.status.code(), Some(255), "{}", describe(&output));
-        assert!(output.stdout.is_empty());
-    }
+fn actual_bundled_network_applets_reject_invalid_arguments() {
     let output = axe("ifconfig", &["-s", "axe-no-device"]).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.starts_with(b"Iface "));
@@ -91,8 +110,8 @@ fn actual_applets_reject_invalid_selectors_and_keep_net_tools_errors() {
 }
 
 #[test]
-fn actual_ip_output_handles_full_devices_and_closed_consumers() {
-    let output = axe("ip", &["-j", "link", "show", "dev", "lo"])
+fn actual_route_output_handles_full_devices_and_closed_consumers() {
+    let output = axe("route", &["-n"])
         .stdout(Stdio::from(
             File::options().write(true).open("/dev/full").unwrap(),
         ))
@@ -103,32 +122,12 @@ fn actual_ip_output_handles_full_devices_and_closed_consumers() {
     let (reader, writer) = UnixStream::pair().unwrap();
     drop(reader);
     let fd: OwnedFd = writer.into();
-    let output = axe("ip", &["-j", "link", "show", "dev", "lo"])
+    let output = axe("route", &["-n"])
         .stdout(Stdio::from(fd))
         .output()
         .unwrap();
-    // Like iproute2, a closed consumer terminates ip with the inherited SIGPIPE.
     assert_eq!(output.status.signal(), Some(13), "{}", describe(&output));
     assert!(output.stderr.is_empty());
-}
-
-#[test]
-fn bare_ip_and_rejected_selectors_keep_reference_exit_classes() {
-    let output = axe("ip", &[]).output().unwrap();
-    assert_eq!(output.status.code(), Some(255), "{}", describe(&output));
-    assert!(output.stdout.is_empty());
-    assert!(!output.stderr.is_empty());
-    for (applet, args, code) in [
-        ("ip", vec!["audit-no-object"], 1),
-        ("iprule", vec!["show", "audit-no-selector"], 1),
-        ("ipaddr", vec!["show", "dev"], 255),
-        ("iproute", vec!["show", "table", "audit-no-table"], 255),
-    ] {
-        let output = axe(applet, &args).output().unwrap();
-        assert_eq!(output.status.code(), Some(code), "{}", describe(&output));
-        assert!(output.stdout.is_empty());
-        assert!(!output.stderr.is_empty());
-    }
 }
 
 #[test]
@@ -178,48 +177,6 @@ fn ipcalc_selected_fields_and_json_use_modern_ipcalc_contract() {
         assert!(output.stdout.is_empty());
         assert!(!output.stderr.is_empty());
     }
-}
-
-fn assert_owned_network_namespace() {
-    let network = File::open("/proc/self/ns/net").unwrap();
-    let user = std::fs::metadata("/proc/self/ns/user").unwrap();
-    for (kind, inode) in [
-        ("NET", network.metadata().unwrap().ino()),
-        ("USER", user.ino()),
-    ] {
-        let parent = std::env::var(format!("AXE_NETWORK_NAMESPACE_PARENT_{kind}"))
-            .expect("namespace child must have a recorded parent namespace")
-            .parse::<u64>()
-            .unwrap();
-        assert_ne!(
-            inode, parent,
-            "refusing writes in the parent's {kind} namespace"
-        );
-    }
-    // SAFETY: NS_GET_USERNS takes no pointer and returns a new owned descriptor.
-    let owner = unsafe { libc::ioctl(network.as_raw_fd(), 0xb701) };
-    assert!(
-        owner >= 0,
-        "query network namespace owner: {}",
-        std::io::Error::last_os_error()
-    );
-    // SAFETY: a successful NS_GET_USERNS returned this fresh descriptor.
-    let owner = File::from(unsafe { OwnedFd::from_raw_fd(owner) });
-    let owner = owner.metadata().unwrap();
-    assert_eq!(
-        (owner.dev(), owner.ino()),
-        (user.dev(), user.ino()),
-        "network namespace must belong to the isolated user namespace"
-    );
-}
-
-fn setup(args: &[&str]) {
-    let output = reference("ip", args);
-    assert!(
-        output.status.success(),
-        "ip {args:?}: {}",
-        describe(&output)
-    );
 }
 
 fn parity(applet: &str, args: &[&str], json: bool) {
@@ -281,332 +238,6 @@ fn parity(applet: &str, args: &[&str], json: bool) {
         assert_eq!(actual, expected, "{applet} {args:?}");
     } else {
         assert_eq!(actual.stdout, expected.stdout, "{applet} {args:?}");
-    }
-}
-
-#[test]
-#[ignore = "creates an isolated user/network namespace; requires iproute2, net-tools and unshare in AXE_REFERENCE_PATH"]
-fn namespace_readonly_reference_parity() {
-    if std::env::var_os("AXE_NETWORK_NAMESPACE_CHILD").is_none() {
-        let output = Command::new(reference_program("unshare"))
-            .args(["--user", "--map-root-user", "--net", "--"])
-            .arg(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "namespace_readonly_reference_parity",
-                "--ignored",
-                "--nocapture",
-            ])
-            .env("AXE_NETWORK_NAMESPACE_CHILD", "1")
-            .env(
-                "AXE_NETWORK_NAMESPACE_PARENT_NET",
-                std::fs::metadata("/proc/self/ns/net")
-                    .unwrap()
-                    .ino()
-                    .to_string(),
-            )
-            .env(
-                "AXE_NETWORK_NAMESPACE_PARENT_USER",
-                std::fs::metadata("/proc/self/ns/user")
-                    .unwrap()
-                    .ino()
-                    .to_string(),
-            )
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "namespace parity: {}",
-            describe(&output)
-        );
-        return;
-    }
-    assert_owned_network_namespace();
-    setup(&["link", "set", "lo", "up"]);
-    for name in ["d0", "d1"] {
-        setup(&["link", "add", name, "type", "dummy"]);
-        setup(&["link", "set", name, "up"]);
-    }
-    setup(&["link", "add", "empty0", "type", "dummy"]);
-    setup(&["link", "set", "d0", "group", "5"]);
-    setup(&["link", "add", "blue", "type", "vrf", "table", "100"]);
-    setup(&["link", "set", "d1", "master", "blue"]);
-    setup(&["link", "add", "v0", "type", "veth", "peer", "name", "v1"]);
-    setup(&["address", "add", "10.1.0.1/24", "dev", "d0"]);
-    setup(&[
-        "address",
-        "add",
-        "10.1.0.9/24",
-        "dev",
-        "d0",
-        "label",
-        "d0:alias",
-    ]);
-    setup(&[
-        "-6",
-        "address",
-        "add",
-        "2001:db8:1::1/64",
-        "dev",
-        "d0",
-        "nodad",
-    ]);
-    setup(&[
-        "route",
-        "add",
-        "10.5.0.0/16",
-        "table",
-        "100",
-        "proto",
-        "99",
-        "metric",
-        "100",
-        "mtu",
-        "1400",
-        "window",
-        "2000",
-        "rtt",
-        "10ms",
-        "advmss",
-        "1360",
-        "nexthop",
-        "dev",
-        "d0",
-        "weight",
-        "1",
-        "nexthop",
-        "dev",
-        "d1",
-        "weight",
-        "2",
-    ]);
-    setup(&[
-        "route",
-        "add",
-        "blackhole",
-        "10.6.0.0/16",
-        "table",
-        "100",
-        "proto",
-        "18",
-    ]);
-    setup(&[
-        "route",
-        "add",
-        "throw",
-        "10.7.0.0/16",
-        "table",
-        "100",
-        "proto",
-        "80",
-    ]);
-    setup(&[
-        "route",
-        "add",
-        "10.8.0.0/16",
-        "table",
-        "100",
-        "proto",
-        "1",
-        "dev",
-        "d0",
-    ]);
-    setup(&[
-        "-6",
-        "route",
-        "add",
-        "2001:db8:2::/64",
-        "table",
-        "100",
-        "dev",
-        "d0",
-        "metric",
-        "0",
-        "pref",
-        "high",
-    ]);
-    setup(&[
-        "neighbour",
-        "add",
-        "10.1.0.5",
-        "lladdr",
-        "ff:ff:ff:ff:ff:ff",
-        "nud",
-        "permanent",
-        "dev",
-        "d0",
-    ]);
-    setup(&["neighbour", "add", "10.1.0.6", "nud", "failed", "dev", "d0"]);
-    setup(&[
-        "neighbour",
-        "add",
-        "10.1.0.7",
-        "lladdr",
-        "02:00:00:00:00:07",
-        "nud",
-        "permanent",
-        "dev",
-        "d1",
-    ]);
-    setup(&["link", "set", "d1", "down"]);
-    setup(&["rule", "add", "priority", "1000", "table", "100"]);
-
-    for scope in ["global", "0"] {
-        parity("ip", &["address", "show", "scope", scope], false);
-        let output = axe("ip", &["-j", "address", "show", "scope", scope])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{}", describe(&output));
-        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let links = json.as_array().unwrap();
-        assert!(!links.iter().any(|link| link["ifname"] == "lo"));
-        let empty = links
-            .iter()
-            .find(|link| link["ifname"] == "empty0")
-            .expect("scope filter retains interfaces without addresses");
-        assert_eq!(empty["addr_info"], serde_json::json!([]));
-        let d0 = links.iter().find(|link| link["ifname"] == "d0").unwrap();
-        let addresses = d0["addr_info"].as_array().unwrap();
-        assert_eq!(addresses.len(), 3);
-        assert!(addresses.iter().all(|address| {
-            address["local"].is_string()
-                && address["family"].is_string()
-                && address["scope"] == "global"
-        }));
-        for local in ["10.1.0.1", "10.1.0.9", "2001:db8:1::1"] {
-            assert!(addresses.iter().any(|address| address["local"] == local));
-        }
-    }
-
-    for args in [
-        vec!["route", "show", "table", "all"],
-        vec!["route", "show", "table", "0"],
-        vec!["route", "show", "table", "100"],
-        vec!["route", "show", "table", "100", "dev", "d0"],
-        vec!["-o", "route", "show", "table", "100"],
-        vec!["-N", "route", "show", "table", "100"],
-        vec!["route", "show", "table", "100", "proto", "18"],
-        vec!["route", "show", "table", "100", "proto", "80"],
-        vec!["route", "show", "table", "100", "proto", "1"],
-        vec!["route", "show", "match", "10.1.0.5"],
-        vec!["route", "show", "root", "10.1.0.0/24"],
-        vec!["route", "show", "10.1.0.0/24"],
-        vec!["route", "get", "10.1.0.5", "dev", "d0"],
-        vec!["route", "get", "10.1.0.5", "mark", "0x6", "dev", "d0"],
-        vec!["route", "get", "127.0.0.1"],
-        vec!["route", "get", "127.0.0.1", "uid", "1000"],
-        vec!["rule", "show", "table", "local"],
-        vec!["rule", "show", "table", "100"],
-        vec!["-6", "route", "show", "table", "100"],
-        vec!["route", "get", "203.0.113.1"],
-        vec!["route", "get", "10.1.0.5", "dev", "axe-no-device"],
-        vec!["route", "get", "10.1.0.5", "from", "::1"],
-        vec!["neighbour", "show", "to", "10.1.0.0/24", "dev", "d0"],
-        vec!["neighbour", "show", "nud", "all", "to", "10.1.0.0/24"],
-        vec!["neighbour", "show", "to", "10.1.0.0/24", "vrf", "blue"],
-        vec!["link", "show", "dev", "d1", "up"],
-        vec!["-br", "link", "show", "dev", "d0"],
-        vec!["-4", "address", "show"],
-        vec!["-6", "address", "show"],
-        vec!["-4", "address", "show", "scope", "global", "dev", "d0"],
-        vec!["-br", "-4", "address", "show"],
-        vec!["address", "show", "up", "dev", "d0"],
-    ] {
-        parity("ip", &args, false);
-        let mut json_args = args.clone();
-        json_args.insert(0, "-j");
-        parity("ip", &json_args, true);
-    }
-
-    // The reference proto selector includes unrelated protocol-zero addresses.
-    let addresses = reference("ip", &["-j", "-6", "address", "show", "dev", "d0"]);
-    assert!(addresses.status.success(), "{}", describe(&addresses));
-    let addresses: serde_json::Value = serde_json::from_slice(&addresses.stdout).unwrap();
-    let expected: Vec<_> = addresses[0]["addr_info"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|address| address["protocol"] == "kernel_ll")
-        .cloned()
-        .collect();
-    let expected = serde_json::Value::Array(expected);
-    for protocol in ["3", "kernel_ll"] {
-        let output = axe("ip", &["-j", "-6", "address", "show", "proto", protocol])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{}", describe(&output));
-        let output: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-        assert!(
-            output
-                .iter()
-                .map(|link| (link["ifname"].as_str(), &link["addr_info"]))
-                .eq([(Some("d0"), &expected)]),
-            "{protocol}: {output:?}"
-        );
-    }
-
-    for args in [
-        vec!["-an"],
-        vec!["-ne"],
-        vec!["-nea"],
-        vec!["-nae"],
-        vec!["-nid0"],
-        vec!["-n", "--device=d0"],
-        vec!["-n", "--device="],
-        vec!["-n", "10.2"],
-        vec!["-an", "10.2"],
-        vec!["-ni", "axe-no-device"],
-        vec!["localhost"],
-    ] {
-        parity("arp", &args, false);
-    }
-    setup(&["address", "delete", "10.1.0.9/24", "dev", "d0"]);
-    parity("ifconfig", &["-s", "axe-no-device"], false);
-    for args in [vec!["-v", "lo"], vec!["lo"]] {
-        parity("ifconfig", &args, false);
-    }
-    for args in [vec!["-s"], vec!["-a", "-s"]] {
-        let expected = reference("ifconfig", &args);
-        let actual = axe("ifconfig", &args).output().unwrap();
-        assert!(expected.status.success(), "{}", describe(&expected));
-        assert!(actual.status.success(), "{}", describe(&actual));
-        assert_eq!(actual.stderr, expected.stderr);
-        let summary = |bytes: &[u8]| {
-            String::from_utf8_lossy(bytes)
-                .lines()
-                .skip(1)
-                .map(|line| {
-                    let fields = line.split_whitespace().collect::<Vec<_>>();
-                    (
-                        fields[0].to_owned(),
-                        fields[1].to_owned(),
-                        fields.last().unwrap().to_string(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            summary(&actual.stdout),
-            summary(&expected.stdout),
-            "{args:?}"
-        );
-    }
-    for (wrapper, object, args) in [
-        ("iprule", "rule", vec!["show", "table", "local"]),
-        ("iproute", "route", vec!["get", "127.0.0.1", "uid", "1000"]),
-    ] {
-        let mut reference_args = vec![object];
-        reference_args.extend_from_slice(&args);
-        let expected = reference("ip", &reference_args);
-        let actual = axe(wrapper, &args).output().unwrap();
-        assert_eq!(
-            actual.status.code(),
-            expected.status.code(),
-            "{wrapper}: {}",
-            describe(&actual)
-        );
-        assert_eq!(actual.stdout, expected.stdout, "{wrapper}");
-        assert_eq!(actual.stderr, expected.stderr, "{wrapper}");
     }
 }
 

@@ -339,9 +339,8 @@ fn bundled_category(name: &str) -> &'static str {
         | "logname" | "lsmod" | "lspci" | "lsscsi" | "lsusb" | "modinfo" | "nproc" | "pinky"
         | "slabtop" | "sysctl" | "tload" | "uname" | "uptime" | "users" | "vmstat" | "vzik"
         | "w" | "who" => "system",
-        "arp" | "host" | "http" | "ifconfig" | "ip" | "ipaddr" | "ipcalc" | "iplink"
-        | "ipneigh" | "iproute" | "iprule" | "nslookup" | "ping" | "ping6" | "traceroute"
-        | "traceroute6" => "network",
+        "arp" | "host" | "http" | "ifconfig" | "ipcalc" | "nslookup" | "ping" | "ping6"
+        | "route" | "traceroute" | "traceroute6" => "network",
         "chroot" => "containers",
         "file" | "goblin" | "strings" => "debugging",
         "chgrp" | "chmod" | "chown" | "groups" | "id" | "shred" | "whoami" => "security",
@@ -422,14 +421,9 @@ fn bundled_synopsis(name: &str) -> &'static str {
         "inotifywatch" => "Collect filesystem event statistics",
         "install" => "Copy files while setting attributes",
         "iostat" => "Report CPU and device I/O statistics",
-        "ip" => "Inspect and configure Linux networking",
-        "ipaddr" => "Inspect and configure network addresses",
         "ipcalc" => "Calculate IPv4 and IPv6 network parameters",
         "ipcs" => "Report System V IPC resources",
-        "iplink" => "Inspect and configure network links",
-        "ipneigh" => "Inspect and configure neighbor tables",
-        "iproute" => "Inspect and configure network routes",
-        "iprule" => "Inspect and configure routing policy rules",
+        "route" => "Inspect Linux routing tables (read-only)",
         "join" => "Join lines from files on a common field",
         "jq" => "Process and transform JSON data",
         "kill" => "Send signals to processes",

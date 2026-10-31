@@ -28,13 +28,8 @@ pub fn commands() -> HashMap<String, AppletFn> {
     let mut commands = HashMap::new();
     commands.insert("arp".into(), arp as AppletFn);
     commands.insert("ifconfig".into(), ifconfig as AppletFn);
-    commands.insert("ip".into(), ip as AppletFn);
-    commands.insert("ipaddr".into(), ipaddr as AppletFn);
+    commands.insert("route".into(), route as AppletFn);
     commands.insert("ipcalc".into(), ipcalc as AppletFn);
-    commands.insert("iplink".into(), iplink as AppletFn);
-    commands.insert("ipneigh".into(), ipneigh as AppletFn);
-    commands.insert("iproute".into(), iproute as AppletFn);
-    commands.insert("iprule".into(), iprule as AppletFn);
     commands
 }
 
@@ -46,28 +41,8 @@ pub fn ifconfig(args: Vec<OsString>) -> i32 {
     run_output("ifconfig", |out| run_ifconfig(args, out))
 }
 
-pub fn ip(args: Vec<OsString>) -> i32 {
-    run_output("ip", |out| run_ip(args, None, out))
-}
-
-pub fn ipaddr(args: Vec<OsString>) -> i32 {
-    run_output("ipaddr", |out| run_ip(args, Some(Object::Address), out))
-}
-
-pub fn iplink(args: Vec<OsString>) -> i32 {
-    run_output("iplink", |out| run_ip(args, Some(Object::Link), out))
-}
-
-pub fn ipneigh(args: Vec<OsString>) -> i32 {
-    run_output("ipneigh", |out| run_ip(args, Some(Object::Neighbour), out))
-}
-
-pub fn iproute(args: Vec<OsString>) -> i32 {
-    run_output("iproute", |out| run_ip(args, Some(Object::Route), out))
-}
-
-pub fn iprule(args: Vec<OsString>) -> i32 {
-    run_output("iprule", |out| run_ip(args, Some(Object::Rule), out))
+pub fn route(args: Vec<OsString>) -> i32 {
+    run_output("route", |out| run_route(args, out))
 }
 
 #[derive(Debug)]
@@ -172,13 +147,18 @@ enum Object {
     Route,
     Rule,
 }
-
+#[cfg(test)]
 const IP_USAGE: &str = concat!(
     "Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }\n",
     "       ip route get ADDRESS [from ADDRESS] [mark MARK] [uid UID] [dev IFACE | oif IFACE]\n",
     "       OBJECT := { address | link | neighbour | route | rule }\n",
     "       COMMAND := { show | list } (read-only; route also supports get)\n",
     "       OPTIONS := { -4 | -6 | -f { inet | inet6 | link } | -o | -br | -s | -j | -p | -N }",
+);
+
+const ROUTE_USAGE: &str = concat!(
+    "Usage: route [-n] [-4 | -6] [-A { inet | inet6 }] [-e] [show] [SELECTOR ...]\n",
+    "       Read-only route inspection; add, delete, and flush are not supported.",
 );
 
 #[derive(Default)]
@@ -245,17 +225,62 @@ impl IpRequest {
     }
 }
 
-fn run_ip(
+fn run_route(args: Vec<OsString>, out: &mut dyn Write) -> Result<(), CommandError> {
+    let args = translate_route_args(args)?;
+    run_network_query(args, Some(Object::Route), "route", ROUTE_USAGE, out)
+}
+
+fn translate_route_args(args: Vec<OsString>) -> Result<Vec<OsString>, CommandError> {
+    let values = utf8_args(args)?;
+    let mut translated = vec![OsString::from(
+        values.first().map(String::as_str).unwrap_or("route"),
+    )];
+    let mut values = values.into_iter().skip(1);
+    while let Some(value) = values.next() {
+        match value.as_str() {
+            "-n" | "--numeric" => translated.push("-N".into()),
+            "-A" | "--address-family" => {
+                let family = values.next().ok_or_else(|| {
+                    CommandError::new(255, "route: -A requires an address family")
+                })?;
+                translated.push(match family.as_str() {
+                    "inet" | "ipv4" => "-4".into(),
+                    "inet6" | "ipv6" => "-6".into(),
+                    _ => {
+                        return Err(CommandError::new(
+                            255,
+                            format!("route: unsupported address family \"{family}\""),
+                        ));
+                    }
+                });
+            }
+            "-e" | "--extended" | "-F" | "--fib" => {}
+            "-C" | "--cache" => {
+                return Err(CommandError::new(
+                    1,
+                    "route: cached route tables are not supported",
+                ));
+            }
+            "-h" | "--help" => translated.push("-help".into()),
+            value => translated.push(value.into()),
+        }
+    }
+    Ok(translated)
+}
+
+fn run_network_query(
     args: Vec<OsString>,
     forced: Option<Object>,
+    name: &str,
+    usage: &str,
     out: &mut dyn Write,
 ) -> Result<(), CommandError> {
     let args = utf8_args(args)?;
-    let request = parse_ip(&args[1..], forced)?;
+    let request = parse_network(&args[1..], forced, usage, name)?;
     match request.output {
-        Some(IpOutput::Help) => return Err(CommandError::new(0, IP_USAGE)),
+        Some(IpOutput::Help) => return Err(CommandError::new(0, usage)),
         Some(IpOutput::Version) => {
-            writeln!(out, "ip (axe) {}", env!("CARGO_PKG_VERSION"))?;
+            writeln!(out, "{name} (axe) {}", env!("CARGO_PKG_VERSION"))?;
             return Ok(());
         }
         None => {}
@@ -296,7 +321,17 @@ fn run_ip(
     })
 }
 
+#[cfg(test)]
 fn parse_ip(args: &[String], forced: Option<Object>) -> Result<IpRequest, CommandError> {
+    parse_network(args, forced, IP_USAGE, "ip")
+}
+
+fn parse_network(
+    args: &[String],
+    forced: Option<Object>,
+    usage: &str,
+    name: &str,
+) -> Result<IpRequest, CommandError> {
     let mut options = IpOptions::default();
     let mut values = args.iter().map(String::as_str);
     let mut first = None;
@@ -334,7 +369,7 @@ fn parse_ip(args: &[String], forced: Option<Object>) -> Result<IpRequest, Comman
             value if value.starts_with('-') => {
                 return Err(CommandError::new(
                     255,
-                    format!("Option \"{value}\" is unknown or unsupported, try \"ip -help\"."),
+                    format!("Option \"{value}\" is unknown or unsupported, try \"{name} -help\"."),
                 ));
             }
             value => {
@@ -351,7 +386,7 @@ fn parse_ip(args: &[String], forced: Option<Object>) -> Result<IpRequest, Comman
     } else if let Some(value) = first.take() {
         parse_object(value)?
     } else {
-        return Err(CommandError::new(255, IP_USAGE));
+        return Err(CommandError::new(255, usage));
     };
     if !matches!(object, Object::Link | Object::Address)
         && options.family == Some(AddressFamily::Packet)

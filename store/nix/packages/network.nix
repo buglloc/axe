@@ -211,6 +211,15 @@
       nativeInstallCheckInputs = [];
     });
 
+  ipMinimal = staticSet:
+    buildPkgs.runCommand "ip-${buildPkgs.iproute2.version}"
+    {
+      inherit (buildPkgs.iproute2) version;
+    }
+    ''
+      install -Dm755 ${staticSet.iproute2}/sbin/ip "$out/bin/ip"
+    '';
+
   ssMinimal = staticSet:
     buildPkgs.runCommand "ss-${buildPkgs.iproute2.version}"
     {
@@ -672,6 +681,14 @@ in {
     synopsis = "Capture packets for Wireshark command-line tools";
     systems = linuxSystems;
     packageFor = target: targetPkgs: tsharkMinimal (staticSetFor target targetPkgs);
+    rewriteBuildConfigurationPaths = true;
+  };
+
+  ip = mkNixpkgsBinary {
+    name = "ip";
+    synopsis = "Inspect and configure Linux networking";
+    systems = linuxSystems;
+    packageFor = target: targetPkgs: ipMinimal (staticSetFor target targetPkgs);
     rewriteBuildConfigurationPaths = true;
   };
 
