@@ -92,12 +92,7 @@ pub(super) fn socket_worker(context: SourceContext, initial: BTreeMap<String, So
         let current = match read_socket_states() {
             Ok(states) => states,
             Err(error) => {
-                context.diagnostic(
-                    Some(Class::Sockets),
-                    "procfs",
-                    "source_stopped",
-                    &error.to_string(),
-                );
+                context.provider_stopped(Class::Sockets, "procfs", &error.to_string());
                 break;
             }
         };

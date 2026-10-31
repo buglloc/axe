@@ -22,6 +22,7 @@ use std::sync::atomic::AtomicUsize;
 use serde_json::{Value, json};
 
 pub use cli::{CapabilityId, GlobalLimits};
+pub use protocol::LinuxBytes;
 
 /// Runs the collector with explicit output sinks.
 ///
@@ -102,12 +103,12 @@ where
         #[cfg(not(target_os = "linux"))]
         cli::Action::Monitor(_) => {
             let record = json!({
-                "schema":"raskop/vzik-monitor",
-                "schema_version":1,
+                "schema":protocol::MONITOR_SCHEMA,
+                "schema_version":protocol::MONITOR_SCHEMA_VERSION,
+                "seq":0,
                 "type":"stream_end",
                 "collection_outcome":"unsupported",
                 "stop_reason":"unsupported",
-                "completion":false,
             });
             match serde_json::to_writer(&mut *stdout, &record).and_then(|_| stdout.write_all(b"\n"))
             {
@@ -238,6 +239,7 @@ pub(crate) fn write_telemetry(
     details: Value,
 ) {
     let record = json!({
+        "schema": protocol::ERROR_SCHEMA,
         "schema_version": protocol::SCHEMA_VERSION,
         "level": "error",
         "event": code,
@@ -351,7 +353,8 @@ mod tests {
         assert_eq!(status, 0, "stderr: {}", String::from_utf8_lossy(&stderr));
         let result: serde_json::Value =
             serde_json::from_slice(&stdout).expect("capture summary JSON");
-        assert_eq!(result["schema_version"], 4);
+        assert_eq!(result["schema"], "raskop/vzik-capture");
+        assert_eq!(result["schema_version"], 5);
         assert_eq!(result["collection_outcome"], "complete");
         assert!(result.get("outcome").is_none());
         assert!(result["coverage_summary"].get("stream_outcome").is_none());
@@ -367,7 +370,7 @@ mod tests {
             serde_json::from_slice(&fs::read(&receipt_path).expect("read receipt"))
                 .expect("receipt JSON");
         assert_eq!(receipt["schema"], "raskop/vzik-capture-receipt");
-        assert_eq!(receipt["schema_version"], 4);
+        assert_eq!(receipt["schema_version"], 5);
         assert_eq!(
             receipt["capture"]["collection_outcome"],
             result["collection_outcome"]

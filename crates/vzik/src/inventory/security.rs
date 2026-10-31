@@ -487,14 +487,13 @@ fn filesystem<W: Write>(
             partial = true;
             coverage.skipped += 1;
             sink.diagnostic(
-            capability.id(),
-            "coverage",
-            "skipped",
-            "mount_boundary_skipped",
-            path_value(&current),
-            "visible mount boundary was not crossed; pass --include-visible-mounts to include it",
-            1,
-        )?;
+                capability.id(),
+                "coverage",
+                "mount_boundary_skipped",
+                path_value(&current),
+                "visible mount boundary was not crossed; pass --include-visible-mounts to include it",
+                1,
+            )?;
             continue;
         }
 
@@ -504,7 +503,6 @@ fn filesystem<W: Write>(
             sink.diagnostic(
                 capability.id(),
                 "coverage",
-                "skipped",
                 "filesystem_cycle_skipped",
                 path_value(&current),
                 "directory inode was already visited",

@@ -40,7 +40,7 @@
         "Сверяются статус collection 3, terminal degraded и capability unavailable; успешный status `summarize` 0 не трактуется как complete scope",
         "Отсутствие данных на указанном socket не подменяется утверждением о всех D-Bus именах машины"
       ],
-      "covers": "Protocol v4 sealed degraded; capture artifacts; scoped negative evidence"
+      "covers": "Protocol v5 sealed degraded; capture artifacts; scoped negative evidence"
     },
     {
       "id": 4,

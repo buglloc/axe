@@ -702,7 +702,7 @@ fn addresses<W: Write>(
                 "broadcast":broadcast,
                 "destination":destination,
                 "flags":entry.flags.bits(),
-                "source":{"display":"getifaddrs"},
+                "source":"getifaddrs",
             }),
         ));
     }

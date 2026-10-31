@@ -12,7 +12,7 @@ pub(super) use crate::cli::MonitorClass as Class;
 #[derive(Clone)]
 pub(super) struct QueuedRecord {
     pub(super) class: Option<Class>,
-    pub(super) source: String,
+    pub(super) provider: String,
     pub(super) value: Value,
 }
 
@@ -40,10 +40,10 @@ impl Queue {
         Self { sender, dropped }
     }
 
-    pub(super) fn send(&self, class: Option<Class>, source: &str, value: Value) -> bool {
+    pub(super) fn send(&self, class: Option<Class>, provider: &str, value: Value) -> bool {
         let record = QueuedRecord {
             class,
-            source: source.to_owned(),
+            provider: provider.to_owned(),
             value,
         };
         match self.sender.try_send(record) {
@@ -51,7 +51,7 @@ impl Queue {
             Err(TrySendError::Full(record)) => {
                 if let Some(class) = record.class {
                     let mut dropped = self.dropped.lock().expect("drop counter lock");
-                    *dropped.counts.entry((class, record.source)).or_default() += 1;
+                    *dropped.counts.entry((class, record.provider)).or_default() += 1;
                 }
                 false
             }
@@ -64,7 +64,7 @@ impl Queue {
         let counts = std::mem::take(&mut dropped.counts);
         counts
             .into_iter()
-            .map(|((class, source), count)| (class, source, count))
+            .map(|((class, provider), count)| (class, provider, count))
             .collect()
     }
 }
@@ -88,7 +88,7 @@ impl SourceContext {
     pub(super) fn event(
         &self,
         class: Class,
-        source: &str,
+        provider: &str,
         event: &str,
         data: Value,
         detection: &str,
@@ -97,41 +97,38 @@ impl SourceContext {
             "type":"event",
             "event":event,
             "class":class.id(),
-            "source":source,
+            "provider":provider,
             "detection":detection,
             "data":data,
         });
         if serde_json::to_vec(&record).map_or(true, |line| line.len() > MAX_PAYLOAD) {
             record["data"] = json!({"truncated":true});
         }
-        self.queue.send(Some(class), source, record);
+        self.queue.send(Some(class), provider, record);
     }
 
-    pub(super) fn diagnostic(&self, class: Option<Class>, source: &str, code: &str, message: &str) {
-        if code == "source_stopped"
-            && let Some(class) = class
-        {
-            self.queue.send(
-                Some(class),
-                source,
-                json!({
-                    "type":"gap",
-                    "class":class.id(),
-                    "source":source,
-                    "reason":"source_stopped",
-                    "dropped":0,
-                }),
-            );
-        }
+    /// Reports a provider that stopped delivering events: an explicit gap plus its cause.
+    pub(super) fn provider_stopped(&self, class: Class, provider: &str, message: &str) {
         self.queue.send(
-            class,
-            source,
+            Some(class),
+            provider,
+            json!({
+                "type":"gap",
+                "class":class.id(),
+                "provider":provider,
+                "reason":"provider_stopped",
+                "dropped":0,
+            }),
+        );
+        self.queue.send(
+            Some(class),
+            provider,
             json!({
                 "type":"diagnostic",
+                "class":class.id(),
                 "diagnostic":{
-                    "class":class.map(Class::id),
-                    "source":source,
-                    "code":code,
+                    "provider":provider,
+                    "code":"provider_stopped",
                     "message":message,
                 },
             }),

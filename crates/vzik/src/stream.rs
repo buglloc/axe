@@ -8,7 +8,10 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::cli::MAX_LINE_BYTES;
-use crate::protocol::SCHEMA_VERSION;
+use crate::protocol::{COLLECTION_SCHEMA, SCHEMA_VERSION};
+
+const VALIDATION_SCHEMA: &str = "raskop/vzik-validation";
+const SUMMARY_SCHEMA: &str = "raskop/vzik-summary";
 
 const OUTCOMES: [&str; 4] = ["complete", "partial", "unavailable", "unsupported"];
 const STREAM_OUTCOMES: [&str; 2] = ["complete", "degraded"];
@@ -88,7 +91,6 @@ pub(crate) struct Summary {
     pub outcomes: BTreeMap<String, Vec<String>>,
     pub diagnostic_records: u64,
     pub diagnostic_count: u64,
-    pub diagnostics_by_status: BTreeMap<String, u64>,
     pub diagnostics_by_code: BTreeMap<String, u64>,
 }
 
@@ -97,6 +99,7 @@ pub fn validate(path: &Path, output: &mut impl Write) -> Result<(), Error> {
     write_document(
         output,
         &json!({
+            "schema": VALIDATION_SCHEMA,
             "schema_version": SCHEMA_VERSION,
             "valid": true,
             "records": summary.records,
@@ -122,6 +125,7 @@ pub fn summarize(path: &Path, output: &mut impl Write) -> Result<(), Error> {
     write_document(
         output,
         &json!({
+            "schema": SUMMARY_SCHEMA,
             "schema_version": SCHEMA_VERSION,
             "command_id": summary.command_id,
             "stream": {
@@ -140,7 +144,6 @@ pub fn summarize(path: &Path, output: &mut impl Write) -> Result<(), Error> {
             "diagnostics": {
                 "records": summary.diagnostic_records,
                 "reported_count": summary.diagnostic_count,
-                "by_status": summary.diagnostics_by_status,
                 "by_code": summary.diagnostics_by_code,
             },
         }),
@@ -198,6 +201,9 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
             .as_object()
             .ok_or_else(|| invalid_error(line_number, "record must be a JSON object"))?;
 
+        if object.get("schema").and_then(Value::as_str) != Some(COLLECTION_SCHEMA) {
+            return invalid(line_number, format!("schema must be {COLLECTION_SCHEMA}"));
+        }
         if object.get("schema_version").and_then(Value::as_u64) != Some(SCHEMA_VERSION) {
             return invalid(
                 line_number,
@@ -290,8 +296,6 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
                     .get("diagnostic")
                     .and_then(Value::as_object)
                     .ok_or_else(|| invalid_error(line_number, "diagnostic must be an object"))?;
-                let status =
-                    required_string(diagnostic.get("status"), line_number, "diagnostic.status")?;
                 let code = required_string(diagnostic.get("code"), line_number, "diagnostic.code")?;
                 let count = diagnostic
                     .get("count")
@@ -302,10 +306,6 @@ fn scan(mut input: impl BufRead) -> Result<Summary, Error> {
 
                 summary.diagnostic_records += 1;
                 summary.diagnostic_count = summary.diagnostic_count.saturating_add(count);
-                *summary
-                    .diagnostics_by_status
-                    .entry(status.to_string())
-                    .or_default() += count;
                 *summary
                     .diagnostics_by_code
                     .entry(code.to_string())
@@ -618,8 +618,8 @@ mod tests {
                     "type":"diagnostic",
                     "capability":capability,
                     "diagnostic":{
-                        "status":"permission_denied",
-                        "code":"source_permission_denied",
+                        "kind":"source",
+                        "code":"permission_denied",
                         "count":2,
                     },
                 }));
@@ -651,6 +651,7 @@ mod tests {
     fn encode_fixture(records: &mut [Value]) -> Vec<u8> {
         let mut output = Vec::new();
         for (seq, record) in records.iter_mut().enumerate() {
+            record["schema"] = json!(COLLECTION_SCHEMA);
             record["schema_version"] = json!(SCHEMA_VERSION);
             record["seq"] = json!(seq);
             if matches!(
@@ -695,8 +696,7 @@ mod tests {
         assert!(!summary.stream_truncated);
         assert_eq!(summary.diagnostic_records, 1);
         assert_eq!(summary.diagnostic_count, 2);
-        assert_eq!(summary.diagnostics_by_status["permission_denied"], 2);
-        assert_eq!(summary.diagnostics_by_code["source_permission_denied"], 2);
+        assert_eq!(summary.diagnostics_by_code["permission_denied"], 2);
     }
 
     #[test]
@@ -797,9 +797,14 @@ mod tests {
     fn rejects_schema_mismatches_and_sequence_gaps() {
         for (needle, replacement, message) in [
             (
+                &b"\"schema\":\"raskop/vzik-collection\""[..],
+                &b"\"schema\":\"raskop/vzik-monitor\""[..],
+                "schema must be raskop/vzik-collection",
+            ),
+            (
+                &b"\"schema_version\":5"[..],
                 &b"\"schema_version\":4"[..],
-                &b"\"schema_version\":3"[..],
-                "schema_version must be 4",
+                "schema_version must be 5",
             ),
             (&b"\"seq\":1"[..], &b"\"seq\":9"[..], "seq must be 1"),
         ] {
@@ -808,7 +813,7 @@ mod tests {
                 .windows(needle.len())
                 .position(|window| window == needle)
                 .expect("find record field");
-            fixture[start..start + needle.len()].copy_from_slice(replacement);
+            fixture.splice(start..start + needle.len(), replacement.iter().copied());
 
             let error = scan(Cursor::new(fixture))
                 .err()

@@ -4,37 +4,68 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use serde::Serialize;
+use serde::{Serialize, Serializer, ser::SerializeStruct as _};
 use serde_json::{Value, json};
 
 use crate::cli::{Execution, GlobalLimits, Invocation};
 
 const TERMINAL_BYTE_RESERVE: u64 = 64 << 10;
 const TERMINAL_RECORD_RESERVE: u64 = 16;
-pub(crate) const SCHEMA_VERSION: u64 = 4;
+pub(crate) const SCHEMA_VERSION: u64 = 5;
+pub(crate) const COLLECTION_SCHEMA: &str = "raskop/vzik-collection";
+pub(crate) const ERROR_SCHEMA: &str = "raskop/vzik-error";
+pub(crate) const MONITOR_SCHEMA: &str = "raskop/vzik-monitor";
+pub(crate) const MONITOR_SCHEMA_VERSION: u64 = 2;
 pub(crate) const DEGRADED_EXIT_CODE: i32 = 3;
 
-/// Encodes Linux bytes as display text plus base64 when they are not UTF-8.
-pub(crate) fn linux_bytes(bytes: &[u8]) -> Value {
-    if let Ok(value) = std::str::from_utf8(bytes) {
-        json!({"display":value})
-    } else {
-        let mut display = String::with_capacity(bytes.len());
+/// Owned Linux byte string serialized in the protocol byte-string form.
+///
+/// Valid UTF-8 is a JSON string. Other bytes are `{"display", "base64"}`: `display` replaces
+/// only invalid sequences with U+FFFD, and `base64` holds the exact bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinuxBytes(Vec<u8>);
 
-        for &byte in bytes {
-            if byte.is_ascii_graphic() || byte == b' ' {
-                display.push(char::from(byte));
-            } else {
-                use std::fmt::Write as _;
-                write!(display, "\\x{byte:02x}").expect("write to string");
+impl LinuxBytes {
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<&[u8]> for LinuxBytes {
+    fn from(bytes: &[u8]) -> Self {
+        Self(bytes.to_vec())
+    }
+}
+
+impl Serialize for LinuxBytes {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        BorrowedBytes(&self.0).serialize(serializer)
+    }
+}
+
+struct BorrowedBytes<'a>(&'a [u8]);
+
+impl Serialize for BorrowedBytes<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match std::str::from_utf8(self.0) {
+            Ok(text) => serializer.serialize_str(text),
+            Err(_) => {
+                let mut object = serializer.serialize_struct("LinuxBytes", 2)?;
+                object.serialize_field("display", &String::from_utf8_lossy(self.0))?;
+                object.serialize_field(
+                    "base64",
+                    &base64::engine::general_purpose::STANDARD.encode(self.0),
+                )?;
+                object.end()
             }
         }
-
-        json!({
-            "display":display,
-            "raw_base64":base64::engine::general_purpose::STANDARD.encode(bytes),
-        })
     }
+}
+
+/// Encodes Linux bytes in the protocol byte-string form.
+pub(crate) fn linux_bytes(bytes: &[u8]) -> Value {
+    serde_json::to_value(BorrowedBytes(bytes)).expect("byte string serializes to JSON")
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -353,8 +384,7 @@ fn run_capability<W: Write>(
             invocation.capability.id(),
             "limit",
             "limit_reached",
-            "limit_reached",
-            json!({"display":limit}),
+            json!(limit),
             "acquisition stopped at the effective limit",
             1,
         )?;
@@ -444,20 +474,16 @@ impl<'a, W: Write> RecordSink<'a, W> {
     }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    #[allow(clippy::too_many_arguments)]
     pub fn diagnostic(
         &mut self,
         capability: &str,
         kind: &str,
-        status: &str,
         code: &str,
         source: Value,
         message: &str,
         count: u64,
     ) -> Result<(), ProtocolError> {
-        self.diagnostic_provider(
-            capability, kind, status, code, "native", source, message, count,
-        )
+        self.diagnostic_provider(capability, kind, code, "native", source, message, count)
     }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -466,7 +492,6 @@ impl<'a, W: Write> RecordSink<'a, W> {
         &mut self,
         capability: &str,
         kind: &str,
-        status: &str,
         code: &str,
         provider: &str,
         source: Value,
@@ -474,33 +499,28 @@ impl<'a, W: Write> RecordSink<'a, W> {
         count: u64,
     ) -> Result<(), ProtocolError> {
         self.emit(
-            diagnostic_record(
-                capability, kind, status, code, provider, source, message, count,
-            ),
+            diagnostic_record(capability, kind, code, provider, source, message, count),
             Priority::Data,
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn diagnostic_reserved(
         &mut self,
         capability: &str,
         kind: &str,
-        status: &str,
         code: &str,
         source: Value,
         message: &str,
         count: u64,
     ) -> Result<(), ProtocolError> {
         self.emit(
-            diagnostic_record(
-                capability, kind, status, code, "native", source, message, count,
-            ),
+            diagnostic_record(capability, kind, code, "native", source, message, count),
             Priority::Terminal,
         )
     }
 
     fn emit(&mut self, mut value: Value, priority: Priority) -> Result<(), ProtocolError> {
+        value["schema"] = json!(COLLECTION_SCHEMA);
         value["schema_version"] = json!(SCHEMA_VERSION);
         value["seq"] = json!(self.seq);
         let mut line = serde_json::to_vec(&value).map_err(ProtocolError::Encode)?;
@@ -546,11 +566,9 @@ impl<'a, W: Write> RecordSink<'a, W> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn diagnostic_record(
     capability: &str,
     kind: &str,
-    status: &str,
     code: &str,
     provider: &str,
     source: Value,
@@ -562,7 +580,6 @@ fn diagnostic_record(
         "capability":capability,
         "diagnostic":{
             "kind":kind,
-            "status":status,
             "code":code,
             "provider":provider,
             "source":source,
@@ -601,10 +618,26 @@ mod tests {
     use crate::cli::{self, Action};
 
     #[test]
-    fn non_utf8_bytes_round_trip_through_base64() {
-        let value = linux_bytes(b"a\xffb");
-        assert_eq!(value["raw_base64"], "Yf9i");
-        assert_eq!(value["display"], "a\\xffb");
+    fn byte_strings_are_plain_utf8_or_lossy_display_with_exact_base64() {
+        assert_eq!(linux_bytes("путь/a b".as_bytes()), json!("путь/a b"));
+
+        let value = linux_bytes("п\u{0}\x01".as_bytes());
+        assert_eq!(value, json!("п\u{0}\x01"));
+
+        let raw = b"\xd0\xbf\xff/\x01";
+        let value = linux_bytes(raw);
+        assert_eq!(value["display"], "п\u{fffd}/\x01");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(value["base64"].as_str().expect("base64 field"))
+                .expect("valid base64"),
+            raw
+        );
+        assert_eq!(value.as_object().expect("object form").len(), 2);
+        assert_eq!(
+            serde_json::to_value(LinuxBytes::from(raw.as_slice())).expect("serialize owned"),
+            value
+        );
     }
 
     #[test]

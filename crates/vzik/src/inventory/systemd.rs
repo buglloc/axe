@@ -678,7 +678,6 @@ fn provider_failure<W: Write>(
     sink.diagnostic_provider(
         capability.id(),
         "provider",
-        "unavailable",
         "provider_unavailable",
         "systemd_dbus",
         path_value(socket),
@@ -699,10 +698,9 @@ fn unit_failure<W: Write>(
     sink.diagnostic_provider(
         capability.id(),
         "unit",
-        "not_found",
         "systemd_unit_not_found",
         "systemd_dbus",
-        json!({"socket":path_value(socket),"unit":{"display":unit}}),
+        json!({"socket":path_value(socket),"unit":unit}),
         error,
         1,
     )
@@ -717,7 +715,6 @@ fn property_diagnostic<W: Write>(
     sink.diagnostic_provider(
         capability.id(),
         "property",
-        "partial",
         "property_errors",
         "systemd_dbus",
         path_value(socket),

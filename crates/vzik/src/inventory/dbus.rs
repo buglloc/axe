@@ -477,7 +477,6 @@ fn provider_failure<W: Write>(
     sink.diagnostic_provider(
         capability.id(),
         "provider",
-        "unavailable",
         "provider_unavailable",
         "dbus",
         path_value(socket),
@@ -497,10 +496,9 @@ fn property_failure<W: Write>(
     sink.diagnostic_provider(
         capability.id(),
         "property",
-        "partial",
         "property_errors",
         "dbus",
-        json!({"socket":path_value(socket),"operation":{"display":operation}}),
+        json!({"socket":path_value(socket),"operation":operation}),
         error,
         count,
     )
@@ -519,9 +517,8 @@ fn name_failure<W: Write>(
         capability.id(),
         "name",
         "malformed",
-        "source_malformed",
         "dbus",
-        json!({"socket":path_value(socket),"name":{"display":name}}),
+        json!({"socket":path_value(socket),"name":name}),
         error,
         1,
     )

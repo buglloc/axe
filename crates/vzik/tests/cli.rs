@@ -31,7 +31,8 @@ fn invalid_request_has_structured_process_error() {
     assert!(output.stdout.is_empty());
     let diagnostics = json_lines(&output.stderr);
     assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0]["schema_version"], 4);
+    assert_eq!(diagnostics[0]["schema"], "raskop/vzik-error");
+    assert_eq!(diagnostics[0]["schema_version"], 5);
     assert_eq!(diagnostics[0]["code"], "cli_invalid");
     assert_eq!(diagnostics[0]["operation"], "parse_request");
     assert_eq!(diagnostics[0]["retryable"], false);
@@ -98,14 +99,18 @@ fn monitor_emits_versioned_stream_and_file_events() {
     );
     let records = json_lines(&output.stdout);
     assert!(records.iter().all(|record| {
-        record["schema"] == "raskop/vzik-monitor" && record["schema_version"] == 1
+        record["schema"] == "raskop/vzik-monitor" && record["schema_version"] == 2
     }));
+    for (seq, record) in records.iter().enumerate() {
+        assert_eq!(record["seq"], seq as u64, "{record}");
+    }
     assert_eq!(records[0]["type"], "stream_start");
-    assert_eq!(records[0]["event_classes"]["files"]["detection"], "exact");
+    assert_eq!(records[0]["classes"]["files"]["detection"], "exact");
     assert!(records.iter().any(|record| {
         record["type"] == "event"
             && record["class"] == "files"
             && record["event"] == "content_modified"
+            && record["provider"] == records[0]["classes"]["files"]["provider"]
     }));
     assert_eq!(records.last().expect("stream end")["type"], "stream_end");
 }
@@ -125,8 +130,8 @@ fn monitor_process_and_socket_subcommands_exclude_other_backends() {
         let records = json_lines(&output.stdout);
         let start = &records[0];
         assert_eq!(start["type"], "stream_start");
-        assert!(start["event_classes"].get(expected).is_some());
-        assert!(start["event_classes"].get("files").is_none());
+        assert!(start["classes"].get(expected).is_some());
+        assert!(start["classes"].get("files").is_none());
         for record in &records {
             if record["type"] == "snapshot_state" {
                 assert_eq!(record["class"], expected);
@@ -141,7 +146,7 @@ fn monitor_process_and_socket_subcommands_exclude_other_backends() {
                 .as_array()
                 .and_then(|items| items.first())
                 .expect("process snapshot item");
-            assert!(process["executable"]["display"].is_string());
+            assert!(process["executable"].is_string());
             assert!(process["argv"].is_array());
             assert!(process.get("environment").is_none());
         }
@@ -189,7 +194,7 @@ fn monitor_all_subcommand_includes_all_backends() {
     let start = &records[0];
     assert_eq!(start["type"], "stream_start");
     for class in ["process", "files", "sockets"] {
-        assert!(start["event_classes"].get(class).is_some());
+        assert!(start["classes"].get(class).is_some());
     }
     let end = records.last().expect("stream end");
     assert_eq!(end["type"], "stream_end");
@@ -262,8 +267,10 @@ fn capability_discovery_separates_compact_index_from_detail() {
     assert!(index.status.success());
     let index: Value = serde_json::from_slice(&index.stdout).expect("capability index JSON");
 
-    assert_eq!(index["schema_version"], 4);
-    assert_eq!(index["protocol"]["schema_version"], 4);
+    assert_eq!(index["schema"], "raskop/vzik-capabilities");
+    assert_eq!(index["schema_version"], 5);
+    assert_eq!(index["protocol"]["schema"], "raskop/vzik-collection");
+    assert_eq!(index["protocol"]["schema_version"], 5);
     assert_eq!(index["exit_status"]["degraded"], 3);
     assert!(index["capabilities"][0].get("request").is_none());
 
@@ -302,7 +309,7 @@ fn degraded_collection_status_agrees_with_terminal_and_summary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = json_lines(&output.stdout);
-    assert!(records.iter().all(|record| record["schema_version"] == 4));
+    assert!(records.iter().all(|record| record["schema_version"] == 5));
     let terminal = records.last().expect("terminal record");
     assert_eq!(terminal["type"], "stream_end");
     assert_eq!(terminal["collection_outcome"], "degraded");
@@ -313,7 +320,7 @@ fn degraded_collection_status_agrees_with_terminal_and_summary() {
         .duration_since(UNIX_EPOCH)
         .expect("clock after epoch")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("vzik-protocol-v4-{nonce}.jsonl"));
+    let path = std::env::temp_dir().join(format!("vzik-protocol-v5-{nonce}.jsonl"));
     fs::write(&path, &output.stdout).expect("write captured stream");
     let summary = vzik()
         .arg("summarize")
@@ -324,13 +331,14 @@ fn degraded_collection_status_agrees_with_terminal_and_summary() {
 
     assert!(summary.status.success());
     let summary: Value = serde_json::from_slice(&summary.stdout).expect("summary JSON");
-    assert_eq!(summary["schema_version"], 4);
+    assert_eq!(summary["schema"], "raskop/vzik-summary");
+    assert_eq!(summary["schema_version"], 5);
     assert_eq!(summary["stream"]["collection_outcome"], "degraded");
     assert_eq!(summary["stream"]["truncated"], true);
 
-    let capture_path = std::env::temp_dir().join(format!("vzik-capture-v4-{nonce}.jsonl"));
-    let receipt_path = std::env::temp_dir().join(format!("vzik-capture-v4-{nonce}.receipt.json"));
-    let stderr_path = std::env::temp_dir().join(format!("vzik-capture-v4-{nonce}.stderr.jsonl"));
+    let capture_path = std::env::temp_dir().join(format!("vzik-capture-v5-{nonce}.jsonl"));
+    let receipt_path = std::env::temp_dir().join(format!("vzik-capture-v5-{nonce}.receipt.json"));
+    let stderr_path = std::env::temp_dir().join(format!("vzik-capture-v5-{nonce}.stderr.jsonl"));
     let captured = vzik()
         .args(["capture", "collect", "--max-records", "32", "--output"])
         .arg(&capture_path)
@@ -354,7 +362,7 @@ fn degraded_collection_status_agrees_with_terminal_and_summary() {
     let receipt: Value = serde_json::from_slice(&fs::read(&receipt_path).expect("read receipt"))
         .expect("receipt JSON");
 
-    assert_eq!(receipt["schema_version"], 4);
+    assert_eq!(receipt["schema_version"], 5);
     assert_eq!(receipt["capture"]["collection_outcome"], "degraded");
     assert_eq!(receipt["capture"]["stream_truncated"], true);
 
@@ -535,7 +543,7 @@ fn process_inspect_live_child() {
     assert_eq!(detail["is_self"], false);
     assert_eq!(detail["scope"], "collector_visible");
     assert_eq!(detail["uids"]["real"], uid);
-    assert_eq!(detail["cap_effective"]["display"], status_field("CapEff:"));
+    assert_eq!(detail["cap_effective"], status_field("CapEff:"));
     assert_eq!(
         detail["seccomp"],
         status_field("Seccomp:")
@@ -561,11 +569,11 @@ fn process_inspect_live_child() {
     );
     let executable = std::env::current_exe().expect("test executable");
     assert_eq!(
-        detail["cmdline"][0]["display"],
+        detail["cmdline"][0],
         executable.to_str().expect("UTF-8 test executable"),
     );
     assert_eq!(
-        detail["exe"]["display"],
+        detail["exe"],
         fs::read_link(root.join("exe"))
             .expect("child executable link")
             .to_str()
@@ -582,7 +590,7 @@ fn process_inspect_live_child() {
         .as_array()
         .expect("rlimits")
         .iter()
-        .find(|limit| limit["name"]["display"] == "Max open files")
+        .find(|limit| limit["name"] == "Max open files")
         .expect("serialized open-files limit");
     for (field, raw) in [("soft", open_files[3]), ("hard", open_files[4])] {
         let expected = if raw == "unlimited" {
@@ -592,7 +600,7 @@ fn process_inspect_live_child() {
         };
         assert_eq!(limit[field], expected);
     }
-    assert_eq!(limit["units"]["display"], "files");
+    assert_eq!(limit["units"], "files");
     assert!(detail["session"]["session_id"].is_u64());
     assert_eq!(
         detail["ancestry"][0]["pid"],
@@ -611,7 +619,7 @@ fn process_inspect_live_child() {
     for source in ["stat", "status", "cmdline", "limits", "io", "fd", "fdinfo"] {
         assert_eq!(detail["sources"][source]["availability"], "available");
         assert_eq!(
-            detail["sources"][source]["source"]["display"],
+            detail["sources"][source]["source"],
             root.join(source).to_str().expect("proc source path"),
         );
     }
@@ -647,14 +655,19 @@ fn process_inspect_large_command_line_is_explicitly_partial_and_bounded() {
         let records = json_lines(&output.stdout);
         let detail = process_detail_record(&records);
         assert_eq!(detail["pid"], child.child.id());
-        assert_eq!(detail["sources"]["cmdline"]["availability"], "truncated");
+        assert_eq!(
+            detail["sources"]["cmdline"]["availability"],
+            "limit_reached"
+        );
         assert_eq!(detail["sources"]["stat"]["availability"], "available");
         assert_eq!(detail["security_context_complete"], false);
         if limit == "max_line_bytes" {
             let cmdline = detail["cmdline"].as_array().expect("bounded command line");
             assert!(!cmdline.is_empty());
             assert!(
-                cmdline.last().expect("last argument")["display"]
+                cmdline
+                    .last()
+                    .expect("last argument")
                     .as_str()
                     .expect("argument")
                     .len()
@@ -679,8 +692,7 @@ fn process_inspect_large_command_line_is_explicitly_partial_and_bounded() {
         assert!(records.iter().any(|record| {
             record["type"] == "diagnostic"
                 && record["diagnostic"]["code"] == "limit_reached"
-                && record["diagnostic"]["source"]["display"]
-                    == format!("/proc/{}/cmdline", child.child.id())
+                && record["diagnostic"]["source"] == detail["sources"]["cmdline"]["source"]
         }));
         assert_eq!(
             records.last().expect("terminal")["collection_outcome"],
@@ -718,7 +730,7 @@ fn process_inspect_zombie_retains_stat_and_reports_independent_missing_sources()
     let records = json_lines(&output.stdout);
     let detail = process_detail_record(&records);
     assert_eq!(detail["pid"], pid);
-    assert_eq!(detail["state"]["display"], "Z");
+    assert_eq!(detail["state"], "Z");
     assert_eq!(detail["resources"]["rss_bytes"], 0);
     assert_eq!(detail["sources"]["stat"]["availability"], "available");
     assert_eq!(detail["security_context_complete"], false);
@@ -727,8 +739,9 @@ fn process_inspect_zombie_retains_stat_and_reports_independent_missing_sources()
         assert!(detail.get(source).is_none());
         assert!(records.iter().any(|record| {
             record["type"] == "diagnostic"
-                && record["diagnostic"]["code"] == "source_not_found"
-                && record["diagnostic"]["source"]["display"] == format!("/proc/{pid}/{source}")
+                && record["diagnostic"]["code"] == "not_found"
+                && record["diagnostic"]["source"] == format!("/proc/{pid}/{source}")
+                && record["diagnostic"]["source"] == detail["sources"][source]["source"]
         }));
     }
     let capability = records
@@ -762,8 +775,8 @@ fn process_inspect_missing_pid_returns_a_valid_unavailable_stream() {
     assert!(!records.iter().any(|record| record["type"] == "data"));
     assert!(records.iter().any(|record| {
         record["type"] == "diagnostic"
-            && record["diagnostic"]["code"] == "source_not_found"
-            && record["diagnostic"]["source"]["display"] == format!("/proc/{pid}/stat")
+            && record["diagnostic"]["code"] == "not_found"
+            && record["diagnostic"]["source"] == format!("/proc/{pid}/stat")
     }));
     let capability = records
         .iter()
@@ -932,9 +945,14 @@ fn capture_directory_preserves_byte_paths_and_seals_degraded_evidence() {
         .expect("capture byte directory");
     assert_eq!(output.status.code(), Some(3), "{:?}", output.stderr);
     let receipt = verify_bundle(&directory, &output.stdout, "degraded");
-    let raw = receipt["capture"]["path"]["raw_base64"]
-        .as_str()
-        .expect("lossless byte path");
+    let path = &receipt["capture"]["path"];
+    assert!(
+        path["display"]
+            .as_str()
+            .expect("lossy display path")
+            .contains("evidence-\u{fffd}")
+    );
+    let raw = path["base64"].as_str().expect("lossless byte path");
     assert_eq!(
         base64::engine::general_purpose::STANDARD
             .decode(raw)

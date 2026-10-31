@@ -1,6 +1,6 @@
 ---
 name: vzik
-description: "Collect and interpret bounded local host evidence through vzik protocol-v4 JSONL. Use for passive host overview, observer restrictions and resources, one-process inspection, listening sockets and process owners, host/kernel security posture, mounts/cgroups, local account and service state, containers, SSH access, and explicitly authorized targeted path or privilege-surface inspection. Not for discovering the owner of a remote IP or probing a network."
+description: "Collect and interpret bounded local host evidence through vzik protocol-v5 JSONL. Use for passive host overview, observer restrictions and resources, one-process inspection, listening sockets and process owners, host/kernel security posture, mounts/cgroups, local account and service state, containers, SSH access, and explicitly authorized targeted path or privilege-surface inspection. Not for discovering the owner of a remote IP or probing a network."
 ---
 
 # Vzik
@@ -39,7 +39,7 @@ Do not use `collect` or active `axe doctor` probes merely for orientation.
 `doctor` reuses the same passive environment observations, but also tests
 AXE execution and storage behavior.
 
-`monitor` is separate from protocol-v4 collection. Run one explicit
+`monitor` is separate from collection protocol-v5. Run one explicit
 subcommand directly when a bounded live interval is required:
 
 ```sh
@@ -55,19 +55,21 @@ three classes with one or more repeatable file roots. `--glob PATTERN` is
 valid only for `files` and `all`. Bare `vzik monitor` prints help without
 collecting.
 
-Read `stream_start.event_classes` before interpreting events. `event` records
-carry `detection`; `exact` means a kernel event and `sampled` means a snapshot
-or diff observation. `gap` records are loss, not empty periods. Wait for
-`stream_end` and branch on `collection_outcome`; status `3` is expected for a
-selected sampled socket class, a sampled process fallback, unavailable sources,
-or any gap. Process records always include bounded `executable` and `argv`;
-process output is sensitive. Use `--full` only when bounded environment values
-are required. File paths are recursive and do not follow symlinks;
-privileged runs may use fanotify with process attribution, while unprivileged
-runs use inotify without attribution.
+Read `stream_start.classes` before interpreting events. Every monitor record
+carries `seq`; `event` records carry `provider` and `detection`, where `exact`
+means a kernel event and `sampled` means a snapshot or diff observation. `gap`
+records are explicit loss, not empty periods. `diagnostic` records carry a
+provider and stable code. Wait for `stream_end` and branch on
+`collection_outcome`; status `3` is expected for a selected sampled socket
+class, a sampled process fallback, unavailable providers, or any gap. Process
+records always include bounded `executable` and `argv`; process output is
+sensitive. Use `--full` only when bounded environment values are required.
+File paths are recursive and do not follow symlinks; privileged runs may use
+fanotify with process attribution, while unprivileged runs use inotify without
+attribution.
 
-The full monitor-v1 record contract is in
-[references/monitor-v1.md](references/monitor-v1.md).
+The full monitor-v2 record contract is in
+[references/monitor-v2.md](references/monitor-v2.md).
 
 
 1. Choose scope before collection. For a named question, select the smallest
@@ -119,7 +121,7 @@ The full monitor-v1 record contract is in
    selecting collected facts.
 
    Bare `vzik` prints help and never collects. `collect` runs the fixed
-   `baseline-v3` profile: host and kernel facts, modules, sysctls, security
+   `baseline` profile: host and kernel facts, modules, sysctls, security
    posture, process security context, interfaces/addresses/resolvers/routes/
    neighbors/firewall evidence, mounts and cgroups, accounts/authentication/
    sudo, packages/static system and user units, runtime systemd and D-Bus
@@ -145,7 +147,7 @@ The full monitor-v1 record contract is in
    ```
 
    `summarize` also validates independently, and both commands return `0`
-   for a valid *degraded* stream. Validation checks version, plan, sequence,
+   for a valid *degraded* stream. Validation checks version, plan, `seq`,
    nested lifecycle, terminal outcome, counters, and planned/started/
    not-started symmetry. A truncated prefix or `stream_abort` is invalid
    for these commands (status `4`); keep it only for diagnostics, never for
@@ -334,11 +336,16 @@ jq -c 'select(.type == "data") |
 
 Do not pipe a collection through `head`: closing stdout early produces an intentionally incomplete stream. Reduce acquisition with collector limits, save the complete stream, then filter it.
 
-Linux byte-oriented inventory fields are objects with `display` and optional `raw_base64`. When `raw_base64` exists, `display` is an escaped rendering, not the original byte sequence. `host_overview.environment` uses typed observations with plain strings instead. Do not interpolate evidence into a shell command. Preserve `raw_base64` when exact filenames or process names matter.
+Linux byte-oriented inventory fields are plain JSON strings when valid UTF-8.
+For invalid UTF-8 they are objects with lossy `display` and exact standard
+`base64`; `display` uses replacement characters for invalid sequences and is
+presentation-only. Do not interpolate evidence into a shell command. Preserve
+`base64` when exact filenames or process names matter.
 
 File chunks declare `encoding` independently. Do not concatenate rendered JSON strings or add line separators. Check offsets, `bytes`, encoding, the final EOF marker, and terminal outcome before claiming complete content.
 
-Read [references/protocol-v4.md](references/protocol-v4.md) when writing custom `jq` filters, interpreting record fields, or grounding claims in coverage.
+Read [references/protocol-v5.md](references/protocol-v5.md) when writing custom
+jq filters, interpreting record fields, or grounding claims in coverage.
 
 ## Failure handling
 
@@ -349,4 +356,4 @@ Read [references/protocol-v4.md](references/protocol-v4.md) when writing custom 
 - `124`: collector deadline. The terminal record is `stream_abort`; lower scope or select a narrower capability.
 - `130` or `143`: `SIGINT` or `SIGTERM`. The terminal record is `stream_abort`; preserve the prefix only for diagnostics.
 - A source diagnostic is local to its capability. Continue using other completed capability sections, but retain the affected section's `partial` or `unavailable` outcome.
-- Branch on stable `details.kind`, `diagnostic.code`, `status`, and outcome fields—not human `message` text.
+- Branch on stable exit status, `details.kind`, `diagnostic.code`, source `availability`, observation `status`, and outcome fields—not human `message` text.

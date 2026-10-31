@@ -710,7 +710,6 @@ fn process_ancestry<W: Write>(
             CapabilityId::ProcessInspect.id(),
             "limit",
             "limit_reached",
-            "limit_reached",
             path_value(&source),
             "process ancestry exceeded its bounded depth",
             1,
@@ -981,7 +980,7 @@ fn process_fd_inventory<W: Write>(
     }
     if fdinfo_failures > 0 {
         let availability = if fdinfo_truncated {
-            "truncated"
+            "limit_reached"
         } else {
             "io_error"
         };
@@ -993,7 +992,6 @@ fn process_fd_inventory<W: Write>(
             sink.diagnostic(
                 CapabilityId::ProcessInspect.id(),
                 "limit",
-                "limit_reached",
                 "limit_reached",
                 path_value(&root.join("fdinfo")),
                 "one or more process fdinfo files exceeded the bounded read limit",
@@ -1334,12 +1332,11 @@ fn process_detail_limit<W: Write>(
     }
     detail.sources.insert(
         name.into(),
-        json!({"source":path_value(path), "availability":"truncated"}),
+        json!({"source":path_value(path), "availability":"limit_reached"}),
     );
     sink.diagnostic(
         CapabilityId::ProcessInspect.id(),
         "limit",
-        "limit_reached",
         "limit_reached",
         path_value(path),
         if limit == "max_source_bytes" {
@@ -1361,7 +1358,6 @@ fn process_raced<W: Write>(
         CapabilityId::ProcessInspect.id(),
         "source",
         "raced",
-        "source_raced",
         path_value(path),
         "process changed while its sources were being read; snapshot discarded",
         1,
@@ -1370,8 +1366,9 @@ fn process_raced<W: Write>(
 }
 
 fn process_detail_text(bytes: &[u8]) -> (Value, bool) {
-    // Non-UTF-8 display escaping plus base64 needs less than seven bytes per input byte.
-    let maximum = PROCESS_DETAIL_VALUE_BYTES.saturating_sub(128) / 7;
+    // A lossy display (up to six JSON bytes per control byte) plus base64 stays below eight
+    // bytes per input byte.
+    let maximum = PROCESS_DETAIL_VALUE_BYTES.saturating_sub(128) / 8;
     let length = bytes.len().min(maximum);
     (text(&bytes[..length]), length < bytes.len())
 }
@@ -1932,7 +1929,7 @@ fn process_cgroup_membership(bytes: &[u8], budget: usize) -> io::Result<(Value, 
         }
         fields.insert(
             "namespace_relative_path".into(),
-            entry.namespace_relative_path,
+            text(entry.namespace_relative_path.as_bytes()),
         );
         let value = Value::Object(fields);
         if budget != usize::MAX {
@@ -2379,9 +2376,9 @@ mod tests {
         assert_eq!(
             value,
             json!([
-                {"name":{"display":"Max cpu time"}, "soft":"unlimited", "hard":"unlimited", "units":{"display":"seconds"}},
-                {"name":{"display":"Max open files"}, "soft":0, "hard":u64::MAX, "units":{"display":"files"}},
-                {"name":{"display":"Max nice priority"}, "soft":0, "hard":0},
+                {"name":"Max cpu time", "soft":"unlimited", "hard":"unlimited", "units":"seconds"},
+                {"name":"Max open files", "soft":0, "hard":u64::MAX, "units":"files"},
+                {"name":"Max nice priority", "soft":0, "hard":0},
             ]),
         );
         for bytes in [
@@ -2399,7 +2396,7 @@ mod tests {
     fn process_membership_budget_retains_only_complete_entries() {
         let first = json!([{
             "hierarchy_kind":"unified",
-            "namespace_relative_path":{"display":"/visible:name"},
+            "namespace_relative_path":"/visible:name",
         }]);
         let budget = serde_json::to_vec(&first)
             .expect("serialize expected membership")
@@ -2423,7 +2420,7 @@ mod tests {
         )
         .expect("valid fdinfo");
         assert_eq!(value["position"], 7);
-        assert_eq!(value["flags"]["display"], "02000002");
+        assert_eq!(value["flags"], "02000002");
         assert_eq!(value["mount_id"], 12);
         assert_eq!(value["inode"], 34);
         assert_eq!(value["epoll_targets"], json!([5]));
@@ -2510,7 +2507,7 @@ mod tests {
         assert!(truncated);
         assert!(json_bytes(&value).expect("encoded binary length") <= PROCESS_DETAIL_VALUE_BYTES);
         let raw = base64::engine::general_purpose::STANDARD
-            .decode(value["raw_base64"].as_str().expect("raw binary prefix"))
+            .decode(value["base64"].as_str().expect("raw binary prefix"))
             .expect("decode binary prefix");
         assert!(!raw.is_empty());
         assert_eq!(raw, bytes[..raw.len()]);
@@ -2524,11 +2521,7 @@ mod tests {
         let arguments = arguments.as_array().expect("argument array");
         assert!(!arguments.is_empty());
         assert!(arguments.len() < bytes.len() / 2);
-        assert!(
-            arguments
-                .iter()
-                .all(|argument| argument == &json!({"display":"x"}))
-        );
+        assert!(arguments.iter().all(|argument| argument == "x"));
 
         let mut limits = b"Limit Soft Limit Hard Limit Units\n".to_vec();
         limits.extend_from_slice(&b"Max open files 1 2 files\n".repeat(1024));
@@ -2545,7 +2538,7 @@ mod tests {
             None,
         )
         .expect("parse mountinfo");
-        assert_eq!(value["target"]["display"], "/path with spaces");
+        assert_eq!(value["target"], "/path with spaces");
         assert_eq!(value["read_only"], false);
     }
 

@@ -3,7 +3,9 @@ use std::io::{self, Write};
 use serde_json::{Value, json};
 
 use crate::cli::{CapabilityId, global_limit_specs};
-use crate::protocol::SCHEMA_VERSION;
+use crate::protocol::{COLLECTION_SCHEMA, ERROR_SCHEMA, SCHEMA_VERSION};
+
+const CAPABILITIES_SCHEMA: &str = "raskop/vzik-capabilities";
 
 const CAPABILITY_OUTCOMES: [&str; 4] = ["complete", "partial", "unavailable", "unsupported"];
 
@@ -39,9 +41,11 @@ fn capability_index() -> Value {
     };
 
     json!({
+        "schema": CAPABILITIES_SCHEMA,
         "schema_version": SCHEMA_VERSION,
         "outcome": "complete",
         "protocol": {
+            "schema":COLLECTION_SCHEMA,
             "schema_version":SCHEMA_VERSION,
             "transport":"jsonl",
             "completion_terminal_record":"stream_end",
@@ -62,6 +66,7 @@ fn capability_index() -> Value {
             "signal":"128+signal",
         },
         "process_error": {
+            "schema":ERROR_SCHEMA,
             "schema_version":SCHEMA_VERSION,
             "transport":"stderr_jsonl",
             "fields":["code", "operation", "retryable", "message", "details"],
@@ -78,6 +83,7 @@ fn capability_index() -> Value {
 fn capability_detail(capability: CapabilityId) -> Value {
     let baseline_position = capability.baseline_position();
     json!({
+        "schema": CAPABILITIES_SCHEMA,
         "schema_version": SCHEMA_VERSION,
         "outcome": "complete",
         "capability": {

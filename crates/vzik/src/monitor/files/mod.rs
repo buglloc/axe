@@ -18,12 +18,20 @@ use super::contract::{Class, SourceContext};
 use super::process::process_state;
 use super::{MAX_FILE_STATE, MAX_WATCHES};
 
+/// A directory that inotify setup could not cover.
+pub(super) struct SetupGap {
+    pub(super) reason: &'static str,
+    pub(super) path: PathBuf,
+    /// OS error text, retained only with `--verbose`.
+    pub(super) error: Option<String>,
+}
+
 pub(super) struct FileSource {
     inotify: Inotify,
     watches: HashMap<WatchDescriptor, PathBuf>,
     roots: Vec<PathBuf>,
     path_glob: Option<glob::Pattern>,
-    pub(super) setup_gaps: Vec<(String, String)>,
+    pub(super) setup_gaps: Vec<SetupGap>,
 }
 
 impl FileSource {
@@ -50,7 +58,11 @@ impl FileSource {
             let mut directories = vec![root.clone()];
             while let Some(directory) = directories.pop() {
                 if watches.len() >= MAX_WATCHES {
-                    setup_gaps.push(("watch_limit".to_owned(), directory.display().to_string()));
+                    setup_gaps.push(SetupGap {
+                        reason: "watch_limit",
+                        path: directory,
+                        error: None,
+                    });
                     break;
                 }
                 match inotify.watches().add(
@@ -68,18 +80,19 @@ impl FileSource {
                         watches.insert(watch, directory.clone());
                     }
                     Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
-                        setup_gaps
-                            .push(("watch_limit".to_owned(), directory.display().to_string()));
+                        setup_gaps.push(SetupGap {
+                            reason: "watch_limit",
+                            path: directory,
+                            error: None,
+                        });
                         break;
                     }
                     Err(error) => {
-                        setup_gaps.push((
-                            "watch_unavailable".to_owned(),
-                            directory.display().to_string(),
-                        ));
-                        if options.verbose {
-                            setup_gaps.push(("watch_error".to_owned(), error.to_string()));
-                        }
+                        setup_gaps.push(SetupGap {
+                            reason: "watch_unavailable",
+                            path: directory,
+                            error: options.verbose.then(|| error.to_string()),
+                        });
                         continue;
                     }
                 }
@@ -87,13 +100,11 @@ impl FileSource {
                 let entries = match fs::read_dir(&directory) {
                     Ok(entries) => entries,
                     Err(error) => {
-                        setup_gaps.push((
-                            "directory_unreadable".to_owned(),
-                            directory.display().to_string(),
-                        ));
-                        if options.verbose {
-                            setup_gaps.push(("directory_error".to_owned(), error.to_string()));
-                        }
+                        setup_gaps.push(SetupGap {
+                            reason: "directory_unreadable",
+                            path: directory,
+                            error: options.verbose.then(|| error.to_string()),
+                        });
                         continue;
                     }
                 };
@@ -249,12 +260,7 @@ pub(super) fn fanotify_worker(context: SourceContext, source: FanotifySource) {
             if matches!(error.raw_os_error(), Some(libc::EAGAIN | libc::EINTR)) {
                 continue;
             }
-            context.diagnostic(
-                Some(Class::Files),
-                "fanotify",
-                "source_stopped",
-                &error.to_string(),
-            );
+            context.provider_stopped(Class::Files, "fanotify", &error.to_string());
             break;
         }
         let mut offset = 0;
@@ -284,7 +290,7 @@ pub(super) fn fanotify_worker(context: SourceContext, source: FanotifySource) {
                 context.queue.send(
                     Some(Class::Files),
                     "fanotify",
-                    json!({"type":"gap","class":"files","source":"fanotify","reason":"queue_overflow","dropped":0}),
+                    json!({"type":"gap","class":"files","provider":"fanotify","reason":"queue_overflow","dropped":0}),
                 );
             } else if fd >= 0 {
                 let path = fs::read_link(format!("/proc/self/fd/{fd}")).ok();
@@ -346,13 +352,6 @@ fn strip_deleted_path(path: PathBuf) -> PathBuf {
     }
 }
 pub(super) fn file_worker(context: SourceContext, mut source: FileSource) {
-    for (reason, root) in &source.setup_gaps {
-        context.queue.send(
-            Some(Class::Files),
-            "inotify",
-            json!({"type":"gap","class":"files","source":"inotify","reason":reason,"root":root,"dropped":0}),
-        );
-    }
     let fd = source.inotify.as_raw_fd();
     // SAFETY: fd belongs to the inotify object held by this worker.
     unsafe {
@@ -387,12 +386,7 @@ pub(super) fn file_worker(context: SourceContext, mut source: FileSource) {
                 .collect::<Vec<_>>(),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
             Err(error) => {
-                context.diagnostic(
-                    Some(Class::Files),
-                    "inotify",
-                    "source_stopped",
-                    &error.to_string(),
-                );
+                context.provider_stopped(Class::Files, "inotify", &error.to_string());
                 break;
             }
         };
@@ -401,7 +395,7 @@ pub(super) fn file_worker(context: SourceContext, mut source: FileSource) {
                 context.queue.send(
                     Some(Class::Files),
                     "inotify",
-                    json!({"type":"gap","class":"files","source":"inotify","reason":"queue_overflow","dropped":0}),
+                    json!({"type":"gap","class":"files","provider":"inotify","reason":"queue_overflow","dropped":0}),
                 );
                 continue;
             }
@@ -466,7 +460,7 @@ fn add_directory_watches(
             context.queue.send(
                 Some(Class::Files),
                 "inotify",
-                json!({"type":"gap","class":"files","source":"inotify","reason":"watch_limit","root":directory,"dropped":0}),
+                json!({"type":"gap","class":"files","provider":"inotify","reason":"watch_limit","source":linux_bytes(directory.as_os_str().as_bytes()),"dropped":0}),
             );
             break;
         }

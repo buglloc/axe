@@ -8,6 +8,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use serde::Serialize;
+
+use crate::LinuxBytes;
+
 #[cfg(target_os = "linux")]
 const TEXT_SOURCE_LIMIT: u64 = 1 << 20;
 #[cfg(target_os = "linux")]
@@ -291,8 +294,7 @@ pub struct CgroupObservation {
 pub struct CgroupMembership {
     #[serde(flatten)]
     pub hierarchy: CgroupHierarchy,
-    /// Linux byte string with display text and optional lossless `raw_base64`.
-    pub namespace_relative_path: serde_json::Value,
+    pub namespace_relative_path: LinuxBytes,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1253,9 +1255,11 @@ fn observe_container_isolation(
     let mut evidence = Vec::new();
     let cgroup_contains = |marker: &str| {
         cgroup.iter().any(|membership| {
-            membership.namespace_relative_path["display"]
-                .as_str()
-                .is_some_and(|path| path.contains(marker))
+            membership
+                .namespace_relative_path
+                .as_bytes()
+                .windows(marker.len())
+                .any(|window| window == marker.as_bytes())
         })
     };
 
@@ -1731,7 +1735,7 @@ pub(crate) fn parse_cgroup_membership(bytes: &[u8]) -> io::Result<Vec<CgroupMemb
                         controllers,
                     }
                 },
-                namespace_relative_path: crate::protocol::linux_bytes(path),
+                namespace_relative_path: LinuxBytes::from(path),
             })
         })
         .collect()
@@ -2051,8 +2055,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn cgroup_membership_preserves_hierarchies_controllers_and_path_bytes() {
-        use base64::Engine as _;
-
         let membership = parse_cgroup_membership(
             b"9:cpu,cpuacct:/parent:child\n4:name=systemd:/service\n0::/byte\xff:tail \n",
         )
@@ -2064,30 +2066,25 @@ mod tests {
                     "hierarchy_kind": "legacy",
                     "hierarchy_id": 9,
                     "controllers": ["cpu", "cpuacct"],
-                    "namespace_relative_path": {"display": "/parent:child"},
+                    "namespace_relative_path": "/parent:child",
                 },
                 {
                     "hierarchy_kind": "legacy",
                     "hierarchy_id": 4,
                     "controllers": ["name=systemd"],
-                    "namespace_relative_path": {"display": "/service"},
+                    "namespace_relative_path": "/service",
                 },
             ])
         );
         assert_eq!(membership[2].hierarchy, CgroupHierarchy::Unified);
         assert_eq!(
-            membership[2].namespace_relative_path["display"],
-            "/byte\\xff:tail "
+            membership[2].namespace_relative_path.as_bytes(),
+            b"/byte\xff:tail "
         );
         assert_eq!(
-            base64::engine::general_purpose::STANDARD
-                .decode(
-                    membership[2].namespace_relative_path["raw_base64"]
-                        .as_str()
-                        .expect("raw path encoding")
-                )
-                .expect("decode raw path"),
-            b"/byte\xff:tail "
+            serde_json::to_value(&membership[2].namespace_relative_path)
+                .expect("serialize non-UTF-8 path")["display"],
+            "/byte\u{fffd}:tail "
         );
         assert_eq!(
             parse_cgroup_membership(b"").expect("parse empty membership"),
@@ -2180,7 +2177,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn byte_paths_resolve_local_cgroup_pressure_separately_from_system_pressure() {
-        use base64::Engine as _;
         use std::os::unix::ffi::OsStrExt;
 
         let scratch = Scratch::new("byte-cgroup-pressure");
@@ -2248,13 +2244,7 @@ mod tests {
         );
         assert_eq!(cgroups.pressure.memory.status, ObservationStatus::Absent);
         assert_eq!(
-            base64::engine::general_purpose::STANDARD
-                .decode(
-                    membership[1].namespace_relative_path["raw_base64"]
-                        .as_str()
-                        .expect("raw path encoding")
-                )
-                .expect("decode raw path"),
+            membership[1].namespace_relative_path.as_bytes(),
             b"/tenant\xff:alpha/docker:job "
         );
         assert_eq!(
@@ -2376,7 +2366,7 @@ mod tests {
             serde_json::to_value(cgroups.membership).expect("serialize namespace-relative path")["value"],
             serde_json::json!([{
                 "hierarchy_kind": "unified",
-                "namespace_relative_path": {"display": "/../outside"},
+                "namespace_relative_path": "/../outside",
             }])
         );
         assert_eq!(cgroups.limits.memory_max.status, ObservationStatus::Unknown);

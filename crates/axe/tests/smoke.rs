@@ -1917,7 +1917,7 @@ fn no_proc_uses_filesystem_reexec_and_cleans_unusable_bridge() {
         let probe: serde_json::Value =
             serde_json::from_slice(&probe.stdout).expect("parse doctor report");
         assert_eq!(probe["schema"], "axe_doctor");
-        assert_eq!(probe["schema_version"], 4);
+        assert_eq!(probe["schema_version"], 5);
         assert_eq!(probe["launch"]["bridge"]["state"], "not_attempted");
         assert_eq!(
             probe["capabilities"]["kernel"]["procfs"]["status"],
@@ -2876,7 +2876,7 @@ fn doctor_reports_readable_shell_state_and_selected_environment() {
     let report: serde_json::Value =
         serde_json::from_slice(&report_bytes).expect("doctor report is JSON");
     assert_eq!(report["schema"], "axe_doctor");
-    assert_eq!(report["schema_version"], 4);
+    assert_eq!(report["schema_version"], 5);
     assert_eq!(report["scope"], "shell");
     assert_eq!(
         report["shell"]["current_cwd"]["value"],
@@ -3001,7 +3001,7 @@ fn busybox_alias_prepends_configured_arguments() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn vzik_collect_profile_is_an_ordered_protocol_v4_stream() {
+fn vzik_collect_profile_is_an_ordered_protocol_v5_stream() {
     let output = Command::new(env!("CARGO_BIN_EXE_axe"))
         .args(["vzik", "collect"])
         .output()
@@ -3012,7 +3012,9 @@ fn vzik_collect_profile_is_an_ordered_protocol_v4_stream() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid JSON record"))
         .collect::<Vec<_>>();
-    assert!(records.iter().all(|record| record["schema_version"] == 4));
+    assert!(records.iter().all(|record| {
+        record["schema"] == "raskop/vzik-collection" && record["schema_version"] == 5
+    }));
     let expected_status = match records
         .last()
         .and_then(|record| record["collection_outcome"].as_str())
@@ -3031,7 +3033,7 @@ fn vzik_collect_profile_is_an_ordered_protocol_v4_stream() {
         records.first().and_then(|record| record["type"].as_str()),
         Some("stream_start")
     );
-    assert_eq!(records[0]["command_id"], "baseline-v3");
+    assert_eq!(records[0]["command_id"], "baseline");
     assert_eq!(
         records.last().and_then(|record| record["type"].as_str()),
         Some("stream_end")
@@ -3127,7 +3129,7 @@ fn vzik_targeted_file_read_is_chunked_and_bounded() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid JSON record"))
         .collect::<Vec<_>>();
-    assert!(records.iter().all(|record| record["schema_version"] == 4));
+    assert!(records.iter().all(|record| record["schema_version"] == 5));
     let data = records
         .iter()
         .find(|record| record["type"] == "data")

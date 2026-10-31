@@ -33,7 +33,7 @@ pub(super) struct ProcessKey {
 pub(super) struct ProcessSource {
     pub(super) connector: Option<ConnectorFd>,
     pub(super) initial: BTreeMap<ProcessKey, ProcessState>,
-    pub(super) source: &'static str,
+    pub(super) provider: &'static str,
     pub(super) detection: &'static str,
 }
 
@@ -61,14 +61,14 @@ pub(super) fn prepare_process(
         queue.send(
             Some(Class::Process),
             "proc_connector",
-            json!({"type":"diagnostic","diagnostic":{"class":"process","source":"proc_connector","code":"source_unavailable","message":"proc connector unavailable; using /proc scan"}}),
+            json!({"type":"diagnostic","class":"process","diagnostic":{"provider":"proc_connector","code":"provider_unavailable","message":"proc connector unavailable; using /proc scan"}}),
         );
     }
     let connector_available = connector.is_some();
     Some(ProcessSource {
         connector,
         initial,
-        source: if connector_available {
+        provider: if connector_available {
             "proc_connector"
         } else {
             "procfs_scan"
@@ -146,12 +146,7 @@ fn connector_worker(context: SourceContext, connector: ConnectorFd) {
             if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-            context.diagnostic(
-                Some(Class::Process),
-                "proc_connector",
-                "source_stopped",
-                "poll failed",
-            );
+            context.provider_stopped(Class::Process, "proc_connector", "poll failed");
             break;
         }
         if ready == 0 {
@@ -162,12 +157,7 @@ fn connector_worker(context: SourceContext, connector: ConnectorFd) {
             unsafe { libc::recv(connector.0, buffer.as_mut_ptr().cast(), buffer.len(), 0) };
         if length < 0 {
             let error = io::Error::last_os_error();
-            context.diagnostic(
-                Some(Class::Process),
-                "proc_connector",
-                "source_stopped",
-                &error.to_string(),
-            );
+            context.provider_stopped(Class::Process, "proc_connector", &error.to_string());
             break;
         }
         for event in parse_connector_events(&buffer[..length as usize]) {

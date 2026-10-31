@@ -1082,13 +1082,10 @@ mod tests {
         )
         .expect("parse manifest");
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0]["name"]["display"], "curl");
-        assert_eq!(records[0]["version"]["display"], "8.12.1");
-        assert_eq!(records[0]["status"]["display"], "inactive");
-        assert_eq!(
-            records[0]["store_paths"][0]["display"],
-            "/nix/store/example-curl"
-        );
+        assert_eq!(records[0]["name"], "curl");
+        assert_eq!(records[0]["version"], "8.12.1");
+        assert_eq!(records[0]["status"], "inactive");
+        assert_eq!(records[0]["store_paths"][0], "/nix/store/example-curl");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# Vzik protocol v4 reference
+# Vzik protocol v5 reference
 
 Use this reference for discovery, stream validation, capture receipts, and JSON
 queries. Use hierarchical `vzik ... --help` output for current commands,
@@ -6,6 +6,7 @@ arguments, defaults, and bounds.
 
 ## Contents
 
+- [Schema identity](#schema-identity)
 - [Discovery and process status](#discovery-and-process-status)
 - [Stream state machine](#stream-state-machine)
 - [Outcomes and coverage](#outcomes-and-coverage)
@@ -16,6 +17,26 @@ arguments, defaults, and bounds.
 - [Capture receipt](#capture-receipt)
 - [Linux byte strings](#linux-byte-strings)
 - [Useful streaming queries](#useful-streaming-queries)
+
+## Schema identity
+
+Every JSON document or record carries `schema` and `schema_version`.
+
+| Output | `schema` | `schema_version` |
+|---|---|---|
+| Collection JSONL records (`collect`, targeted commands, `capture/capture.jsonl`) | `raskop/vzik-collection` | `5` |
+| `capabilities` index and detail | `raskop/vzik-capabilities` | `5` |
+| `validate` result | `raskop/vzik-validation` | `5` |
+| `summarize` result | `raskop/vzik-summary` | `5` |
+| `capture` stdout summary | `raskop/vzik-capture` | `5` |
+| Capture receipt | `raskop/vzik-capture-receipt` | `5` |
+| Process errors on stderr | `raskop/vzik-error` | `5` |
+| Monitor JSONL records | `raskop/vzik-monitor` | `2` |
+
+The `capabilities` index includes `schema: "raskop/vzik-collection"` in
+`protocol` and `schema: "raskop/vzik-error"` in `process_error`.
+`validate` and `summarize` reject records whose schema is not
+`raskop/vzik-collection`.
 
 ## Discovery and process status
 
@@ -36,7 +57,7 @@ Collection process status and terminal state are one contract:
 - `124`: cooperative deadline with terminal `stream_abort`;
 - `128+signal`: interruption with terminal `stream_abort`.
 
-Process errors are protocol-v4 stderr JSONL with stable `code`, `operation`,
+Process errors are protocol-v5 stderr JSONL with stable `code`, `operation`,
 `retryable`, `message`, and structured `details`. Branch on fields such as
 `details.kind`, never human message text.
 
@@ -58,10 +79,11 @@ stream_end
 EOF
 ```
 
-`schema_version` is `4` on every record. `seq` starts at zero and increases by
-one for every record. A targeted command has one capability section. A profile
-has its fixed collector-defined sections in order. Every record is one JSON
-object followed by LF.
+Every collection record carries `schema: "raskop/vzik-collection"` and
+`schema_version: 5`. `seq` starts at zero and increases by one for every
+record. A targeted command has one capability section. A profile has its fixed
+collector-defined sections in order. Every record is one JSON object followed
+by LF.
 
 Important fields:
 
@@ -87,7 +109,7 @@ truncating it.
 `capabilities.not_started`, symmetric counts, and IDs grouped by capability
 outcome.
 
-`validate` accepts schema version 4 and verifies that terminal truncation agrees
+`validate` accepts schema version 5 and verifies that terminal truncation agrees
 with capability truncation and the unstarted suffix of the plan.
 
 ## Outcomes and coverage
@@ -122,13 +144,28 @@ Use source availability, diagnostics, and `limits_hit` to explain gaps.
 `complete` is relative to the capability's declared providers, sources, and
 current namespaces. It is not a claim about host state hidden from the process.
 
-Stable general diagnostic codes are `source_not_found`,
-`source_permission_denied`, `source_malformed`, `source_io_error`,
-`source_raced`, `coverage_incomplete`, and `limit_reached`.
+Diagnostic objects contain `kind`, `code`, `provider`, `source`, `count`, and
+`message`. Source-failure codes are
+`not_found`, `permission_denied`, `malformed`, `io_error`, and `raced`.
+Other stable codes are `limit_reached`, `coverage_incomplete`,
+`mount_boundary_skipped`, `filesystem_cycle_skipped`, `property_errors`,
+`provider_selected`, `provider_unavailable`, `container_not_found`, and
+`systemd_unit_not_found`.
+
+`kind` values are `source`, `limit`, `coverage`, `provider`, `selection`,
+`property`, `name`, and `unit`. `diagnostic.source` is a byte-string path,
+or a plain string for a limit name or provider name, or an object such as
+`{socket, operation|name|unit}` for D-Bus and systemd diagnostics.
+`summarize` counts diagnostics by code in `diagnostics.by_code`.
+
+`process_detail.sources.*.availability` uses `available`, `not_found`,
+`permission_denied`, `malformed`, `io_error`, or `limit_reached`. Every
+non-`available` source has a diagnostic whose `code` equals that availability
+and whose `source` equals `sources.<key>.source`.
 
 ## Baseline profile scope
 
-`collect` identifies its stream as `baseline-v3`. Its normalized
+`collect` identifies its stream as `baseline`. Its normalized
 `network.sockets` request declares
 `socket_selection: inet_all_unix_listeners`: all TCP/UDP sockets and only
 listening Unix sockets. Its `systemctl.list` request declares
@@ -137,7 +174,7 @@ Targeted `network sockets`, `network listeners`, and `systemctl list`
 collections retain their complete command-specific scope.
 
 `host.overview` and `process.inspect` are targeted-only; neither changes the
-contents or order of `baseline-v3`.
+contents or order of `baseline`.
 
 ## Data records
 
@@ -374,8 +411,8 @@ directories, `fdinfo`, optional security files, ancestry stat files, and
 namespace-local socket tables to `{source, availability}`. Source keys include
 `attr.current`, `loginuid`, `sessionid`, `exe_metadata`, `fd`, `fdinfo`,
 `ancestry.N`, and `net.{tcp,tcp6,udp,udp6,unix}`. `source` is a byte-string
-`/proc/PID/...` path. Availability is `available`, `truncated`, `not_found`,
-`permission_denied`, `malformed`, or `io_error`.
+`/proc/PID/...` path. Availability is `available`, `not_found`,
+`permission_denied`, `malformed`, `io_error`, or `limit_reached`.
 Reads are bounded to 64 KiB per process source and 16 KiB per `fdinfo` file.
 An FD directory is capped at 4096 descriptors; emitted entries are capped at
 512 entries and 48 KiB. Ancestry is capped at 32 parents. Variable output
@@ -385,7 +422,7 @@ Source-read truncation omits fields; output shortening can retain prefixes.
 
 Stat is mandatory and re-read before emission. If unreadable or malformed,
 the capability is unavailable and emits no detail. Detected PID reuse emits
-`source_raced` and discards the snapshot; the private race guard is not
+`raced` and discards the snapshot; the private race guard is not
 serialized identity. Optional source failures retain usable facts with
 partial coverage. Complete means all declared sources were available; it
 does not imply an atomic or permanently valid process snapshot.
@@ -402,7 +439,7 @@ the default stderr path appends `.stderr` to the output path. These file options
 cannot be combined with `--output-dir`.
 
 `vzik capture` creates new mode-0600 capture and stderr files, validates the
-complete stream, then creates and verifies a protocol-v4 receipt. Its stdout
+complete stream, then creates and verifies a protocol-v5 receipt. Its stdout
 JSON has `artifact_status: "sealed"`, `collection_outcome`, three artifact paths, and a
 `coverage_summary` whose planned, started, and not-started capability sets
 and counts match the receipt. Its `stream_truncated` flag also appears under
@@ -416,7 +453,7 @@ The stdout summary and receipt are pretty JSON documents; collection and
 stderr are compact JSONL. Artifact paths in these metadata documents are
 absolute paths with canonical parents: valid UTF-8 is a JSON string; otherwise
 the path uses the [Linux byte-string object](#linux-byte-strings) with
-`display` and `raw_base64`. Preserve the latter for byte-safe reopening.
+`display` and `base64`. Preserve `base64` for byte-safe reopening.
 
 The three files are not a filesystem transaction. Interruption or write
 failure can leave capture or stderr without a receipt; existing paths cause
@@ -427,16 +464,17 @@ stderr, as sensitive evidence.
 
 ## Linux byte strings
 
-A Linux byte-originated value has this form:
+A Linux byte-originated value is a JSON string when the bytes are valid UTF-8.
+For invalid UTF-8, it is an object with lossy display text and exact bytes:
 
 ```json
-{"display":"readable or escaped text","raw_base64":"only for invalid UTF-8"}
+{"display":"readable text with replacement characters","base64":"<standard base64>"}
 ```
 
-If `raw_base64` is absent, `display` is exact valid UTF-8. If it is present,
-`display` may contain `\\xNN` escapes and is presentation-only. Keep the base64
-field in machine evidence. Decode to a byte-safe consumer, never through a shell
-variable that cannot preserve NUL.
+In `display`, invalid sequences become U+FFFD; valid characters, including
+non-ASCII characters, stay readable. It is
+presentation-only; `base64` preserves the raw bytes. Decode it with a
+byte-safe tool, never through a shell variable that cannot preserve NUL.
 
 For `file_chunk`, `encoding: "utf-8"` means `content` is text for that chunk;
 `encoding: "base64"` means `content` encodes its raw bytes. Encoding can differ
@@ -469,7 +507,7 @@ jq -c 'select(.type == "data" and .capability == "mount.list") |
 
 jq -c 'select(.type == "data" and
               .capability == "network.resolvers" and
-              .data.name.display == "nameserver") | .data' resolvers.jsonl
+              .data.name == "nameserver") | .data' resolvers.jsonl
 ```
 
 Summarize all known coverage loss:

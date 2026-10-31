@@ -1081,9 +1081,8 @@ fn emit_provider_selected<W: Write>(
     sink.diagnostic(
         capability.id(),
         "provider",
-        "selected",
         "provider_selected",
-        json!({"display":provider}),
+        json!(provider),
         "provider completed acquisition",
         1,
     )
@@ -1098,7 +1097,6 @@ fn emit_property_errors<W: Write>(
     sink.diagnostic(
         capability.id(),
         "coverage",
-        "partial",
         "property_errors",
         path_value(socket),
         "one or more Porto properties were unavailable",
@@ -1113,28 +1111,27 @@ fn porto_failure<W: Write>(
     error: &PortoError,
     coverage: &mut Coverage,
 ) -> Result<bool, ProtocolError> {
-    let (status, code, partial) = match error {
+    let (code, partial) = match error {
         PortoError::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
             coverage.vanished += 1;
-            ("not_found", "source_not_found", false)
+            ("not_found", false)
         }
         PortoError::Io { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied => {
             coverage.denied += 1;
-            ("permission_denied", "source_permission_denied", true)
+            ("permission_denied", true)
         }
         PortoError::Response(response) if response.code == porto::CONTAINER_DOES_NOT_EXIST => {
             coverage.skipped += 1;
-            ("not_found", "container_not_found", true)
+            ("container_not_found", true)
         }
         _ => {
             coverage.skipped += 1;
-            ("unavailable", "provider_unavailable", true)
+            ("provider_unavailable", true)
         }
     };
     sink.diagnostic(
         capability.id(),
         "provider",
-        status,
         code,
         path_value(socket),
         &bounded_string(&error.to_string(), 4096),
@@ -1154,9 +1151,8 @@ fn unavailable_container<W: Write>(
     sink.diagnostic(
         capability.id(),
         "selection",
-        "not_found",
         "container_not_found",
-        json!({"display":bounded_string(name, MAX_CONTAINER_NAME_BYTES)}),
+        json!(bounded_string(name, MAX_CONTAINER_NAME_BYTES)),
         "container was not visible through the selected container provider",
         1,
     )?;

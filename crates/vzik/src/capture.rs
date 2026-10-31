@@ -10,9 +10,10 @@ use std::sync::atomic::AtomicUsize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::cli::{CaptureDestination, CaptureExecution};
+use crate::cli::{CaptureDestination, CaptureExecution, linux_path};
 use crate::{protocol, stream};
 
+const CAPTURE_SCHEMA: &str = "raskop/vzik-capture";
 const RECEIPT_SCHEMA: &str = "raskop/vzik-capture-receipt";
 
 #[derive(Debug)]
@@ -68,7 +69,7 @@ impl Error {
                 source,
             } => json!({
                 "io_operation":operation,
-                "path":path.as_deref().map(crate::cli::linux_path),
+                "path":path.as_deref().map(linux_path),
                 "io_kind":format!("{:?}", source.kind()).to_ascii_lowercase(),
             }),
             Self::Invalid(_) => json!({}),
@@ -181,12 +182,13 @@ pub fn execute(
 
     let capture = &receipt["capture"];
     let result = json!({
+        "schema": CAPTURE_SCHEMA,
         "schema_version": protocol::SCHEMA_VERSION,
         "collection_outcome": completion.outcome,
         "artifact_status": "sealed",
-        "receipt": path_value(&receipt_requested),
-        "capture": path_value(&capture_requested),
-        "stderr": path_value(&stderr_requested),
+        "receipt": linux_path(&receipt_requested),
+        "capture": linux_path(&capture_requested),
+        "stderr": linux_path(&stderr_requested),
         "command_id": capture["command_id"],
         "coverage_summary": {
             "stream_truncated": capture["stream_truncated"],
@@ -241,7 +243,7 @@ fn build_receipt(capture_path: &Path, stderr_path: &Path) -> Result<Value, strea
         "schema_version": protocol::SCHEMA_VERSION,
         "expected_command": summary.command_id,
         "capture": {
-            "path": path_value(capture_path),
+            "path": linux_path(capture_path),
             "sha256": capture_sha256,
             "bytes": capture_bytes,
             "records": summary.records,
@@ -260,12 +262,11 @@ fn build_receipt(capture_path: &Path, stderr_path: &Path) -> Result<Value, strea
             "diagnostics": {
                 "records": summary.diagnostic_records,
                 "reported_count": summary.diagnostic_count,
-                "by_status": summary.diagnostics_by_status,
                 "by_code": summary.diagnostics_by_code,
             },
         },
         "stderr": {
-            "path": path_value(stderr_path),
+            "path": linux_path(stderr_path),
             "sha256": stderr_sha256,
             "bytes": stderr_bytes,
         },
@@ -333,13 +334,6 @@ fn hash_file(path: &Path) -> io::Result<(String, u64)> {
         write!(encoded, "{byte:02x}").expect("writing to String cannot fail");
     }
     Ok((encoded, bytes))
-}
-
-fn path_value(path: &Path) -> Value {
-    match path.to_str() {
-        Some(path) => json!(path),
-        None => crate::cli::linux_path(path),
-    }
 }
 
 fn prepare_path(path: &Path) -> Result<PathBuf, Error> {

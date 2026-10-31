@@ -23,7 +23,7 @@ Report the current AXE process, shell, host, isolation indicators, restrictions,
 Options:\n\
   --path DIR  use DIR for filesystem probes\n\
   --verbose   include full observations, probe stages, and empty sections\n\
-  --json      emit one compact, complete axe_doctor schema v4 document\n\
+  --json      emit one compact, complete axe_doctor schema v5 document\n\
   -h, --help  display this help and exit\n";
 const REPORTED_ENVIRONMENT_NAMES: &[&str] = &[
     "HOME",
@@ -363,7 +363,7 @@ fn collect_report(options: &Options, scope: ScopeInput) -> DoctorReport {
 
     DoctorReport {
         schema: "axe_doctor",
-        schema_version: 4,
+        schema_version: 5,
         scope: scope_name,
         axe: AxeSection {
             version: crate::VERSION.to_owned(),

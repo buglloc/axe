@@ -141,29 +141,28 @@ pub(super) fn source_failure<W: Write>(
     error: &io::Error,
     coverage: &mut Coverage,
 ) -> Result<(), ProtocolError> {
-    let (status, code) = match error.kind() {
+    let code = match error.kind() {
         io::ErrorKind::NotFound => {
             coverage.vanished += 1;
-            ("not_found", "source_not_found")
+            "not_found"
         }
         io::ErrorKind::PermissionDenied => {
             coverage.denied += 1;
-            ("permission_denied", "source_permission_denied")
+            "permission_denied"
         }
         io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput => {
             coverage.skipped += 1;
-            ("malformed", "source_malformed")
+            "malformed"
         }
         _ => {
             coverage.skipped += 1;
-            ("io_error", "source_io_error")
+            "io_error"
         }
     };
 
     sink.diagnostic(
         capability.id(),
         "source",
-        status,
         code,
         linux_bytes(source.as_os_str().as_bytes()),
         &error.to_string(),
@@ -180,7 +179,6 @@ pub(super) fn coverage_diagnostic<W: Write>(
     sink.diagnostic(
         capability.id(),
         "coverage",
-        "unsupported",
         "coverage_incomplete",
         linux_bytes(source.as_os_str().as_bytes()),
         message,

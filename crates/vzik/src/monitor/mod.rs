@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use crate::cli::MonitorOptions;
-use crate::protocol::linux_bytes;
+use crate::protocol::{MONITOR_SCHEMA, MONITOR_SCHEMA_VERSION, linux_bytes};
 
 mod contract;
 mod files;
@@ -19,8 +19,6 @@ mod sockets;
 
 use contract::{Class, DropCounts, Queue, QueuedRecord, SourceContext, parse_class};
 
-const SCHEMA: &str = "raskop/vzik-monitor";
-const SCHEMA_VERSION: u64 = 1;
 pub(super) const QUEUE_CAPACITY: usize = 1024;
 pub(super) const MAX_PROCESS_STATE: usize = 32_768;
 pub(super) const MAX_SOCKET_STATE: usize = 65_536;
@@ -32,7 +30,7 @@ pub(super) const SOCKET_SCAN_INTERVAL: Duration = Duration::from_millis(500);
 pub(super) const MAX_FULL_FIELD: usize = 64 << 10;
 
 struct Stats {
-    source: String,
+    provider: String,
     detection: String,
     events: u64,
     gaps: u64,
@@ -41,9 +39,9 @@ struct Stats {
 }
 
 impl Stats {
-    fn new(source: &str, detection: &str) -> Self {
+    fn new(provider: &str, detection: &str) -> Self {
         Self {
-            source: source.to_owned(),
+            provider: provider.to_owned(),
             detection: detection.to_owned(),
             events: 0,
             gaps: 0,
@@ -55,7 +53,7 @@ impl Stats {
 
 struct Output<'a, W> {
     writer: &'a mut W,
-    sequence: u64,
+    seq: u64,
     events: u64,
     stats: HashMap<Class, Stats>,
 }
@@ -64,22 +62,21 @@ impl<'a, W: Write> Output<'a, W> {
     fn new(writer: &'a mut W) -> Self {
         Self {
             writer,
-            sequence: 0,
+            seq: 0,
             events: 0,
             stats: HashMap::new(),
         }
     }
 
-    fn write(&mut self, mut value: Value, sequenced: bool) -> io::Result<()> {
-        value["schema"] = json!(SCHEMA);
-        value["schema_version"] = json!(SCHEMA_VERSION);
-        if sequenced {
-            value["sequence"] = json!(self.sequence);
-            self.sequence = self.sequence.saturating_add(1);
-        }
+    fn write(&mut self, mut value: Value) -> io::Result<()> {
+        value["schema"] = json!(MONITOR_SCHEMA);
+        value["schema_version"] = json!(MONITOR_SCHEMA_VERSION);
+        value["seq"] = json!(self.seq);
         let mut line = serde_json::to_vec(&value).map_err(io::Error::other)?;
         line.push(b'\n');
-        self.writer.write_all(&line)
+        self.writer.write_all(&line)?;
+        self.seq = self.seq.saturating_add(1);
+        Ok(())
     }
 
     fn event(&mut self, record: Value) -> io::Result<()> {
@@ -97,56 +94,69 @@ impl<'a, W: Write> Output<'a, W> {
             stats.events += 1;
         }
         self.events += 1;
-        self.write(record, true)
+        self.write(record)
     }
+
     fn queued(&mut self, record: QueuedRecord) -> io::Result<()> {
         let value = record.value;
         match value["type"].as_str() {
             Some("event") => self.event(value),
             Some("gap") => {
                 let Some(class) = value["class"].as_str().and_then(parse_class) else {
-                    return self.write(value, false);
+                    return self.write(value);
                 };
-                let source = value["source"].as_str().unwrap_or(&record.source);
+                let provider = value["provider"].as_str().unwrap_or(&record.provider);
                 let reason = value["reason"].as_str().unwrap_or("unknown");
                 let dropped = value["dropped"].as_u64().unwrap_or(0);
-                self.gap(class, source, reason, dropped)
+                self.gap(
+                    class,
+                    provider,
+                    reason,
+                    dropped,
+                    value.get("source").cloned(),
+                )
             }
-            _ => self.write(value, false),
+            _ => self.write(value),
         }
     }
 
-    fn gap(&mut self, class: Class, source: &str, reason: &str, dropped: u64) -> io::Result<()> {
+    fn gap(
+        &mut self,
+        class: Class,
+        provider: &str,
+        reason: &str,
+        dropped: u64,
+        source: Option<Value>,
+    ) -> io::Result<()> {
         let stats = self
             .stats
             .entry(class)
-            .or_insert_with(|| Stats::new(source, "unknown"));
+            .or_insert_with(|| Stats::new(provider, "unknown"));
         stats.gaps += 1;
         stats.dropped = stats.dropped.saturating_add(dropped);
-        self.write(
-            json!({
-                "type":"gap",
-                "class":class.id(),
-                "source":source,
-                "reason":reason,
-                "dropped":dropped,
-            }),
-            true,
-        )
+        let mut record = json!({
+            "type":"gap",
+            "class":class.id(),
+            "provider":provider,
+            "reason":reason,
+            "dropped":dropped,
+        });
+        if let Some(source) = source {
+            record["source"] = source;
+        }
+        self.write(record)
     }
 
+    /// Writes a snapshot whose ID is the `seq` of its `snapshot_start` record.
     fn snapshot(
         &mut self,
-        id: u64,
         classes: &[Class],
         process: &[Value],
         sockets: &[Value],
         files: &[Value],
     ) -> io::Result<()> {
-        self.write(
-            json!({"type":"snapshot_start", "snapshot_id":id, "checkpoint_sequence":self.sequence}),
-            true,
-        )?;
+        let id = self.seq;
+        self.write(json!({"type":"snapshot_start", "snapshot_id":id}))?;
         for class in [Class::Process, Class::Sockets, Class::Files] {
             if !classes.contains(&class) {
                 continue;
@@ -156,20 +166,14 @@ impl<'a, W: Write> Output<'a, W> {
                 Class::Sockets => sockets,
                 Class::Files => files,
             };
-            self.write(
-                json!({
-                    "type":"snapshot_state",
-                    "class":class.id(),
-                    "snapshot_id":id,
-                    "items":items,
-                }),
-                true,
-            )?;
+            self.write(json!({
+                "type":"snapshot_state",
+                "class":class.id(),
+                "snapshot_id":id,
+                "items":items,
+            }))?;
         }
-        self.write(
-            json!({"type":"snapshot_end", "snapshot_id":id, "checkpoint_sequence":self.sequence}),
-            true,
-        )
+        self.write(json!({"type":"snapshot_end", "snapshot_id":id}))
     }
 }
 
@@ -219,22 +223,22 @@ pub fn run(
     } else {
         std::collections::BTreeMap::new()
     };
-    let socket_source = "procfs";
+    let socket_provider = "procfs";
 
-    let process_source = process
+    let process_provider = process
         .as_ref()
-        .map_or("procfs_scan", |source| source.source);
+        .map_or("procfs_scan", |source| source.provider);
     let process_detection = process
         .as_ref()
         .map_or("sampled", |source| source.detection);
     if process_enabled {
         stats.insert(
             Class::Process,
-            Stats::new(process_source, process_detection),
+            Stats::new(process_provider, process_detection),
         );
     }
 
-    let file_source = if fanotify.is_some() {
+    let file_provider = if fanotify.is_some() {
         "fanotify"
     } else if files.is_some() {
         "inotify"
@@ -247,72 +251,74 @@ pub fn run(
         "unavailable"
     };
     if files_enabled {
-        stats.insert(Class::Files, Stats::new(file_source, file_detection));
+        stats.insert(Class::Files, Stats::new(file_provider, file_detection));
     }
     if sockets_enabled {
-        stats.insert(Class::Sockets, Stats::new(socket_source, "sampled"));
+        stats.insert(Class::Sockets, Stats::new(socket_provider, "sampled"));
     }
     output.stats = stats;
 
-    let event_classes = selected
+    let classes = selected
         .iter()
         .map(|class| {
             let value = match *class {
-                Class::Process => json!({"source":process_source,"detection":process_detection}),
-                Class::Files => json!({"source":file_source,"detection":file_detection}),
-                Class::Sockets => json!({"source":socket_source,"detection":"sampled"}),
+                Class::Process => {
+                    json!({"provider":process_provider,"detection":process_detection})
+                }
+                Class::Files => json!({"provider":file_provider,"detection":file_detection}),
+                Class::Sockets => json!({"provider":socket_provider,"detection":"sampled"}),
             };
             (class.id().to_owned(), value)
         })
         .collect::<Map<_, _>>();
-    let _ = output.write(
-        json!({
-            "type":"stream_start",
-            "collector":{
-                "name":"vzik",
-                "version":env!("CARGO_PKG_VERSION"),
-                "build_id":concat!(env!("CARGO_PKG_NAME"), "-", env!("CARGO_PKG_VERSION")),
-                "target":format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
-            },
-            "event_classes":event_classes,
-            "filters":options.filters.iter().map(|path| linux_bytes(path.as_os_str().as_bytes())).collect::<Vec<_>>(),
-            "glob":options.path_glob,
-            "limits":{"queue":QUEUE_CAPACITY,"max_processes":MAX_PROCESS_STATE,"max_sockets":MAX_SOCKET_STATE,"max_files":MAX_FILE_STATE,"max_watches":MAX_WATCHES,"max_payload_bytes":MAX_PAYLOAD},
-            "full":options.full,
-            "sensitive":process_enabled || options.full,
-            "verbose":options.verbose,
-        }),
-        false,
-    );
+    let _ = output.write(json!({
+        "type":"stream_start",
+        "collector":{
+            "name":"vzik",
+            "version":env!("CARGO_PKG_VERSION"),
+            "build_id":concat!(env!("CARGO_PKG_NAME"), "-", env!("CARGO_PKG_VERSION")),
+            "target":format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+        },
+        "classes":classes,
+        "filters":options.filters.iter().map(|path| linux_bytes(path.as_os_str().as_bytes())).collect::<Vec<_>>(),
+        "glob":options.path_glob,
+        "limits":{"queue":QUEUE_CAPACITY,"max_processes":MAX_PROCESS_STATE,"max_sockets":MAX_SOCKET_STATE,"max_files":MAX_FILE_STATE,"max_watches":MAX_WATCHES,"max_payload_bytes":MAX_PAYLOAD},
+        "full":options.full,
+        "sensitive":process_enabled || options.full,
+        "verbose":options.verbose,
+    }));
 
-    if let Some((source, message)) = file_error {
-        let _ = output.write(
-            json!({
-                "type":"diagnostic",
-                "diagnostic":{
-                    "class":"files",
-                    "source":source,
-                    "code":"source_unavailable",
-                    "message":message,
-                },
-            }),
-            false,
-        );
+    if let Some((provider, message)) = file_error {
+        let _ = output.write(json!({
+            "type":"diagnostic",
+            "class":"files",
+            "diagnostic":{
+                "provider":provider,
+                "code":"provider_unavailable",
+                "message":message,
+            },
+        }));
     }
 
-    for (reason, root) in files
+    for gap in files
         .as_ref()
         .into_iter()
         .flat_map(|source| source.setup_gaps.iter())
     {
-        let _ = output.gap(Class::Files, "inotify", reason, 0);
-        let _ = output.write(
-            json!({
+        let path = linux_bytes(gap.path.as_os_str().as_bytes());
+        let _ = output.gap(Class::Files, "inotify", gap.reason, 0, Some(path.clone()));
+        if let Some(error) = &gap.error {
+            let _ = output.write(json!({
                 "type":"diagnostic",
-                "diagnostic":{"class":"files","source":"inotify","code":reason,"root":root},
-            }),
-            false,
-        );
+                "class":"files",
+                "diagnostic":{
+                    "provider":"inotify",
+                    "code":gap.reason,
+                    "source":path,
+                    "message":error,
+                },
+            }));
+        }
     }
 
     let process_items = process
@@ -334,7 +340,7 @@ pub fn run(
     } else {
         Vec::new()
     };
-    let _ = output.snapshot(0, &selected, &process_items, &socket_items, &file_items);
+    let _ = output.snapshot(&selected, &process_items, &socket_items, &file_items);
 
     let context = SourceContext::new(Arc::clone(&queue), Arc::clone(&stop), options.full);
     let mut workers = Vec::new();
@@ -383,7 +389,6 @@ pub fn run(
         if let Some(deadline) = next_snapshot
             && Instant::now() >= deadline
         {
-            let id = output.sequence;
             let process_items = if process_enabled {
                 process::scan_processes(options.full)
                     .into_values()
@@ -407,7 +412,7 @@ pub fn run(
                 Vec::new()
             };
             if output
-                .snapshot(id, &selected, &process_items, &socket_items, &file_items)
+                .snapshot(&selected, &process_items, &socket_items, &file_items)
                 .is_err()
             {
                 stop.store(true, Ordering::Relaxed);
@@ -437,7 +442,7 @@ pub fn run(
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break "source_stopped",
+            Err(mpsc::RecvTimeoutError::Disconnected) => break "provider_stopped",
         }
     };
 
@@ -482,7 +487,7 @@ pub fn run(
             (
                 class.id().to_owned(),
                 json!({
-                    "source":stats.source,
+                    "provider":stats.provider,
                     "detection":stats.detection,
                     "events":stats.events,
                     "gaps":stats.gaps,
@@ -493,16 +498,12 @@ pub fn run(
         })
         .collect::<Map<_, _>>();
     if output
-        .write(
-            json!({
-                "type":"stream_end",
-                "stop_reason":stop_reason,
-                "collection_outcome":collection_outcome,
-                "classes":classes,
-                "completion":collection_outcome == "complete",
-            }),
-            false,
-        )
+        .write(json!({
+            "type":"stream_end",
+            "stop_reason":stop_reason,
+            "collection_outcome":collection_outcome,
+            "classes":classes,
+        }))
         .is_err()
     {
         return 141;
@@ -518,8 +519,8 @@ pub fn run(
 }
 
 fn drain_drops<W: Write>(queue: &Queue, output: &mut Output<'_, W>) -> io::Result<()> {
-    for (class, source, count) in queue.take_dropped() {
-        output.gap(class, &source, "output_queue", count)?;
+    for (class, provider, count) in queue.take_dropped() {
+        output.gap(class, &provider, "output_queue", count, None)?;
     }
     Ok(())
 }

@@ -1672,7 +1672,7 @@ fn parse_capture(program: OsString, arguments: &[OsString]) -> Result<Action, Cl
 fn parse_collect(matches: &ArgMatches) -> Result<Action, String> {
     Ok(Action::Execute(Execution {
         invocation_kind: "profile",
-        command_id: "baseline-v3",
+        command_id: "baseline",
         invocations: CapabilityId::baseline()
             .map(|capability| {
                 Ok(Invocation {
@@ -1916,7 +1916,7 @@ fn root_command() -> Command {
         .version(env!("CARGO_PKG_VERSION"))
         .about("Bounded agent-first Linux host collector")
         .after_help(
-            "Collection commands write protocol-v4 JSONL and never execute host programs or open \
+            "Collection commands write protocol-v5 JSONL and never execute host programs or open \
              INET connections. capture writes only its explicit output paths or a new private \
              directory selected by --output-dir. portoctl, systemctl, and dbus may connect only \
              to configured Unix sockets.\n\n\
@@ -1931,12 +1931,12 @@ fn root_command() -> Command {
         .subcommand(monitor_command())
         .subcommand(capture_command())
         .subcommand(add_global_limit_args(
-            Command::new("collect").about("Collect the bounded baseline-v3 security profile"),
+            Command::new("collect").about("Collect the bounded baseline security profile"),
             true,
         ))
         .subcommand(stream_command(
             "validate",
-            "Validate a protocol-v4 JSONL stream",
+            "Validate a protocol-v5 JSONL stream",
         ))
         .subcommand(stream_command(
             "summarize",
@@ -2319,7 +2319,7 @@ pub(crate) fn linux_path(path: &std::path::Path) -> Value {
     }
     #[cfg(not(unix))]
     {
-        json!({"display": path.to_string_lossy()})
+        Value::String(path.to_string_lossy().into_owned())
     }
 }
 
@@ -2368,7 +2368,7 @@ mod tests {
             panic!("expected baseline execution");
         };
 
-        assert_eq!(execution.command_id, "baseline-v3");
+        assert_eq!(execution.command_id, "baseline");
         assert!(
             !execution
                 .invocations
