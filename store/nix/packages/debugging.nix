@@ -76,6 +76,36 @@
       tar -xzf ${archive} bpftool
       install -Dm755 bpftool "$out/bin/bpftool"
     '';
+  traceeVersion = "0.24.1";
+  traceeSources = {
+    aarch64-linux = {
+      url = "https://github.com/aquasecurity/tracee/releases/download/v${traceeVersion}/tracee-aarch64.v${traceeVersion}.tar.gz";
+      hash = "sha256-rcZ8QNXW0SL4HGptAQeteNUda+SZF5KZd9d65yDyYa4=";
+    };
+    x86_64-linux = {
+      url = "https://github.com/aquasecurity/tracee/releases/download/v${traceeVersion}/tracee-x86_64.v${traceeVersion}.tar.gz";
+      hash = "sha256-jMVr2MjdPvrbBEHISElZKv/EinHTr753UaniAU757IU=";
+    };
+  };
+  traceePackage = system: let
+    source = traceeSources.${system};
+    archive = buildPkgs.fetchurl {
+      inherit (source) url hash;
+    };
+  in
+    buildPkgs.runCommand "tracee-${traceeVersion}-${system}"
+    {
+      version = traceeVersion;
+      nativeBuildInputs = [
+        buildPkgs.gnutar
+        buildPkgs.gzip
+      ];
+    }
+    ''
+      tar -xzf ${archive} ./dist/tracee-static
+      install -Dm755 dist/tracee-static "$out/bin/tracee"
+    '';
+
   elfutilsSetFor = target: let
     packageSet =
       if target == "aarch64-linux"
@@ -304,6 +334,13 @@ in {
     synopsis = "Inspect and manage Linux eBPF objects";
     systems = linuxSystems;
     packageFor = system: _: bpftoolPackage system;
+  };
+
+  tracee = mkNixpkgsBinary {
+    name = "tracee";
+    synopsis = "Observe Linux runtime activity and security events with eBPF";
+    systems = linuxSystems;
+    packageFor = system: _: traceePackage system;
   };
 
   dbus-monitor = mkNixpkgsBinary {

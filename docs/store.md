@@ -99,6 +99,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `subfinder` | `network/subfinder` | Enumerate subdomains | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `tcpdump` | `network/tcpdump` | Capture and display network packets | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `tmux` | `terminal/tmux` | Multiplex terminal sessions and windows | `aarch64-linux`, `x86_64-linux` |
+| `tracee` | `debugging/tracee` | Observe Linux runtime activity and security events with eBPF | `aarch64-linux`, `x86_64-linux` |
 | `tshark` | `network/tshark` | Analyze packet captures from the CLI | `aarch64-linux`, `x86_64-linux` |
 | `unshare` | `containers/unshare` | Run a program in new Linux namespaces | `aarch64-linux`, `x86_64-linux` |
 | `usql` | `network/usql` | Query PostgreSQL, MySQL, SQLite, and ClickHouse databases | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
@@ -183,6 +184,8 @@ The Store OpenSSH client tools (`ssh`, `scp`, and `sftp`) disable host-key verif
 )
 ```
 `fsmon` is Linux-only. Its daemon requires `CAP_SYS_ADMIN` for process attribution and refuses to start without it unless `FSMON_ALLOW_UNPRIVILEGED=1` is set. The Store package provides the `fsmon` executable; use `fsmon init --service` to generate its user service configuration.
+
+`tracee` is Linux-only and requires a supported kernel with BTF, usually `/sys/kernel/btf/vmlinux`, plus the capabilities needed to load and attach eBPF programs. Some events also require `/proc/kallsyms`, kernel configuration data, or LSM BPF support. The Store package provides the static `tracee` executable for x86-64 and arm64; host kernel configuration and privileges determine which features are available.
 
 `python` includes pinned pure-Python HTTP, WebSocket, and HTML libraries and a certifi CA bundle. The package excludes pip, ensurepip, and virtual-environment tooling; update its interpreter and wheels together in the package definition.
 
