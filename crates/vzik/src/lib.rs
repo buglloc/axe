@@ -110,7 +110,9 @@ where
                 "collection_outcome":"unsupported",
                 "stop_reason":"unsupported",
             });
-            match serde_json::to_writer(&mut *stdout, &record).and_then(|_| stdout.write_all(b"\n"))
+            match serde_json::to_writer(&mut *stdout, &record)
+                .map_err(io::Error::other)
+                .and_then(|_| stdout.write_all(b"\n"))
             {
                 Ok(()) => 4,
                 Err(error) => {
