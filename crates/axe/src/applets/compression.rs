@@ -4,6 +4,8 @@ use std::cell::UnsafeCell;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
+#[cfg(unix)]
+use std::mem::MaybeUninit;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
@@ -419,9 +421,19 @@ impl Options {
                     #[cfg(unix)]
                     {
                         // SAFETY: SIGPIPE is deliberately sent only to this
-                        // process; its disposition was restored before the
-                        // applet was invoked.
+                        // process; its disposition and mask are prepared for
+                        // the applet before this error is handled.
                         unsafe {
+                            let mut signal_set = MaybeUninit::<libc::sigset_t>::uninit();
+                            if libc::sigemptyset(signal_set.as_mut_ptr()) == 0
+                                && libc::sigaddset(signal_set.as_mut_ptr(), libc::SIGPIPE) == 0
+                            {
+                                let _ = libc::pthread_sigmask(
+                                    libc::SIG_UNBLOCK,
+                                    signal_set.as_ptr(),
+                                    std::ptr::null_mut(),
+                                );
+                            }
                             libc::raise(libc::SIGPIPE);
                         }
                     }

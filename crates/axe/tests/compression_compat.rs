@@ -1,7 +1,8 @@
 #![cfg(unix)]
 
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
+use std::mem::MaybeUninit;
 use std::num::NonZeroU64;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -111,6 +112,25 @@ fn run(directory: &Path, applet: &str, args: &[&str], input: &[u8]) -> Output {
     child
         .wait_with_output()
         .expect("wait for compression applet")
+}
+
+fn block_sigpipe(command: &mut Command) {
+    unsafe {
+        command.pre_exec(|| {
+            let mut signal_set = MaybeUninit::<libc::sigset_t>::uninit();
+            if libc::sigemptyset(signal_set.as_mut_ptr()) != 0
+                || libc::sigaddset(signal_set.as_mut_ptr(), libc::SIGPIPE) != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            let error =
+                libc::pthread_sigmask(libc::SIG_BLOCK, signal_set.as_ptr(), std::ptr::null_mut());
+            if error != 0 {
+                return Err(io::Error::from_raw_os_error(error));
+            }
+            Ok(())
+        });
+    }
 }
 
 fn success(output: &Output) {
@@ -1060,7 +1080,8 @@ fn a_closed_stdout_consumer_does_not_erase_earlier_operand_errors() {
             };
             let (reader, writer) = nix::unistd::pipe().unwrap();
             drop(reader);
-            let output = Command::new(env!("CARGO_BIN_EXE_axe"))
+            let mut command = Command::new(env!("CARGO_BIN_EXE_axe"));
+            command
                 .args([
                     "--applet",
                     applet,
@@ -1077,7 +1098,9 @@ fn a_closed_stdout_consumer_does_not_erase_earlier_operand_errors() {
                 .env("PATH", "/nonexistent")
                 .stdin(Stdio::null())
                 .stdout(Stdio::from(writer))
-                .stderr(Stdio::piped())
+                .stderr(Stdio::piped());
+            block_sigpipe(&mut command);
+            let output = command
                 .output()
                 .expect("run with an already-closed stdout consumer");
             if corrupt && format == "bzip2" {
