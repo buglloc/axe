@@ -2,6 +2,30 @@
 title = "Changelog"
 +++
 
+## [v0.13.0](https://github.com/buglloc/axe/releases/tag/v0.13.0) — 2026-11-01
+
+### Highlights
+
+- Vzik now uses protocol v5. Valid UTF-8 byte fields are emitted as JSON strings; invalid byte fields use `{display, base64}` so their original bytes remain available. Vzik JSON output includes `schema` and `schema_version`. (`7957f8f618caefa46f1e4b89aeb85a2552e2e001`)
+- Added modular Vzik monitor commands for files, processes, and sockets. (`aa5e4c33e5daf31013660a8bc0c683b275df111a`)
+- Added `tracee` to the AXE Store package set. (`cf4e8c0b05256977a650713708a7bffd0ec75dd1`)
+- Moved `ip` from the bundled command set to the AXE Store. (`108b3d4e3cf5863a7bdab2c55589fb30c7df3918`)
+
+### Changes
+
+- Vzik diagnostics no longer include the redundant `status` field. Source failure codes no longer use the `source_` prefix, and process-source availability uses the same codes. The collect profile is now named `baseline`. (`7957f8f618caefa46f1e4b89aeb85a2552e2e001`)
+- Monitor records now include `seq` and use `provider` instead of `source`. `stream_start` records use `classes`; `completion` and `checkpoint_sequence` were removed. Each inotify setup gap is emitted once. (`7957f8f618caefa46f1e4b89aeb85a2552e2e001`)
+- `axe doctor` now emits schema v5 for cgroup path encoding. (`7957f8f618caefa46f1e4b89aeb85a2552e2e001`)
+- Native bootstrap loader bytes are embedded in `bootstrap.json`. (`d5aa376b3dbcf244361928b5514d4fa4785152eb`)
+- Website bootstrap instructions now separate curl or wget commands, pasted scripts, and the Native ELF loader, and show command lengths. (`939937ad977cd5ab3b16b60c989b993a46c0dbf1`)
+- The website now prioritizes x86_64 in its bootstrap presentation. (`bc41482e988a92f9c26cb8025ff8771478abd4d2`)
+
+### Fixes
+
+- Corrected the README quick-start stable download command. (`6d1fa4c79ec2637765ea0c2a0093ba14802a2178`)
+- Corrected the documented Native bootstrap ELF layout. (`660c60772345dff8d93155f4cf4170b5a5fa5a84`)
+- No additional user-visible fixes can be stated from the supplied evidence without inferring behavior from the unavailable source diff.
+
 ## [v0.12.0](https://github.com/buglloc/axe/releases/tag/v0.12.0) — 2026-10-29
 
 ### Highlights
