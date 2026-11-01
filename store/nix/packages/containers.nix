@@ -199,23 +199,23 @@
       postInstall = "";
     });
 
-  podmanVersion = "6.1.2";
+  podmanVersion = "6.1.4";
   podmanSources = {
     aarch64-darwin = {
       url = "https://github.com/podman-container-tools/podman/releases/download/v${podmanVersion}/podman-remote-release-darwin_arm64.zip";
-      hash = "sha256-wZx63T36bV9C509LB9vsvBS2H9IecJL/090bpsr74qY=";
+      hash = "sha256-2ty5SZnct/GfgmnikvxW0r++K/q1gmmBpWikZr/yaEM=";
       path = "podman-${podmanVersion}/usr/bin/podman";
       archive = "zip";
     };
     aarch64-linux = {
       url = "https://github.com/podman-container-tools/podman/releases/download/v${podmanVersion}/podman-remote-static-linux_arm64.tar.gz";
-      hash = "sha256-BFuo8PJNi8aPQ2xnwNzCNfFczxaXWWpOCkPMjTS6K+o=";
+      hash = "sha256-HXwqMkG1bv+mjHJDWfsw5gOoAmmbK3sg/i+uX/aBlgE=";
       path = "bin/podman-remote-static-linux_arm64";
       archive = "tar";
     };
     x86_64-linux = {
       url = "https://github.com/podman-container-tools/podman/releases/download/v${podmanVersion}/podman-remote-static-linux_amd64.tar.gz";
-      hash = "sha256-Z4Xk3BHa1nAAMIdJ/tD5gWmHkjCYMKa4cL1al7NScYI=";
+      hash = "sha256-rx+FwiIUCIoKmYa5yCtMm1t07ajsqmyMyoKxpj8zm0o=";
       path = "bin/podman-remote-static-linux_amd64";
       archive = "tar";
     };

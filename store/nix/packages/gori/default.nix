@@ -8,13 +8,13 @@
   pkg-config,
   packageSet,
 }: let
-  # Gori requires Crystal >= 1.21; the pinned nixpkgs compiler is 1.19.
+  # Gori requires Crystal >= 1.22; the pinned nixpkgs compiler is 1.19.
   crystal = stdenvNoCC.mkDerivation {
     pname = "gori-crystal";
-    version = "1.21.0";
+    version = "1.22.2";
     src = fetchurl {
-      url = "https://github.com/crystal-lang/crystal/releases/download/1.21.0/crystal-1.21.0-1-linux-x86_64-bundled.tar.gz";
-      hash = "sha256-zEB70HGRXMe12TSCgeZpqRHSCh9Ln6xSpiCIZg6yIgg=";
+      url = "https://github.com/crystal-lang/crystal/releases/download/1.22.2/crystal-1.22.2-1-linux-x86_64-bundled.tar.gz";
+      hash = "sha256-DcXD/xtXEMOYHiB6YkH8Bswo+ttmItX9shmZrfHKIwk=";
     };
     dontStrip = true;
     installPhase = ''
@@ -69,12 +69,12 @@
 in
   packageSet.stdenv.mkDerivation {
     pname = "gori";
-    version = "0.7.1";
+    version = "0.9.1";
     src = fetchFromGitHub {
       owner = "hahwul";
       repo = "gori";
-      rev = "4f33703d532aef77719ab981e1e2ef9e935a2400";
-      hash = "sha256-vN5Yj0URofpNH8SNTNSHAPlE5L+M9ChHVe/Jizevh8k=";
+      rev = "0dcf7e017b8ee49ff6217592ceef18a92475e9bb";
+      hash = "sha256-/sgOTe6WEruBfeBcpwy2JMyzYsdx8SXhJfAEsuYSkXY=";
     };
     patches = [
       ../../patches/gori-disable-automatic-update-check.patch

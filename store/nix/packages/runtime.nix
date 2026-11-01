@@ -4,28 +4,28 @@
   ...
 }: let
   pythonVersion = "3.14";
-  version = "3.14.9-web.1";
+  version = "3.14.10-web.1";
 
   pythonSources = {
     aarch64-linux = {
-      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.14.9%2B20261021-aarch64-unknown-linux-musl-lto%2Bstatic-full.tar.zst";
-      hash = "sha256-5ETtmsSXYKIhiyFmp7OKU2Q9CBWO336KBZflAFan2/s=";
+      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10%2B20261026-aarch64-unknown-linux-musl-lto%2Bstatic-full.tar.zst";
+      hash = "sha256-XSlsiLmUgTrmWoNVcn8CjXmxvhS+acYG1SBTWXjxDkw=";
     };
     aarch64-darwin = {
-      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.14.9%2B20261021-aarch64-apple-darwin-pgo%2Blto-full.tar.zst";
-      hash = "sha256-ZATDygbnqKvzu1JHvzWcjwbD0OHQQhpsU5tUV82IVTc=";
+      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10%2B20261026-aarch64-apple-darwin-pgo%2Blto-full.tar.zst";
+      hash = "sha256-E321ESQfdpPdxXWGrxdEx7Y3WYKrTDHEqC0QEVZX1GI=";
     };
     x86_64-linux = {
-      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.14.9%2B20261021-x86_64-unknown-linux-musl-lto%2Bstatic-full.tar.zst";
-      hash = "sha256-dAmh8dN+AYGrcc2K2jmBwjd5S6yi5mvO2RK4/48OuD8=";
+      url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10%2B20261026-x86_64-unknown-linux-musl-lto%2Bstatic-full.tar.zst";
+      hash = "sha256-WHM7wBmH+aW250Nvcdwzix2eR+xHE+ehIwUPQtkWDKw=";
     };
   };
 
   wheelSources = [
     {
-      name = "anyio-4.15.1-py3-none-any.whl";
-      url = "https://files.pythonhosted.org/packages/12/b8/4bd346e22b28902df4d651910f5242c28d84e4a5c2435ca5c3f797ed7e2e/anyio-4.15.1-py3-none-any.whl";
-      hash = "sha256-YVL9u/mnf97JdzFyG+v3xMRPfCm0JLAGWCYXPvx+0QE=";
+      name = "anyio-4.16.0-py3-none-any.whl";
+      url = "https://files.pythonhosted.org/packages/a9/16/7757fb84c819accc7d7e9af5291b261e4abb8627ee040f99e7d35ef2457a/anyio-4.16.0-py3-none-any.whl";
+      hash = "sha256-xmrmNOC4IoOWuAF0G+sylDJtS2EC97ukBBwN+1jCkCY=";
     }
     {
       name = "beautifulsoup4-4.15.0-py3-none-any.whl";
@@ -33,14 +33,14 @@
       hash = "sha256-1viN5i4dTjjssQd+uXJM0O/ynSoIyhakAem56T8RfPk=";
     }
     {
-      name = "certifi-2026.10.19-py3-none-any.whl";
-      url = "https://files.pythonhosted.org/packages/c4/51/29046e48f693c54e5b7412216d447a1d8362c9653148d98c02cdf65fa733/certifi-2026.10.19-py3-none-any.whl";
-      hash = "sha256-QtNTQMxbm6eOgY3b/wxbHCt3neRIo0D9G5ifX6hnDhs=";
+      name = "certifi-2026.10.23-py3-none-any.whl";
+      url = "https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl";
+      hash = "sha256-6bVN525TC7bPDM0DZ4cQOstY/UK6kw6ov5SN26ovYdE=";
     }
     {
-      name = "charset_normalizer-3.5.1-py3-none-any.whl";
-      url = "https://files.pythonhosted.org/packages/cc/61/d01fc49b8dea277640b55a9e15960dbca9fdc8c9fde18e572d39c59f4019/charset_normalizer-3.5.1-py3-none-any.whl";
-      hash = "sha256-bfDsQw+agxdywjyloiTLo2UXpYqEuzLDK7Wan6Z8R/Y=";
+      name = "charset_normalizer-3.5.2-py3-none-any.whl";
+      url = "https://files.pythonhosted.org/packages/fc/ad/d07d7862a62ffa6d79d68074d14823243dd235a77c45262acbf6adeb28bf/charset_normalizer-3.5.2-py3-none-any.whl";
+      hash = "sha256-trdRJ0rLadd7MyPWt9uqPH/fweuCm362HSYvMuGvloU=";
     }
     {
       name = "distro-1.9.0-py3-none-any.whl";
@@ -73,9 +73,9 @@
       hash = "sha256-Kg1gwXL4OsarMeRVSQbA87NYjTe1y5ObHAYfSQfieOA=";
     }
     {
-      name = "soupsieve-2.9.2-py3-none-any.whl";
-      url = "https://files.pythonhosted.org/packages/eb/dc/ad025c1ee131eba60c69f4dd5779b18fcf1e6b21a343e2162a84d5d133c7/soupsieve-2.9.2-py3-none-any.whl";
-      hash = "sha256-gImib9l0ynofMCdtPYSSqyZqsVr1gWQt/oqhYuDByCM=";
+      name = "soupsieve-3.0.4-py3-none-any.whl";
+      url = "https://files.pythonhosted.org/packages/07/66/473f7ca0be0b06e38ee8c85ee2db184e3981bd769fac2e7c19c8a8865211/soupsieve-3.0.4-py3-none-any.whl";
+      hash = "sha256-hBKCZhT5xjIicGfQmFrrn1hL0V78hSlVQw4Jep/nr78=";
     }
     {
       name = "typing_extensions-4.16.0-py3-none-any.whl";
@@ -88,14 +88,14 @@
       hash = "sha256-DPPK5WjTaqlXayjfs18RMo8cuXTKdkfZR167hsdaxuM=";
     }
     {
-      name = "websockets-17.1-py3-none-any.whl";
-      url = "https://files.pythonhosted.org/packages/41/63/23572870e01836a98346075b9e17a8bc24a6ddd9800a3204ceee58677f3c/websockets-17.1-py3-none-any.whl";
-      hash = "sha256-8iEIEQe4xIGE2Z9wGWBEhjdufvgmA35wqtawJUBzLCM=";
+      name = "websockets-17.4-py3-none-any.whl";
+      url = "https://files.pythonhosted.org/packages/eb/27/9db924cb0dbf22eade78d98fbae77790f9bf6bc729e6ab29aef9d68e4156/websockets-17.4-py3-none-any.whl";
+      hash = "sha256-xr0sl4GRVZKyCRYNDwF9THyCrVMHXmsMJNKokpnn+ek=";
     }
     {
-      name = "pyasn1-0.6.4-py3-none-any.whl";
-      url = "https://files.pythonhosted.org/packages/9a/3b/6163796d69c3977d1e4287bea4a6979161cbbdd170ebb430511e8e1999ce/pyasn1-0.6.4-py3-none-any.whl";
-      hash = "sha256-3tqSd8/UVAgOxAsgf7bfgiBqOiaIc1Izzc2NPVZfCIs=";
+      name = "pyasn1-0.6.5-py3-none-any.whl";
+      url = "https://files.pythonhosted.org/packages/19/1f/3eefd5c84c35cae44549ce1c7f7e58f7945b34f5a6bce07a135438522073/pyasn1-0.6.5-py3-none-any.whl";
+      hash = "sha256-QBew/OElCWuFc7OcmJ/bGksZz3YeaDOYGEVQ/qDmZYc=";
     }
     {
       name = "PySocks-1.7.1-py3-none-any.whl";

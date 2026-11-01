@@ -1,4 +1,4 @@
-# Production dependencies from gori 0.7.1's nix/shards.nix.
+# Production dependencies from gori 0.9.1's nix/shards.nix.
 {
   cvss = {
     url = "https://github.com/hahwul/cvss.cr.git";
@@ -7,8 +7,8 @@
   };
   db = {
     url = "https://github.com/crystal-lang/crystal-db.git";
-    rev = "v0.14.0";
-    sha256 = "1s67fs5abzgg2yyjsm2la967mk881i91h8jdnal072fb9qh9wr58";
+    rev = "ef748a234dbee14ace4c72ad901d332981f4d57d";
+    sha256 = "sha256-Nq/No5quVmxfIxLGu8Ak6698pL2xOhrLzLYhrdffubg=";
   };
   sarif = {
     url = "https://github.com/hahwul/sarif.cr.git";
@@ -17,12 +17,12 @@
   };
   sqlite3 = {
     url = "https://github.com/crystal-lang/crystal-sqlite3.git";
-    rev = "v0.23.0";
-    sha256 = "1adfdw19r5b1dhzs3x410z5s1cgan4ypgmhph3fqsa65svvw83af";
+    rev = "91f6c13d8f1df08f2659dfce7261ec9c40666302";
+    sha256 = "sha256-sIM1oAaVHxyW4OjBDLa4Y3bJY1Xx/UBd+WWv+XXr6k8=";
   };
   termisu = {
     url = "https://github.com/hahwul/termisu.git";
-    rev = "b790d9147d6b08edfcc60854406a8a78b4a97ded";
-    sha256 = "1k71syllkvhjsawknsvdbwb83v55ns1kwpn68s010ssp733r08xd";
+    rev = "ca964e5f9256990d9d1e6aa5ca3aa1fb2635fb6b";
+    sha256 = "sha256-UnzoYfw8W67whoCX2pnFO53+qXBxpISkuS97HcsjoT8=";
   };
 }

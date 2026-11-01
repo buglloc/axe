@@ -22,9 +22,9 @@
       ldflags = (old.ldflags or []) ++ ["-linkmode=internal"];
       postInstall = "";
       postConfigure =
-        (old.postConfigure or "")
-        + ''
-          # Patch after vendoring to retain the pinned nixpkgs dependency hash.
+        ''
+          # The nixpkgs recipe removes the upstream fallback file; restore the
+          # local embedded-CA implementation instead.
           patch -p1 < ${../../patches/caddy-embedded-ca.patch}
           patch -p1 < ${../../patches/caddy-disable-self-update.patch}
           cp ${axePortableCaBundle} cmd/axe-ca-bundle.pem

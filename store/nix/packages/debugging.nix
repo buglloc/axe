@@ -47,15 +47,15 @@
   in
     binwalkMinimal packageSet compressionSet;
 
-  bpftoolVersion = "7.7.0";
+  bpftoolVersion = "7.8.1";
   bpftoolSources = {
     aarch64-linux = {
       url = "https://github.com/libbpf/bpftool/releases/download/v${bpftoolVersion}/bpftool-v${bpftoolVersion}-arm64.tar.gz";
-      hash = "sha256-1oRD2UXBRggBUeshW+uqQAKUq3raIq9PXQqUD1mSudk=";
+      hash = "sha256-Z4zG/cVF9rr5/IC7yjq0yw780/TYFMb62gDKCYekxrA=";
     };
     x86_64-linux = {
       url = "https://github.com/libbpf/bpftool/releases/download/v${bpftoolVersion}/bpftool-v${bpftoolVersion}-amd64.tar.gz";
-      hash = "sha256-CRUFlvCTVrD/Yy3X+YVuDqhr+WsmnpvJQnjZqUMqJow=";
+      hash = "sha256-ESAmu99I0NAMz8SSblmHjUeUP5fBl/lZ8RCr4pyJjdw=";
     };
   };
   bpftoolPackage = system: let
