@@ -800,6 +800,7 @@ in {
     synopsis = "Fancy HTTP client";
     systems = portableSystems;
     packageFor = target: targetPkgs: xhMinimal (packageSetFor target targetPkgs);
+    rewriteBuildConfigurationPaths = true;
     darwinSystemLibraries = ["libiconv.2.dylib"];
   };
 
