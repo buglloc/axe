@@ -1218,6 +1218,7 @@ pub(crate) enum MonitorClass {
 impl MonitorClass {
     pub(crate) const ALL: [Self; 3] = [Self::Process, Self::Files, Self::Sockets];
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) const fn id(self) -> &'static str {
         match self {
             Self::Process => "process",
@@ -1227,6 +1228,7 @@ impl MonitorClass {
     }
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Debug)]
 pub struct MonitorOptions {
     pub filters: Vec<PathBuf>,
@@ -1239,6 +1241,7 @@ pub struct MonitorOptions {
     pub verbose: bool,
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Debug)]
 pub struct MonitorExecution {
     pub options: MonitorOptions,
@@ -1309,6 +1312,7 @@ pub enum Action {
     Help(String),
     Execute(Execution),
     Capture(CaptureExecution),
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Monitor(MonitorExecution),
     Validate(PathBuf),
     Summarize(PathBuf),
