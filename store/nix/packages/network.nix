@@ -383,7 +383,12 @@
       withNativeTls = false;
     }).overrideAttrs
     (old: {
-      patches = (old.patches or []) ++ [../patches/xh-bundled-roots.patch];
+      patches =
+        (old.patches or [])
+        ++ [
+          ../patches/xh-bundled-roots.patch
+          ../patches/xh-rustls-ring.patch
+        ];
       postPatch =
         (old.postPatch or "")
         + ''

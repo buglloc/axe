@@ -1,0 +1,11 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -99,7 +99,7 @@
+ [features]
+ default = ["online-tests", "rustls", "network-interface"]
+ native-tls = ["reqwest/native-tls"]
+-rustls = ["reqwest/rustls", "dep:rustls"]
++rustls = ["reqwest/rustls-no-provider", "dep:rustls", "rustls/ring"]
+ http3 = ["reqwest/http3"]
+ http-message-signatures = ["dep:httpsig-hyper", "dep:sha2"]
