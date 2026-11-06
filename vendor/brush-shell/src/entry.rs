@@ -68,6 +68,12 @@ impl CommandLineArgs {
 /// `default_prompt` sets interactive `PS1` before startup files run, unless
 /// inherited from the environment. An inherited empty `PS1` is preserved.
 pub fn run(default_prompt: Option<&str>) {
+    run_with_default_args(default_prompt, &[]);
+}
+
+/// Main entry point with startup defaults that are prepended when the user did
+/// not supply the same argument.
+pub fn run_with_default_args(default_prompt: Option<&str>, default_args: &[&str]) {
     //
     // Install the bundled-command registry so it's available both for
     // bundled dispatch (handled next) and for builtin shim registration
@@ -93,7 +99,20 @@ pub fn run(default_prompt: Option<&str>) {
     //
     // Parse args.
     //
-    let mut args: Vec<_> = std::env::args().collect();
+    let args: Vec<_> = std::env::args().collect();
+    let mut args = if default_args.is_empty() {
+        args
+    } else {
+        let mut effective_args = Vec::with_capacity(args.len() + default_args.len());
+        effective_args.extend(args.first().cloned());
+        for default_arg in default_args {
+            if !args.iter().skip(1).any(|arg| arg == default_arg) {
+                effective_args.push((*default_arg).to_owned());
+            }
+        }
+        effective_args.extend(args.into_iter().skip(1));
+        effective_args
+    };
 
     // Work around clap's limitations handling +O options.
     for arg in &mut args {

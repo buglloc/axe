@@ -46,22 +46,19 @@ The applet PATH bridge is best-effort; bundled commands still resolve without it
 
 ## Interactive prompt
 
-The default `PS1` is `axe \w\$ `: the current directory, with `~` for the home
-directory, followed by `$` for a regular user or `#` for root. The prompt is
-independent of the executable's filename.
+The default `PS1` is `[axe] \u@\H:\w\n\$ `: the user and full hostname,
+followed by the current directory, a new line, and `$` for a regular user or
+`#` for root. The prompt is independent of the executable's filename.
 
-An inherited `PS1`, including an empty value, takes precedence over the default.
-Startup files can override it. For an ordinary interactive shell, AXE reads
-`~/.bashrc` and then `~/.brushrc`; put AXE-specific settings in `~/.brushrc`:
+AXE does not automatically load `~/.bashrc` or `~/.brushrc`. An inherited
+`PS1`, including an empty value, still takes precedence over the default.
+`--rcfile` is also ignored because AXE supplies `--norc`. A login shell
+(`axe -l`) may still load `~/.bash_profile`, `~/.bash_login`, or `~/.profile`;
+an explicit `source` from those files can load other files.
 
-```bash
-PS1='\u@\h:\w\$ '
-```
-
-A login shell (`axe -l`) reads the first available file among `~/.bash_profile`,
-`~/.bash_login`, and `~/.profile`. Set `PS1` there or source `~/.brushrc` from it.
-`--norc` skips rc files; `--noenv` ignores inherited environment variables.
-Non-interactive shells do not receive the default `PS1`.
+`--norc` and `--noprofile` remain available as explicit shell options.
+`--noenv` ignores inherited environment variables and is separate from AXE's
+default startup policy.
 
 ## Bundled commands
 

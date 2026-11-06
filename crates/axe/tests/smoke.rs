@@ -103,6 +103,33 @@ fn offline_axe(scratch: &Scratch) -> Command {
 }
 
 #[test]
+fn shell_uses_axe_prompt_without_rc_files() {
+    let scratch = Scratch::new("prompt-without-rc");
+    fs::write(scratch.path().join(".bashrc"), "AXE_RC_GUARD=bashrc\n")
+        .expect("write bash rc fixture");
+    fs::write(scratch.path().join(".brushrc"), "AXE_RC_GUARD=brushrc\n")
+        .expect("write brush rc fixture");
+
+    let output = run_with_input(
+        offline_axe(&scratch)
+            .env("TERM", "dumb")
+            .args(["--no-config", "-i"]),
+        b"printf 'ps1=<%s> rc=<%s>\\n' \"$PS1\" \"${AXE_RC_GUARD-unset}\"; exit\n",
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(r"ps1=<[axe] \u@\H:\w\n\$ > rc=<unset>"),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
 fn positional_applet_dispatch_accepts_optional_separator() {
     for args in [
         &["printf", "--", "%s\\n", "positional"][..],

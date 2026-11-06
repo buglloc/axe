@@ -1447,7 +1447,6 @@ impl SshServer {
         // The daemon owns Index freshness; the session remains online for
         // Store tool delivery but builds its registry from the verified cache.
         process
-            .arg("--norc")
             .arg("--noprofile")
             .arg("--no-config")
             .current_dir(&*self.workdir)

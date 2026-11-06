@@ -14,8 +14,10 @@ source at that revision.
   redirected standard streams. Adds `invoke_installed` for AXE's own entry
   routing, `executable_path` for path-only callers, launch-failure
   observation for `doctor`, and `set_child_sigpipe_ignored`.
-- `entry::run(default_prompt)`: sets AXE's interactive `PS1` unless one is
-  inherited (an inherited empty `PS1` is kept).
+- `entry::run(default_prompt)`: sets the embedding shell's interactive `PS1`
+  unless one is inherited (an inherited empty `PS1` is kept).
+- `entry::run_with_default_args` lets an embedding executable prepend missing
+  startup policy flags before user arguments.
 - Tokio runtime per input backend: Minimal and Vt use a current-thread runtime
   so the non-interactive shell starts when thread creation is denied;
   Basic and Reedline keep a two-worker multi-thread runtime because
