@@ -2,6 +2,21 @@
 title = "Changelog"
 +++
 
+## [v0.14.0](https://github.com/buglloc/axe/releases/tag/v0.14.0) — 2026-11-06
+
+### Highlights
+
+- Interactive AXE shells now use the `[axe] \u@\H:\w\n\$ ` prompt and start without user Bash or Brush startup files. [`e8ad3d04f7ba2490c370f2562fb400a581b724ca`](#)
+- Added `gix` 0.59.0 to the AXE Store for `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux`. [`d1ffedc899664f0d9440902f941ea3cda57948e6`](#)
+
+### Changes
+
+- SSH-launched shell sessions no longer pass `--norc`; they continue to pass `--noprofile` and `--no-config`. [`e8ad3d04f7ba2490c370f2562fb400a581b724ca`](#)
+
+### Fixes
+
+- The supplied source does not identify a separate user-visible bug fix for this release.
+
 ## [v0.13.1](https://github.com/buglloc/axe/releases/tag/v0.13.1) — 2026-11-04
 
 ### Highlights
