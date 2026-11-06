@@ -2,6 +2,7 @@
   mkNixpkgsBinary,
   mkSingleBinary,
   pkgsFor,
+  linuxSystems,
   portableSystems,
   packageSetFor,
   staticSetFor,
@@ -42,6 +43,51 @@
       '';
     };
 
+  gixPackageFor = target: targetPkgs: let
+    packageSet = packageSetFor target targetPkgs;
+  in
+    packageSet.gitoxide.overrideAttrs (old: {
+      buildInputs = [];
+      cargoBuildFlags = [
+        "--bin"
+        "gix"
+        "--no-default-features"
+        "--features"
+        "max-pure"
+      ];
+      doCheck = false;
+      doInstallCheck = false;
+      installPhase = ''
+        runHook preInstall
+        install -Dm755 target/${packageSet.stdenv.hostPlatform.rust.rustcTarget}/release/gix "$out/bin/gix"
+        runHook postInstall
+      '';
+      nativeInstallCheckInputs = [];
+      preFixup = "";
+      postFixup = "";
+      postInstall = "";
+    });
+
+  gixVersion = "0.59.0";
+  gixDarwinArchiveName = "gitoxide-max-pure-v${gixVersion}-aarch64-apple-darwin";
+  gixDarwinArchive = buildPkgs.fetchurl {
+    url = "https://github.com/GitoxideLabs/gitoxide/releases/download/v${gixVersion}/${gixDarwinArchiveName}.tar.gz";
+    hash = "sha256-y6TVrRhbk8vuVNy4alWmgScry4/TieKcQm8ymCX7uMI=";
+  };
+  gixDarwinPackage = buildPkgs.stdenvNoCC.mkDerivation {
+    pname = "gix";
+    version = gixVersion;
+    archive = gixDarwinArchive;
+    dontUnpack = true;
+    nativeBuildInputs = [buildPkgs.gnutar];
+    installPhase = ''
+      runHook preInstall
+      tar -xzf "$archive" "${gixDarwinArchiveName}/gix" --strip-components=1
+      install -Dm755 gix "$out/bin/gix"
+      runHook postInstall
+    '';
+  };
+
   fdLinux = mkSingleBinary {
     name = "fd";
     synopsis = "Find filesystem entries by name and attributes";
@@ -63,6 +109,26 @@ in {
     fdLinux
     // {
       targets = fdLinux.targets // fdDarwin.targets;
+    };
+
+  gix = let
+    gixLinux = mkNixpkgsBinary {
+      name = "gix";
+      synopsis = "Inspect and manipulate Git repositories with a low-level Rust CLI";
+      systems = linuxSystems;
+      packageFor = gixPackageFor;
+    };
+
+    gixDarwin = mkSingleBinary {
+      name = "gix";
+      synopsis = "Inspect and manipulate Git repositories with a low-level Rust CLI";
+      system = "aarch64-darwin";
+      package = gixDarwinPackage;
+    };
+  in
+    gixLinux
+    // {
+      targets = gixLinux.targets // gixDarwin.targets;
     };
 
   rg = mkNixpkgsBinary {
