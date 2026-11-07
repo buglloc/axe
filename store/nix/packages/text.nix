@@ -60,7 +60,7 @@
     name = "ast-grep";
     synopsis = "Search, lint, and rewrite source code by syntax";
     systems = portableSystems;
-    rewriteBuildConfigurationPaths = true;
+    darwinSystemLibraries = ["libiconv.2.dylib"];
     packageFor = target: pkgs:
       if target == "x86_64-linux"
       then
