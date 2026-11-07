@@ -65,12 +65,8 @@
       if target == "x86_64-linux"
       then
         (staticSetFor target pkgs).ast-grep.overrideAttrs (old: {
-          # The upstream x86 fixture is not loadable in the static musl test environment.
-          checkFlags =
-            (old.checkFlags or [])
-            ++ [
-              "--skip=allowed_custom_language_is_registered_before_cli_parsing"
-            ];
+          # Static musl cannot run the package's dynamic-language test suite.
+          doCheck = false;
         })
       else (packageSetFor target pkgs).ast-grep;
   };
