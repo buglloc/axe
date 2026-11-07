@@ -23,6 +23,7 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `7zz` | `archives/7zz` | Create and extract archives with 7-Zip | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `age` | `security/age` | Encrypt and decrypt files with keys or passphrases | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `asciinema` | `terminal/asciinema` | Record, replay, and stream terminal sessions | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `ast-grep` | `text/ast-grep` | Search, lint, and rewrite source code by syntax | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `betterleaks` | `security/betterleaks` | Scan files, stdin, and Git history for secrets with optional validation | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `binwalk` | `debugging/binwalk` | Analyze firmware images and embedded files | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `bpftool` | `debugging/bpftool` | Inspect and manage Linux eBPF objects | `aarch64-linux`, `x86_64-linux` |

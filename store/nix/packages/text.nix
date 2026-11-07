@@ -56,6 +56,25 @@
       else (packageSetFor target targetPkgs).difftastic;
   };
 
+  ast-grep = mkNixpkgsBinary {
+    name = "ast-grep";
+    synopsis = "Search, lint, and rewrite source code by syntax";
+    systems = portableSystems;
+    rewriteBuildConfigurationPaths = true;
+    packageFor = target: pkgs:
+      if target == "x86_64-linux"
+      then
+        (staticSetFor target pkgs).ast-grep.overrideAttrs (old: {
+          # The upstream x86 fixture is not loadable in the static musl test environment.
+          checkFlags =
+            (old.checkFlags or [])
+            ++ [
+              "--skip=allowed_custom_language_is_registered_before_cli_parsing"
+            ];
+        })
+      else (packageSetFor target pkgs).ast-grep;
+  };
+
   jq = mkNixpkgsBinary {
     name = "jq";
     synopsis = "Process and transform JSON data";
