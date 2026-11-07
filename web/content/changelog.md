@@ -2,6 +2,21 @@
 title = "Changelog"
 +++
 
+## [v0.15.0](https://github.com/buglloc/axe/releases/tag/v0.15.0) — 2026-11-07
+
+### Highlights
+
+- Relay API endpoints now require a matching `Authorization: Bearer <token>` header; unauthorized requests return HTTP 401. `266787c4463abb0951ff908775943b6640cd4fc0`
+- The relay dashboard now accepts a bearer token and uses it for API requests. `266787c4463abb0951ff908775943b6640cd4fc0`
+
+### Changes
+
+- The dashboard/API can bind beyond loopback, with bearer-token protection for API access. Relay API clients accept HTTP and HTTPS origins. `266787c4463abb0951ff908775943b6640cd4fc0`
+
+### Fixes
+
+- The supplied source does not identify a separate user-visible fix for this release. `266787c4463abb0951ff908775943b6640cd4fc0`
+
 ## [v0.14.0](https://github.com/buglloc/axe/releases/tag/v0.14.0) — 2026-11-06
 
 ### Highlights
