@@ -6,10 +6,16 @@ const cells = (row, fields) => {
     row.append(cell);
   }
 };
+const token = document.getElementById('token');
+const authHeaders = () => token.value ? { Authorization: `Bearer ${token.value}` } : {};
 async function refresh() {
   const error = document.getElementById('error');
   try {
-    const response = await fetch('/api/v1/status', { cache: 'no-store' });
+    const response = await fetch('/api/v1/status', {
+      cache: 'no-store',
+      headers: authHeaders(),
+    });
+    if (response.status === 401) throw new Error('Bearer token required');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const status = await response.json();
     value('count', status.clients.length);
@@ -39,5 +45,9 @@ async function refresh() {
     value('updated', 'Disconnected');
   }
 }
+document.getElementById('auth').addEventListener('submit', (event) => {
+  event.preventDefault();
+  refresh();
+});
 refresh();
 setInterval(refresh, 5000);

@@ -72,7 +72,7 @@ Replace `relay.example.org` with the relay's public DNS name. Save this JSON as 
   "public_host": "relay.example.org",
   "min_port": 3000,
   "max_port": 6000,
-  "http": "[::1]:7000",
+  "http": "[::]:7000",
   "token_file": "/etc/axe-relay/token"
 }
 ```
@@ -105,11 +105,11 @@ PrivateTmp=true
 WantedBy=multi-user.target
 ```
 
-The server requires `--config FILE`; `--token FILE` can override its `token_file`. Both accept file paths, whereas `AXE_RELAY_TOKEN` on the TCP target contains the token itself.
+The server requires `--config FILE`; `--token FILE` can override its `token_file`. Both accept file paths, whereas `AXE_RELAY_TOKEN` on the TCP target contains the token itself. The dashboard/API listener is plain HTTP and may bind a reachable private or VPN address. The dashboard asks for the bearer token; every JSON API request requires `Authorization: Bearer <token>` matching `token_file`.
 
 For TCP targets, change the loopback-only `tcp_control` address to the relay's private/VPN address and restrict access to those targets. Never expose this bearer-token listener to an untrusted network. Allow UDP 11000 from QUIC targets and TCP 3000–6000 from SSH users; keep the public port range and firewall rules in sync.
 
-The dashboard and JSON API have no authentication. Keep port 7000 on loopback. Remote monitoring requires an authenticated HTTPS reverse proxy with restricted access.
+The CLI accepts both HTTPS and HTTP API origins. Set `AXE_RELAY_API_TOKEN` or pass `--api-token` when running `status`, `clients`, `wait`, or `watch`. Plain HTTP sends the bearer token without transport encryption; use it only on a trusted private network or put the API behind an HTTPS reverse proxy.
 
 After installing the unit, an operator can run:
 
@@ -117,12 +117,13 @@ After installing the unit, an operator can run:
 sudo systemctl daemon-reload
 sudo systemctl enable --now axe-relay.service
 systemctl status axe-relay.service
+export AXE_RELAY_API_TOKEN="$(sudo cat /etc/axe-relay/token)"
 /usr/local/sbin/axe-relay status
 /usr/local/sbin/axe-relay wait --client-id target-01 --transport quic --timeout 60
 /usr/local/sbin/axe-relay watch --client-id target-01
 ```
 
-`status` reports uptime and active registrations; `wait` prints the target's assigned SSH `HOST:PORT` once it connects, and `watch` follows connections and disconnections (stop it with Ctrl-C). `axe-relay clients` lists current IDs, transports, and addresses; `/api/v1/status` is available locally for JSON monitoring. Use an SSH certificate issued by the configured user CA to verify actual login via the assigned port. If the service fails to start or the target does not register, inspect `journalctl -u axe-relay.service -b --no-pager` for missing credentials, bind errors, or control handshake failures, then check endpoint routing and the relevant TCP/UDP firewall rules without printing secret values.
+`status` reports uptime and active registrations; `wait` prints the target's assigned SSH `HOST:PORT` once it connects, and `watch` follows connections and disconnections (stop it with Ctrl-C). `axe-relay clients` lists current IDs, transports, and addresses; `/api/v1/status` is available for JSON monitoring with the same bearer token. Use an SSH certificate issued by the configured user CA to verify actual login via the assigned port. If the service fails to start or the target does not register, inspect `journalctl -u axe-relay.service -b --no-pager` for missing credentials, bind errors, or control handshake failures, then check endpoint routing and the relevant TCP/UDP firewall rules without printing secret values.
 
 ## Development checks
 

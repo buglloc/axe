@@ -90,8 +90,9 @@ for listener in sockets:
 PY
 )
 read -r api_port tcp_port quic_port ssh_port public_port <<< "$ports"
-token=0123456789abcdef0123456789abcdef
+token=relay-live-smoke-token-012345678901234567
 printf '%s' "$token" >"$scratch/token"
+export AXE_RELAY_API_TOKEN="$token"
 python3 - "$scratch/config.json" "$scratch/token" "$keys" "$api_port" "$tcp_port" "$quic_port" "$public_port" <<'PY'
 import json
 import pathlib

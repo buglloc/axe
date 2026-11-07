@@ -10,6 +10,11 @@ use serde_json::Value;
 
 mod common;
 
+const TEST_TOKEN: &str = "relay-test-token-012345678901234567";
+fn test_authorization() -> String {
+    format!("Bearer {TEST_TOKEN}")
+}
+
 struct Relay(Child);
 
 impl Drop for Relay {
@@ -54,7 +59,7 @@ fn write_config(
     std::fs::write(
         &config,
         serde_json::to_vec(&serde_json::json!({
-            "http": format!("127.0.0.1:{api}"),
+            "http": format!("0.0.0.0:{api}"),
             "tcp_control": format!("127.0.0.1:{tcp}"),
             "quic_control": format!("127.0.0.1:{quic}"),
             "public_bind": "127.0.0.1",
@@ -82,6 +87,7 @@ fn available_tcp_port() -> u16 {
 
 fn status(api: u16) -> Option<Value> {
     let response = ureq::get(&format!("http://127.0.0.1:{api}/api/v1/status"))
+        .header("Authorization", &test_authorization())
         .call()
         .ok()?;
     serde_json::from_reader(response.into_body().as_reader()).ok()
@@ -92,6 +98,7 @@ fn events(api: u16, after: Option<(&str, u64)>) -> Value {
         format!("?epoch={epoch}&after={cursor}")
     });
     let response = ureq::get(&format!("http://127.0.0.1:{api}/api/v1/events{query}"))
+        .header("Authorization", &test_authorization())
         .call()
         .expect("read relay events");
     serde_json::from_reader(response.into_body().as_reader()).unwrap()
@@ -108,6 +115,7 @@ fn watch(
         "watch",
         "--json",
     ]);
+    command.env("AXE_RELAY_API_TOKEN", TEST_TOKEN);
     if let Some(client_id) = client_id {
         command.args(["--client-id", client_id]);
     }
@@ -160,7 +168,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
         .local_addr()
         .unwrap()
         .port();
-    let token = "0123456789abcdef0123456789abcdef";
+    let token = TEST_TOKEN;
     let token_file = dir.path("token");
     std::fs::write(&token_file, token).expect("write token without final newline");
     let config = write_config(&dir, api, tcp, quic, public, &token_file);
@@ -174,6 +182,15 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
     let empty = await_status(api, 0);
     assert_eq!(empty["version"], 1);
     assert_eq!(empty["tcp_control"], format!("127.0.0.1:{tcp}"));
+    let unauthenticated = ureq::get(&format!("http://127.0.0.1:{api}/api/v1/status"))
+        .call()
+        .expect_err("unauthenticated API request should fail");
+    assert!(matches!(unauthenticated, ureq::Error::StatusCode(401)));
+    let wrong_token = ureq::get(&format!("http://127.0.0.1:{api}/api/v1/status"))
+        .header("Authorization", "Bearer wrong-token")
+        .call()
+        .expect_err("wrong API token should fail");
+    assert!(matches!(wrong_token, ureq::Error::StatusCode(401)));
     let initial = events(api, None);
     assert_eq!(initial["cursor"], 0);
     assert_eq!(initial["clients"].as_array().unwrap().len(), 0);
@@ -192,6 +209,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
             "5",
             "--json",
         ])
+        .env("AXE_RELAY_API_TOKEN", TEST_TOKEN)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -273,6 +291,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
             "clients",
             "--json",
         ])
+        .env("AXE_RELAY_API_TOKEN", TEST_TOKEN)
         .output()
         .unwrap();
     assert!(
@@ -295,6 +314,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
             "--timeout",
             "0",
         ])
+        .env("AXE_RELAY_API_TOKEN", TEST_TOKEN)
         .output()
         .unwrap();
     assert!(
@@ -348,12 +368,14 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
     let conflict = ureq::get(&format!(
         "http://127.0.0.1:{api}/api/v1/events?epoch={epoch}&after=999"
     ))
+    .header("Authorization", &test_authorization())
     .call()
     .unwrap_err();
     assert!(matches!(conflict, ureq::Error::StatusCode(409)));
     let restarted = ureq::get(&format!(
         "http://127.0.0.1:{api}/api/v1/events?epoch=00000000-0000-0000-0000-000000000000&after=2"
     ))
+    .header("Authorization", &test_authorization())
     .call()
     .unwrap_err();
     assert!(matches!(restarted, ureq::Error::StatusCode(409)));
@@ -437,7 +459,7 @@ fn token_file_override_authenticates_tcp_registration_with_crlf() {
     let config_token_file = dir.path("configured-token");
     std::fs::write(&config_token_file, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
     let override_file = dir.path("override-token");
-    let token = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let token = TEST_TOKEN;
     std::fs::write(&override_file, format!("{token}\r\n")).unwrap();
     let config = write_config(&dir, api, tcp, quic, public, &config_token_file);
     let relay = Command::new(env!("CARGO_BIN_EXE_axe-relay"))
@@ -521,15 +543,4 @@ fn config_rejects_invalid_token_files_and_unknown_fields() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected"));
-}
-
-#[test]
-fn cli_rejects_remote_plain_http_before_contacting_it() {
-    let output = Command::new(env!("CARGO_BIN_EXE_axe-relay"))
-        .args(["--api", "http://example.com", "status"])
-        .env("AXE_RELAY_API_TOKEN", "secret")
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("HTTP to a loopback IP"));
 }

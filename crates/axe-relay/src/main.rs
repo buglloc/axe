@@ -123,10 +123,8 @@ impl ApiClient {
             return Err("API URL must be an origin without credentials, query or path".into());
         }
 
-        let local_http = matches!(base.host(), Some(url::Host::Ipv4(address)) if address.is_loopback())
-            || matches!(base.host(), Some(url::Host::Ipv6(address)) if address.is_loopback());
-        if base.scheme() != "https" && !(base.scheme() == "http" && local_http) {
-            return Err("API URL must use HTTPS or HTTP to a loopback IP".into());
+        if !matches!(base.scheme(), "http" | "https") {
+            return Err("API URL must use HTTP or HTTPS".into());
         }
 
         let status_endpoint = base
@@ -176,6 +174,7 @@ impl ApiClient {
             ureq::Error::StatusCode(409) => {
                 "event history expired or relay restarted; restart watch".to_owned()
             }
+            ureq::Error::StatusCode(401) => "API bearer token rejected".to_owned(),
             _ => format!("request failed: {error}"),
         })?;
 
@@ -392,14 +391,12 @@ fn start(options: Options) -> Result<(), String> {
     let config: ServerConfig = serde_json::from_reader(config_file)
         .map_err(|error| format!("parse relay config {}: {error}", config_path.display()))?;
 
-    if !config.http.ip().is_loopback() {
-        return Err("dashboard/API must bind to a loopback address; use an authenticated reverse proxy for remote access".into());
-    }
     if config.min_port == 0 || config.min_port > config.max_port {
         return Err("invalid public port range".into());
     }
 
     let token = read_token(options.token.as_deref().unwrap_or(&config.token_file))?;
+    let api_token = Arc::<str>::from(token.as_str());
     let public_host = match config.public_host.parse::<std::net::IpAddr>() {
         Ok(address) => address.to_string(),
         Err(_) => match url::Host::parse(&config.public_host) {
@@ -432,7 +429,7 @@ fn start(options: Options) -> Result<(), String> {
         let listener = tokio::net::TcpListener::bind(config.http).await
             .map_err(|error| format!("bind dashboard {}: {error}", config.http))?;
         let monitor = Arc::new(Monitor::new());
-        let dashboard = axum::serve(listener, http::router(Arc::clone(&monitor)))
+        let dashboard = axum::serve(listener, http::router(Arc::clone(&monitor), api_token))
             .with_graceful_shutdown(async { let _ = shutdown_signal().await; });
         println!("relay: dashboard/API http://{}", config.http);
         tokio::select! {
@@ -454,4 +451,23 @@ async fn shutdown_signal() -> io::Result<()> {
 #[cfg(not(unix))]
 async fn shutdown_signal() -> io::Result<()> {
     tokio::signal::ctrl_c().await
+}
+#[cfg(test)]
+mod tests {
+    use super::ApiClient;
+
+    #[test]
+    fn api_client_accepts_remote_http_origin() {
+        ApiClient::new("http://relay.example.test:7000", Some("test-token"))
+            .expect("remote HTTP API origin should be accepted");
+    }
+
+    #[test]
+    fn api_client_rejects_non_http_origin() {
+        let result = ApiClient::new("ftp://relay.example.test:7000", Some("test-token"));
+        match result {
+            Err(error) => assert!(error.contains("HTTP or HTTPS")),
+            Ok(_) => panic!("non-HTTP API origin should be rejected"),
+        }
+    }
 }

@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use axum::Router;
+use axum::body::Body;
 use axum::extract::{Query, State};
-use axum::http::{HeaderValue, StatusCode, header};
-use axum::response::{Html, IntoResponse};
+use axum::http::{HeaderValue, Request, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -19,13 +21,61 @@ struct EventsQuery {
     epoch: Option<Uuid>,
 }
 
-pub fn router(monitor: Arc<Monitor>) -> Router {
+pub fn router(monitor: Arc<Monitor>, token: Arc<str>) -> Router {
+    let protected = Router::new()
+        .route("/api/v1/status", get(status))
+        .route("/api/v1/events", get(events))
+        .route_layer(middleware::from_fn(
+            move |request: Request<Body>, next: Next| {
+                let token = Arc::clone(&token);
+                async move {
+                    if authorized(&request, &token) {
+                        next.run(request).await
+                    } else {
+                        unauthorized()
+                    }
+                }
+            },
+        ));
+
     Router::new()
         .route("/", get(dashboard))
         .route("/dashboard.js", get(script))
-        .route("/api/v1/status", get(status))
-        .route("/api/v1/events", get(events))
+        .merge(protected)
         .with_state(monitor)
+}
+
+fn authorized(request: &Request<Body>, expected: &str) -> bool {
+    let Some(value) = request.headers().get(header::AUTHORIZATION) else {
+        return false;
+    };
+    let Ok(value) = value.to_str() else {
+        return false;
+    };
+    let Some((scheme, token)) = value.split_once(' ') else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("Bearer") && constant_time_eq(token.as_bytes(), expected.as_bytes())
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = left.len() ^ right.len();
+    for index in 0..left.len().max(right.len()) {
+        difference |= usize::from(
+            left.get(index).copied().unwrap_or_default()
+                ^ right.get(index).copied().unwrap_or_default(),
+        );
+    }
+    difference == 0
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))],
+        "authentication required",
+    )
+        .into_response()
 }
 
 async fn status(State(monitor): State<Arc<Monitor>>) -> impl IntoResponse {

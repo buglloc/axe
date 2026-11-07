@@ -101,7 +101,7 @@ cargo run --quiet -p axe-store -- keys relay-identities --output keys/relay
 
 Keep `quic_server_key.pem` on the relay host. The server certificate and client identity are embedded in `axe`; `axe-relay` reads the server key and certificates from runtime files.
 
-Build `axe` with `just build-linux-amd64` and the standalone relay with `just build-relay-linux-amd64`. Install verified artifacts and credentials, configure listeners and a stable target ID, then check the monitor through a protected endpoint. Keep its unauthenticated HTTP listener on loopback or behind an authenticated HTTPS reverse proxy.
+Build `axe` with `just build-linux-amd64` and the standalone relay with `just build-relay-linux-amd64`. Install verified artifacts and credentials, configure listeners and a stable target ID, then check the monitor through an API request carrying `Authorization: Bearer <token>` matching the relay token.
 
 Registration alone does not prove SSH login. Verify certificate authentication, command execution, SFTP, forwarding, and plain-key rejection. With matching binaries on `PATH`, `bash scripts/relay-live-smoke.sh axe axe-relay` checks local TCP and QUIC paths, not remote deployment.
 

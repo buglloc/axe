@@ -16,12 +16,19 @@
     table { border-collapse: collapse; width: 100%; text-align: left; }
     th, td { padding: .7rem; border-bottom: 1px solid #8888; white-space: nowrap; }
     th { font-weight: 650; }
-    #error { color: #c34; }
+    #auth { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; }
+    #auth label { display: grid; gap: .25rem; }
+    #auth input, #auth button { min-height: 2.5rem; padding: .35rem .65rem; font: inherit; }
   </style>
   <script src="/dashboard.js" defer></script>
 </head>
 <body>
   <header><h1>AXE Relay</h1><span id="updated" role="status">Connecting…</span></header>
+  <form id="auth">
+    <label for="token">Relay bearer token</label>
+    <input id="token" type="password" autocomplete="current-password" required>
+    <button type="submit">Connect</button>
+  </form>
   <p id="error" role="alert" hidden></p>
   <section class="meta" aria-label="Relay status">
     <p><strong>Active clients</strong><span id="count">—</span></p>
