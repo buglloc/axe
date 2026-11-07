@@ -125,19 +125,21 @@ impl ApiClient {
             || base.fragment().is_some()
             || base.path() != "/"
         {
-            return Err("API URL must be an origin without credentials, query or path".into());
+            return Err(format!(
+                "invalid API URL {api:?}: expected an origin without credentials, query or path"
+            ));
         }
 
         if !matches!(base.scheme(), "http" | "https") {
-            return Err("API URL must use HTTP or HTTPS".into());
+            return Err(format!("invalid API URL {api:?}: expected HTTP or HTTPS"));
         }
 
         let status_endpoint = base
             .join("/api/v1/status")
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("build status API endpoint from {api:?}: {error}"))?;
         let events_endpoint = base
             .join("/api/v1/events")
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("build events API endpoint from {api:?}: {error}"))?;
 
         Ok(Self {
             agent: ureq::Agent::config_builder()
@@ -154,7 +156,10 @@ impl ApiClient {
     fn status(&self) -> Result<Status, String> {
         let status: Status = self.get(&self.status_endpoint)?;
         if status.version != 1 {
-            return Err(format!("unsupported API version {}", status.version));
+            return Err(format!(
+                "API response from {} uses unsupported version {}",
+                self.status_endpoint, status.version
+            ));
         }
         Ok(status)
     }
@@ -176,11 +181,13 @@ impl ApiClient {
             None => request.call(),
         }
         .map_err(|error| match error {
-            ureq::Error::StatusCode(409) => {
-                "event history expired or relay restarted; restart watch".to_owned()
+            ureq::Error::StatusCode(409) => format!(
+                "request GET {endpoint}: event history expired or relay restarted; restart watch"
+            ),
+            ureq::Error::StatusCode(401) => {
+                format!("request GET {endpoint}: API bearer token rejected")
             }
-            ureq::Error::StatusCode(401) => "API bearer token rejected".to_owned(),
-            _ => format!("request failed: {error}"),
+            _ => format!("request GET {endpoint} failed: {error}"),
         })?;
 
         let body = response
@@ -188,11 +195,11 @@ impl ApiClient {
             .with_config()
             .limit(1024 * 1024)
             .read_to_vec()
-            .map_err(|error| format!("read response: {error}"))?;
-        serde_json::from_slice(&body).map_err(|error| format!("invalid API response: {error}"))
+            .map_err(|error| format!("read response body from {endpoint}: {error}"))?;
+        serde_json::from_slice(&body)
+            .map_err(|error| format!("decode JSON response from {endpoint}: {error}"))
     }
 }
-
 fn query(api: &str, token: Option<&str>, command: &Command) -> Result<(), String> {
     let client = ApiClient::new(api, token)?;
     if let Command::Wait {
@@ -207,7 +214,8 @@ fn query(api: &str, token: Option<&str>, command: &Command) -> Result<(), String
         if *json {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&registration).map_err(|error| error.to_string())?
+                serde_json::to_string_pretty(&registration)
+                    .map_err(|error| format!("serialize wait result as JSON: {error}"))?
             );
         } else {
             println!("{}", registration.public_address);
@@ -224,11 +232,13 @@ fn query(api: &str, token: Option<&str>, command: &Command) -> Result<(), String
     match command {
         Command::Status { json: true } => println!(
             "{}",
-            serde_json::to_string_pretty(&status).map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&status)
+                .map_err(|error| format!("serialize status result as JSON: {error}"))?
         ),
         Command::Clients { json: true } => println!(
             "{}",
-            serde_json::to_string_pretty(&status.clients).map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&status.clients)
+                .map_err(|error| format!("serialize clients result as JSON: {error}"))?
         ),
         Command::Status { json: false } => println!(
             "uptime={}s clients={} tcp={} quic={}",
@@ -316,8 +326,9 @@ fn print_record(
     record: WatchRecord<'_>,
 ) -> Result<(), String> {
     if json {
-        serde_json::to_writer(&mut *stdout, &record).map_err(|error| error.to_string())?;
-        writeln!(stdout).map_err(|error| error.to_string())?;
+        serde_json::to_writer(&mut *stdout, &record)
+            .map_err(|error| format!("serialize watch record as JSON: {error}"))?;
+        writeln!(stdout).map_err(|error| format!("write watch record: {error}"))?;
     } else {
         writeln!(
             stdout,
@@ -327,9 +338,11 @@ fn print_record(
             record.client.transport,
             record.client.public_address
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("write watch record: {error}"))?;
     }
-    stdout.flush().map_err(|error| error.to_string())
+    stdout
+        .flush()
+        .map_err(|error| format!("flush watch output: {error}"))
 }
 
 fn wait_for(
@@ -353,7 +366,8 @@ fn wait_for(
 
         let Some(remaining) = deadline.checked_sub(started.elapsed()) else {
             return Err(format!(
-                "timed out after {timeout}s waiting for relay client {client_id:?}"
+                "timed out after {timeout}s waiting for relay client {client_id:?} via API {}",
+                client.status_endpoint
             ));
         };
         std::thread::sleep(remaining.min(Duration::from_millis(250)));
@@ -397,7 +411,12 @@ fn start(options: Options) -> Result<(), String> {
         .map_err(|error| format!("parse relay config {}: {error}", config_path.display()))?;
 
     if config.min_port == 0 || config.min_port > config.max_port {
-        return Err("invalid public port range".into());
+        return Err(format!(
+            "invalid public port range {}-{} in relay config {}",
+            config.min_port,
+            config.max_port,
+            config_path.display()
+        ));
     }
 
     let token = read_token(options.token.as_deref().unwrap_or(&config.token_file))?;
@@ -408,10 +427,22 @@ fn start(options: Options) -> Result<(), String> {
             Ok(url::Host::Domain(domain)) => domain,
             Ok(url::Host::Ipv6(address)) => address.to_string(),
             _ => {
-                return Err("public_host must be an IP address or DNS name without a port".into());
+                return Err(format!(
+                    "invalid public_host {:?} in relay config {}: expected an IP address or DNS name without a port",
+                    config.public_host,
+                    config_path.display()
+                ));
             }
         },
     };
+    let server_error_context = format!(
+        "run relay control server (TCP {}; QUIC {}; public bind {}:{}-{})",
+        config.tcp_control,
+        config.quic_control,
+        config.public_bind,
+        config.min_port,
+        config.max_port
+    );
 
     let server_options = server::ServerOptions {
         tcp_control: config.tcp_control,
@@ -431,15 +462,20 @@ fn start(options: Options) -> Result<(), String> {
         .map_err(|error| format!("create runtime: {error}"))?;
 
     runtime.block_on(async move {
-        let listener = tokio::net::TcpListener::bind(config.http).await
+        let listener = tokio::net::TcpListener::bind(config.http)
+            .await
             .map_err(|error| format!("bind dashboard {}: {error}", config.http))?;
         let monitor = Arc::new(Monitor::new());
         let dashboard = axum::serve(listener, http::router(Arc::clone(&monitor), api_token))
-            .with_graceful_shutdown(async { let _ = shutdown_signal().await; });
+            .with_graceful_shutdown(async {
+                let _ = shutdown_signal().await;
+            });
         println!("relay: dashboard/API http://{}", config.http);
         tokio::select! {
-            result = server::run(server_options, monitor, shutdown_signal()) => result.map_err(|error| error.to_string()),
-            result = dashboard => result.map_err(|error| format!("dashboard: {error}")),
+            result = server::run(server_options, monitor, shutdown_signal()) => result
+                .map_err(|error| format!("{server_error_context}: {error}")),
+            result = dashboard => result
+                .map_err(|error| format!("serve dashboard/API {}: {error}", config.http)),
         }
     })
 }
@@ -465,6 +501,20 @@ mod tests {
     fn api_client_accepts_remote_http_origin() {
         ApiClient::new("http://relay.example.test:7000", Some("test-token"))
             .expect("remote HTTP API origin should be accepted");
+    }
+
+    #[test]
+    fn api_client_includes_endpoint_in_request_error() {
+        let client =
+            ApiClient::new("http://127.0.0.1:0", None).expect("test API origin should be accepted");
+        let error = match client.status() {
+            Ok(_) => panic!("port zero request should fail"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("request GET http://127.0.0.1:0/api/v1/status failed"),
+            "{error}"
+        );
     }
 
     #[test]
