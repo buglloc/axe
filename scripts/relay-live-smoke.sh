@@ -92,6 +92,7 @@ PY
 read -r api_port tcp_port quic_port ssh_port public_port <<< "$ports"
 token=relay-live-smoke-token-012345678901234567
 printf '%s' "$token" >"$scratch/token"
+export AXE_RELAY_API_URL="http://127.0.0.1:$api_port"
 export AXE_RELAY_API_TOKEN="$token"
 python3 - "$scratch/config.json" "$scratch/token" "$keys" "$api_port" "$tcp_port" "$quic_port" "$public_port" <<'PY'
 import json
@@ -119,7 +120,7 @@ relay_pid=$!
 api="http://127.0.0.1:$api_port"
 ready=0
 for ((attempt = 0; attempt < 100; attempt++)); do
-    if "$relay" --api "$api" status >/dev/null 2>&1; then ready=1; break; fi
+    if "$relay" status >/dev/null 2>&1; then ready=1; break; fi
     if ! kill -0 "$relay_pid" 2>/dev/null; then echo 'relay exited before readiness' >&2; exit 1; fi
     sleep 0.1
 done
@@ -142,9 +143,9 @@ for transport in tcp quic; do
         >"$scratch/sshd-$transport.log" 2>&1 &
     sshd_pid=$!
     if [[ "$transport" == tcp ]]; then client_id=$(default_client_id); fi
-    public_address=$("$relay" --api "$api" wait --client-id "$client_id" --transport "$transport" --timeout 20)
+    public_address=$("$relay" wait --client-id "$client_id" --transport "$transport" --timeout 20)
     if [[ "$transport" == tcp ]]; then
-        "$relay" --api "$api" watch --json >"$scratch/watch.jsonl" 2>"$scratch/watch.err" &
+        "$relay" watch --json >"$scratch/watch.jsonl" 2>"$scratch/watch.err" &
         watch_pid=$!
         wait_watch_event present "$client_id" "$public_address"
     else
@@ -175,7 +176,7 @@ daemon_output=$(AXE_RELAY_TOKEN="$token" HOSTNAME=spoofed USER=spoofed LOGNAME=s
     --relay "127.0.0.1:$tcp_port" --daemon --log-file "$scratch/sshd-daemon.log")
 daemon_pid=${daemon_output##* }
 client_id=$(default_client_id)
-public_address=$("$relay" --api "$api" wait --client-id "$client_id" --transport tcp --timeout 20)
+public_address=$("$relay" wait --client-id "$client_id" --transport tcp --timeout 20)
 wait_watch_event connected "$client_id" "$public_address"
 printf 'daemon: worker registered %s at %s\n' "$client_id" "$public_address"
 kill "$daemon_pid"

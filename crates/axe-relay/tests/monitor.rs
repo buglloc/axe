@@ -109,12 +109,8 @@ fn watch(
     client_id: Option<&str>,
 ) -> (Relay, mpsc::Receiver<Value>, thread::JoinHandle<()>) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_axe-relay"));
-    command.args([
-        "--api",
-        &format!("http://127.0.0.1:{api}"),
-        "watch",
-        "--json",
-    ]);
+    command.args(["watch", "--json"]);
+    command.env("AXE_RELAY_API_URL", format!("http://127.0.0.1:{api}"));
     command.env("AXE_RELAY_API_TOKEN", TEST_TOKEN);
     if let Some(client_id) = client_id {
         command.args(["--client-id", client_id]);
@@ -198,8 +194,6 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
 
     let mut waiter = Command::new(env!("CARGO_BIN_EXE_axe-relay"))
         .args([
-            "--api",
-            &format!("http://127.0.0.1:{api}"),
             "wait",
             "--client-id",
             "test-agent",
@@ -209,6 +203,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
             "5",
             "--json",
         ])
+        .env("AXE_RELAY_API_URL", format!("http://127.0.0.1:{api}"))
         .env("AXE_RELAY_API_TOKEN", TEST_TOKEN)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -291,6 +286,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
             "clients",
             "--json",
         ])
+        .env("AXE_RELAY_API_URL", "http://127.0.0.1:1")
         .env("AXE_RELAY_API_TOKEN", TEST_TOKEN)
         .output()
         .unwrap();
@@ -304,8 +300,6 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
 
     let expired = Command::new(env!("CARGO_BIN_EXE_axe-relay"))
         .args([
-            "--api",
-            &format!("http://127.0.0.1:{api}"),
             "wait",
             "--client-id",
             "test-agent",
@@ -314,6 +308,7 @@ fn monitoring_tracks_real_tcp_registration_and_disconnect() {
             "--timeout",
             "0",
         ])
+        .env("AXE_RELAY_API_URL", format!("http://127.0.0.1:{api}"))
         .env("AXE_RELAY_API_TOKEN", TEST_TOKEN)
         .output()
         .unwrap();

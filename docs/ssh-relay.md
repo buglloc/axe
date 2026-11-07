@@ -109,7 +109,7 @@ The server requires `--config FILE`; `--token FILE` can override its `token_file
 
 For TCP targets, change the loopback-only `tcp_control` address to the relay's private/VPN address and restrict access to those targets. Never expose this bearer-token listener to an untrusted network. Allow UDP 11000 from QUIC targets and TCP 3000–6000 from SSH users; keep the public port range and firewall rules in sync.
 
-The CLI accepts both HTTPS and HTTP API origins. Set `AXE_RELAY_API_TOKEN` or pass `--api-token` when running `status`, `clients`, `wait`, or `watch`. Plain HTTP sends the bearer token without transport encryption; use it only on a trusted private network or put the API behind an HTTPS reverse proxy.
+The CLI accepts both HTTPS and HTTP API origins. Set `AXE_RELAY_API_URL` and `AXE_RELAY_API_TOKEN` to let the environment select the relay, or pass `--api` and `--api-token` to override them. The default API URL is `http://127.0.0.1:7000`. Plain HTTP sends the bearer token without transport encryption; use it only on a trusted private network or put the API behind an HTTPS reverse proxy.
 
 After installing the unit, an operator can run:
 
@@ -117,6 +117,7 @@ After installing the unit, an operator can run:
 sudo systemctl daemon-reload
 sudo systemctl enable --now axe-relay.service
 systemctl status axe-relay.service
+export AXE_RELAY_API_URL="https://relay.example.org"
 export AXE_RELAY_API_TOKEN="$(sudo cat /etc/axe-relay/token)"
 /usr/local/sbin/axe-relay status
 /usr/local/sbin/axe-relay wait --client-id target-01 --transport quic --timeout 60

@@ -28,7 +28,12 @@ use uuid::Uuid;
 struct Options {
     #[command(subcommand)]
     command: Option<Command>,
-    #[arg(long, default_value = "http://127.0.0.1:7000", global = true)]
+    #[arg(
+        long,
+        env = "AXE_RELAY_API_URL",
+        default_value = "http://127.0.0.1:7000",
+        global = true
+    )]
     api: String,
     #[arg(long, env = "AXE_RELAY_API_TOKEN", global = true)]
     api_token: Option<String>,
