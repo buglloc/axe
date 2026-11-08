@@ -35,6 +35,8 @@ BOOTSTRAP_SCRIPTS = {"shell": "sh", "python": "py", "node": "js", "perl": "pl"}
 BOOTSTRAP_NATIVE = {"x86_64-linux": ("x86_64", "amd64-linux"), "aarch64-linux": ("aarch64", "aarch64-linux")}
 BINARIES = ("axe", "axe-relay", "vzik")
 
+RELEASE_METADATA_PATHS = ("nix/axe-releases.json", "README.md", "web/content/changelog.md")
+
 
 def asset_name(binary: str, target: str) -> str:
     return f"{binary}-{TARGETS[target]}"
@@ -59,6 +61,10 @@ def run(*args: str, cwd: Path = ROOT, capture: bool = False, check: bool = True)
 
 def git(*args: str) -> str:
     return run("git", *args, capture=True)
+
+
+def git_status_paths(status: str) -> set[str]:
+    return {line[2:].lstrip() for line in status.splitlines() if len(line) >= 3}
 
 
 def sha256(path: Path) -> str:
@@ -374,6 +380,58 @@ def remote_tag(tag: str) -> str | None:
     return refs.get(f"refs/tags/{tag}^{{}}") or refs.get(f"refs/tags/{tag}")
 
 
+def metadata_commit_parent(stage: Path) -> str | None:
+    parent = git("rev-parse", "-q", "--verify", "HEAD^")
+    if not parent:
+        return None
+    changed = set(git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines())
+    if not changed or not changed.issubset(RELEASE_METADATA_PATHS):
+        return None
+    dirty = git("status", "--porcelain", "--untracked-files=normal")
+    if dirty:
+        paths = git_status_paths(dirty)
+        if paths - set(RELEASE_METADATA_PATHS):
+            return None
+        raise ReleaseError("local metadata commit has uncommitted metadata changes; resolve them before retrying")
+    manifest = stage / "manifest.json"
+    if not manifest.is_file() or json.loads(manifest.read_text())["commit"] != parent:
+        raise ReleaseError("local metadata commit does not belong to the staged release")
+    return parent
+
+
+def resume_metadata_push(stage: Path) -> bool:
+    parent = metadata_commit_parent(stage)
+    if parent is None:
+        return False
+    if git("branch", "--show-current") != "main":
+        raise ReleaseError("metadata retry requires the main branch")
+    commit = git("rev-parse", "HEAD")
+    remote = git("ls-remote", "origin", "refs/heads/main")
+    remote_commit = remote.split()[0] if remote else None
+    if remote_commit == commit:
+        return True
+    if remote_commit != parent:
+        raise ReleaseError("origin/main moved after the metadata commit; resolve it before retrying")
+    verify_remote_source(parent)
+    run("git", "push", "origin", "main")
+    return True
+
+
+def commit_release_metadata(version: str) -> bool:
+    dirty = git("status", "--porcelain", "--untracked-files=normal")
+    paths = git_status_paths(dirty)
+    unexpected = paths - set(RELEASE_METADATA_PATHS)
+    if unexpected:
+        raise ReleaseError(f"unexpected changes after publication: {', '.join(sorted(unexpected))}")
+    run("git", "add", "--", *RELEASE_METADATA_PATHS)
+    staged = git("diff", "--cached", "--name-only", "--", *RELEASE_METADATA_PATHS)
+    if not staged:
+        return False
+    run("git", "commit", "-m", f"Update release metadata for v{version}")
+    run("git", "push", "origin", "main")
+    return True
+
+
 def verify_remote_source(commit: str) -> None:
     remote = git("ls-remote", "origin", "refs/heads/main")
     if not remote or remote.split()[0] != commit:
@@ -684,10 +742,14 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
         raise ReleaseError(f"commit version {version} and reviewed notes {page} first")
     commit = git("rev-parse", "HEAD")
     stage = out / "releases" / tag
+    if directory is None and resume_metadata_push(stage):
+        print(f"Published {tag}; metadata commit already pushed")
+        return
+
     dirty = git("status", "--porcelain", "--untracked-files=normal")
     if dirty:
-        allowed = {"nix/axe-releases.json", "README.md", "web/content/changelog.md", str(page.relative_to(ROOT))}
-        if not stage.joinpath("manifest.json").exists() or any(line[3:] not in allowed for line in dirty.splitlines()):
+        allowed = set(RELEASE_METADATA_PATHS) | {str(page.relative_to(ROOT))}
+        if not stage.joinpath("manifest.json").exists() or git_status_paths(dirty) - allowed:
             raise ReleaseError("checkout has changes unrelated to this staged release")
 
         metadata = stage / "axe-releases.json"
@@ -740,7 +802,7 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
     assets = json.loads((stage / "manifest.json").read_text())["assets"]
     baseline = subprocess.run(("git", "show", "HEAD:README.md"), cwd=ROOT, check=True, capture_output=True, text=True).stdout
     readme = render_downloads(baseline, tag, records, assets)
-    if dirty and "README.md" in {line[3:] for line in dirty.splitlines()} and (ROOT / "README.md").read_text() != readme:
+    if dirty and "README.md" in git_status_paths(dirty) and (ROOT / "README.md").read_text() != readme:
         raise ReleaseError("README changes are not the expected staged download table")
     verify_public_objects(stage)
     verify_bootstrap_assets(stage)
@@ -771,7 +833,11 @@ def publish(version: str, out: Path, edition: Path, directory: Path | None) -> N
     changelog = ROOT / "web" / "content" / "changelog.md"
     atomic_write(changelog, changelog_with_release(changelog.read_text(), tag, datetime.now(timezone.utc).date().isoformat(), release_notes(page)))
     atomic_write(ROOT / "README.md", readme)
-    print(f"Published {tag}; review/commit nix/axe-releases.json, README.md and {changelog}, then push main for website deployment.")
+    committed = commit_release_metadata(version)
+    if committed:
+        print(f"Published {tag}; metadata committed and pushed to main")
+    else:
+        print(f"Published {tag}; metadata was already committed")
 
 
 def main() -> None:

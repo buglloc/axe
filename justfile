@@ -164,16 +164,16 @@ build-vzik-all: build-vzik-linux-amd64 build-vzik-linux-arm64 build-vzik-darwin-
 
 
 
-# Local release preparation never publishes or creates a tag. Review and commit its output.
+# Workflow 1: prepare and review the source release.
 [positional-arguments]
 release-prepare bump:
     python3 tools/release.py prepare "$1"
 
-# Run only from the trusted publisher machine, after pushing the reviewed commit.
+# Workflow 2: validate, publish, and commit/push generated release metadata.
 release-publish: _require-reference-tools
     python3 tools/release.py publish --edition-root "{{edition_root}}" --output "{{out}}"
 
-# Exercise both publisher phases without touching GitHub, S3, or tags.
+# Optional local preflight; it does not touch GitHub, S3, tags, or Git commits.
 [positional-arguments]
 release-check directory: _require-reference-tools
     python3 tools/release.py publish --edition-root "{{edition_root}}" --output "{{out}}" --local-directory "$1"

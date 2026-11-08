@@ -5,6 +5,15 @@ import unittest
 import release
 
 
+class StatusPathTests(unittest.TestCase):
+    def test_porcelain_paths_handle_stripped_leading_status_space(self) -> None:
+        status = "M README.md\n M web/content/changelog.md\n?? release-notes/v1.0.0.md"
+        self.assertEqual(
+            release.git_status_paths(status),
+            {"README.md", "web/content/changelog.md", "release-notes/v1.0.0.md"},
+        )
+
+
 class ChangelogTests(unittest.TestCase):
     def test_publication_orders_releases_and_retries_without_duplication(self) -> None:
         empty = '+++\ntitle = "Changelog"\n+++\n\nNo published releases yet.\n'
