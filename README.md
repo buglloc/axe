@@ -22,19 +22,19 @@ chmod +x axe
 
 ## Downloads
 
-Release [v0.16.0](https://github.com/buglloc/axe/releases/tag/v0.16.0). Verify the binary's SHA-256 before installation; [SHA256SUMS](https://github.com/buglloc/axe/releases/download/v0.16.0/SHA256SUMS) lists every asset.
+Release [v0.16.1](https://github.com/buglloc/axe/releases/tag/v0.16.1). Verify the binary's SHA-256 before installation; [SHA256SUMS](https://github.com/buglloc/axe/releases/download/v0.16.1/SHA256SUMS) lists every asset.
 
 | Target | Binary | SHA-256 |
 | --- | --- | --- |
-| axe x86_64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.0/axe-x86_64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.0/x86_64-linux/axe) | `966cb7796ebdd5047b4cd66c48d3eec50d715b99a70d7b5294be5b82cf4791d5` |
-| axe aarch64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.0/axe-aarch64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.0/aarch64-linux/axe) | `c70f5e202921417192b50fd5ae931238a3c5d4de8ea71599e6edf3377ce904a5` |
-| axe aarch64-darwin | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.0/axe-aarch64-apple-darwin) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.0/aarch64-darwin/axe) | `bcce4f538b475c2962fc09e761f67991514bff3dac05509ab8f659ecf40c0d4f` |
-| axe-relay x86_64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.0/axe-relay-x86_64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.0/x86_64-linux/axe-relay) | `02e373807c26c53b911c7875cc6ae0f4b226b8f0a06f822a83b3f349af4885a0` |
-| axe-relay aarch64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.0/axe-relay-aarch64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.0/aarch64-linux/axe-relay) | `128bc73156713546b68ca853df819524d015546b40331a1131dd5fbcb60c8436` |
-| axe-relay aarch64-darwin | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.0/axe-relay-aarch64-apple-darwin) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.0/aarch64-darwin/axe-relay) | `63c884b83ffe829c651932de05ac8f540a05962d21f7961e8b3db8fb8e40ffad` |
-| vzik x86_64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.0/vzik-x86_64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.0/x86_64-linux/vzik) | `1fdc2fb64b4ddc017f9dd9edc2c80042db9fa4a7c9a6d82ba2ad1d1bca1969b3` |
-| vzik aarch64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.0/vzik-aarch64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.0/aarch64-linux/vzik) | `03c70da005af7a2ca352249ac308dd8da45d5ec7a0e21046bff0e8a93f78795f` |
-| vzik aarch64-darwin | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.0/vzik-aarch64-apple-darwin) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.0/aarch64-darwin/vzik) | `c89b93bce427c8d82422cd4331962de21c35a93721bd2d8e41b0bb494a3942c1` |
+| axe x86_64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.1/axe-x86_64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.1/x86_64-linux/axe) | `2dc55d768d99c2a4bb94e0971f3e5c40bab65b69f6490249d840e77b5487b4d9` |
+| axe aarch64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.1/axe-aarch64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.1/aarch64-linux/axe) | `39867241bacd9b5f544ad99dbcff0130fdd1a48b4aa29e58aacf4e81070d7a57` |
+| axe aarch64-darwin | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.1/axe-aarch64-apple-darwin) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.1/aarch64-darwin/axe) | `9d37480548c3a92d96d0102b7e35dc1c21351e9c1c2999ef1d5f8054ad861375` |
+| axe-relay x86_64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.1/axe-relay-x86_64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.1/x86_64-linux/axe-relay) | `8e15c614df62680a939a12435c8178b027f0ac23b4d6eff815b2d5eee33c4088` |
+| axe-relay aarch64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.1/axe-relay-aarch64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.1/aarch64-linux/axe-relay) | `7662378046e1d2685277aa1b0cc834e5f824a36271c30eb0634953bdba17fe1b` |
+| axe-relay aarch64-darwin | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.1/axe-relay-aarch64-apple-darwin) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.1/aarch64-darwin/axe-relay) | `d1ae3a059e13ab15943a74910b3027b47bb6b37dea5872986248fe231b99b7f3` |
+| vzik x86_64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.1/vzik-x86_64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.1/x86_64-linux/vzik) | `bd6417d94f2afab494c848cee1fc66ab82ae2a9cc7d9048dc968c2d9356ea207` |
+| vzik aarch64-linux | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.1/vzik-aarch64-unknown-linux-musl) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.1/aarch64-linux/vzik) | `4cd41fdc24e16224ba271996a050ba8f11e552ff577685d1e79d30dbf02836e3` |
+| vzik aarch64-darwin | [GitHub](https://github.com/buglloc/axe/releases/download/v0.16.1/vzik-aarch64-apple-darwin) · [S3](https://storage.yandexcloud.net/axe-store/axe/releases/v0.16.1/aarch64-darwin/vzik) | `7caddfac3cbedf427ac5dc82ae892c6e2086c174a642c1ac6f006f93546d4ceb` |
 
 ## Using AXE
 
