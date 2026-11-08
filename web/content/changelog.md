@@ -2,6 +2,20 @@
 title = "Changelog"
 +++
 
+## [v0.16.0](https://github.com/buglloc/axe/releases/tag/v0.16.0) — 2026-11-08
+
+### Highlights
+
+- Added `ast-grep` 0.51.0 to the AXE Store for syntax-aware source-code search, linting, and rewriting on supported targets. (`5f2be1beac075e6f40ef60a9bca4ce2758088afc`)
+
+### Changes
+
+- Improved `axe-relay` error messages with API endpoints, URLs, request context, and relay bind configuration details. (`38210e93ac668173e9093e7785f5b65bcf3df35d`)
+
+### Fixes
+
+- The supplied source facts do not identify a separate user-visible fix.
+
 ## [v0.15.1](https://github.com/buglloc/axe/releases/tag/v0.15.1) — 2026-11-07
 
 ### Highlights
