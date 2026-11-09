@@ -13,21 +13,21 @@
         <a class="button" href="{{ "tools/" | relURL }}">Command list</a>
       </div>
       <dl class="hero__facts" aria-label="AXE inventory">
-        <div><dt>Targets</dt><dd>Linux amd64, arm64; macOS arm64</dd></div>
+        <div><dt>Targets</dt><dd>Linux x86_64, aarch64; macOS aarch64</dd></div>
         <div><dt>Bundled</dt><dd>{{ len $bundledCommands }} commands</dd></div>
         <div><dt>On demand</dt><dd>{{ len $storeCommands }} Store tools</dd></div>
       </dl>
     </div>
 
-    <div class="terminal-window" aria-label="AXE terminal examples">
-      <div class="terminal-tabs" role="tablist" aria-label="Examples">
+    <div class="terminal-window">
+      <div class="terminal-tabs" role="tablist" aria-label="Terminal examples">
         <button type="button" role="tab" aria-selected="true" aria-controls="terminal-shell" id="tab-shell" data-terminal-tab="terminal-shell">rescue</button>
         <button type="button" role="tab" aria-selected="false" aria-controls="terminal-remote" id="tab-remote" data-terminal-tab="terminal-remote" tabindex="-1">remote</button>
         <button type="button" role="tab" aria-selected="false" aria-controls="terminal-inspect" id="tab-inspect" data-terminal-tab="terminal-inspect" tabindex="-1">inspect</button>
       </div>
       <div class="terminal-window__body" id="terminal-shell" role="tabpanel" aria-labelledby="tab-shell">
-        <p><span class="prompt">root@host:/#</span> env -i HOME=/tmp PATH=/nonexistent ./axe --norc --noprofile</p>
-        <p><span class="prompt">axe /#</span> doctor</p>
+        <p><span class="prompt">root@host:/#</span> env -i HOME=/tmp PATH=/nonexistent ./axe</p>
+        <p><span class="prompt">[axe] root@host:/<br>#</span> doctor</p>
         <p class="output">…<br>Self-exec: works<br>Process creation: yes<br>Degradations: none</p>
       </div>
       <div class="terminal-window__body" id="terminal-remote" role="tabpanel" aria-labelledby="tab-remote" hidden>
@@ -37,7 +37,7 @@
         <p><span class="prompt">root@target:/#</span> ./axe sshd --relay-transport quic --relay relay.example:11000 --relay-id host-01</p>
       </div>
       <div class="terminal-window__body" id="terminal-inspect" role="tabpanel" aria-labelledby="tab-inspect" hidden>
-        <p><span class="prompt">axe /#</span> vzik collect | jq -c 'select(.type == "data" and .capability == "host.info") | .data | {os, architecture}'</p>
+        <p><span class="prompt">[axe] root@host:/<br>#</span> vzik collect | jq -c 'select(.type == "data" and .capability == "host.info") | .data | {os, architecture}'</p>
         <p class="output">{"os":"linux","architecture":"x86_64"}</p>
       </div>
     </div>
@@ -51,13 +51,13 @@
 
     <div class="download-grid">
       <div class="install-block">
-        <div class="install-block__bar"><span>x86_64 Linux, OSS edition, stable</span><button type="button" data-copy-target="install-command">copy</button></div>
+        <div class="install-block__bar"><span>x86_64 Linux, OSS edition, stable</span><button type="button" data-copy-target="install-command" aria-label="copy download command">copy</button></div>
         <pre id="install-command"><code>curl -fL -o axe https://storage.yandexcloud.net/axe-store/axe/stable/x86_64-linux/axe
 sha256sum axe</code></pre>
         <p class="install-block__note">Compare the hash with <a href="https://github.com/buglloc/axe/blob/main/README.md#downloads">the published SHA-256</a>, then run <code>chmod +x axe</code> and <code>./axe --version</code>.</p>
       </div>
 
-      <div class="proof-terminal" aria-label="Checking the Linux binary">
+      <div class="proof-terminal" role="group" aria-label="Checking the Linux binary">
         <p><span class="prompt">$</span> file axe</p>
         <p class="output">axe: ELF 64-bit LSB executable, x86-64, version 1 (GNU/Linux), <strong>statically linked</strong>, BuildID[sha1]=…, stripped</p>
         <p><span class="prompt">$</span> readelf -lW axe | grep INTERP</p>
@@ -76,7 +76,7 @@ sha256sum axe</code></pre>
     {{ with hugo.Data.bootstrap }}
     <div class="bootstrap" id="bootstrap">
       <h3 id="bootstrap-title">Bootstrap commands</h3>
-      <p>For hosts where the download above does not work. Each program downloads the AXE release for the host's architecture and checks its size and digest before running it.</p>
+      <p>Use these when the download above does not work on the host. Each program fetches the AXE release for the host's architecture and checks its size and digest before running it. The shell script behind the curl, wget and Shell options skips the digest check, with a warning, only on a host with no SHA-256 tool.</p>
       <div class="bootstrap-modes" role="tablist" aria-label="Bootstrap method">
         <button type="button" role="tab" id="bootstrap-tab-fetch" aria-controls="bootstrap-panel" aria-selected="true" data-bootstrap-mode="fetch">curl or wget</button>
         <button type="button" role="tab" id="bootstrap-tab-paste" aria-controls="bootstrap-panel" aria-selected="false" tabindex="-1" data-bootstrap-mode="paste">Paste a script</button>
@@ -105,8 +105,9 @@ sha256sum axe</code></pre>
           </label>
         </div>
         <div class="install-block">
-          <div class="install-block__bar"><span data-bootstrap-label></span><button type="button" data-copy-target="bootstrap-command">copy</button></div>
-          <pre id="bootstrap-command" class="bootstrap-command"><code data-bootstrap-command>Loading bootstrap command…</code></pre>
+          <div class="install-block__bar"><span data-bootstrap-label>curl, then sh</span><button type="button" data-copy-target="bootstrap-command" aria-label="copy bootstrap command">copy</button></div>
+          <pre id="bootstrap-command" class="bootstrap-command"><code data-bootstrap-command>{{ with index .targets "x86_64-linux" }}curl -fo a {{ .runtimes.shell.url }}
+sh a{{ end }}</code></pre>
           <p class="install-block__note" data-bootstrap-note></p>
         </div>
       </div>
@@ -143,8 +144,8 @@ sha256sum axe</code></pre>
           {{ range .Params.failures }}
           <tr>
             <th scope="row">{{ .condition }}</th>
-            <td>{{ $.RenderString .works }}</td>
-            <td>{{ with .limits }}{{ $.RenderString . }}{{ else }}<span class="muted" aria-label="none">—</span>{{ end }}</td>
+            <td data-label="What still works">{{ $.RenderString .works }}</td>
+            <td data-label="Limits">{{ with .limits }}{{ $.RenderString . }}{{ else }}<span class="muted" aria-hidden="true">—</span><span class="sr-only">none</span>{{ end }}</td>
           </tr>
           {{ end }}
         </tbody>
@@ -167,8 +168,8 @@ sha256sum axe</code></pre>
         <div><dt><code>vzik collect</code></dt><dd>Bounded host and container evidence as JSONL. Probes that could not run are reported as unavailable.</dd></div>
       </dl>
 
-      <div class="proof-terminal" aria-label="Excerpt from axe doctor output">
-        <p><span class="prompt">axe /#</span> doctor</p>
+      <div class="proof-terminal" role="group" aria-label="Excerpt from axe doctor output">
+        <p><span class="prompt">[axe] root@host:/<br>#</span> doctor</p>
         <p class="output">…<br>Container indicator: heuristic match — porto (high confidence)<br>Sandboxing: heuristic match — bubblewrap (high confidence)<br>No new privileges: enabled<br>Seccomp: filtering enabled (2 filters)</p>
       </div>
     </div>
@@ -180,7 +181,7 @@ sha256sum axe</code></pre>
       <p>{{ .Params.sections.remoteLead }}</p>
     </div>
 
-    <div class="relay-diagram" aria-label="An OpenSSH client connects to axe-relay; AXE sshd on the target keeps an outbound control connection to the relay">
+    <div class="relay-diagram" role="img" aria-label="An OpenSSH client connects to axe-relay; AXE sshd on the target keeps an outbound control connection to the relay">
       <div class="diagram-node">
         <strong>Operator</strong>
         <small>OpenSSH client</small>

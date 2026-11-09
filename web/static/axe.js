@@ -250,7 +250,7 @@
         return {
           command: `sh -c ${quote(textOf(runtime.content_base64))}`,
           label: "sh",
-          note: "For hosts with curl, wget, Python, Perl, Node.js or bash but without working HTTPS. The script downloads AXE over plain HTTP; the pinned digest protects it.",
+          note: "For hosts with curl, wget, Python, Perl, Node.js or bash but without working HTTPS. The script downloads AXE over plain HTTP and checks it against the pinned SHA-256 digest.",
         };
       }
       if (runtimeName === "perl") {

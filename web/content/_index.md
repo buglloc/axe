@@ -11,15 +11,15 @@ condition = "No coreutils or PATH"
 works = "Bundled commands run without host coreutils or PATH."
 [[failures]]
 condition = "/proc unavailable"
-works = "A running Linux AXE keeps launching bundled commands."
-limits = "Diagnostics that read procfs are limited."
+works = "Bundled commands still start."
+limits = "Process listings and other diagnostics that read procfs are incomplete or unavailable."
 [[failures]]
 condition = "Read-only or noexec filesystem"
-works = "Bundled commands start from the original executable. AXE does not need to write a copy."
-limits = "AXE cannot create a private executable copy. If the original executable is also gone, child commands may fail."
+works = "Bundled commands start from the original executable."
+limits = "AXE cannot write a private executable copy, so child commands may fail if the original executable is also removed."
 [[failures]]
 condition = "Binary deleted or replaced"
-works = "A running Linux AXE keeps launching bundled commands and SSH sessions from the original executable."
+works = "On Linux, a running AXE keeps launching bundled commands and SSH sessions from the original executable."
 limits = "On macOS, only builtins, aliases, functions and `doctor` remain."
 [[failures]]
 condition = "Child processes cannot start"
@@ -27,7 +27,7 @@ works = "Shell builtins, aliases, functions and `doctor`."
 limits = "Bundled commands do not fall back to host tools."
 [[failures]]
 condition = "No network"
-works = "Bundled commands, and Store tools already in the verified cache."
+works = "Bundled commands and Store tools already in the verified cache."
 limits = "Store tools that are not cached are unavailable."
 [[failures]]
 condition = "No root"
