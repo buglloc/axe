@@ -189,12 +189,14 @@ def prepare(bump: str) -> None:
     )
     prompt = (
         "Write English Markdown release notes for the OSS edition, using ONLY the attached "
-        "source facts. Start with ## Highlights, then ## Changes and ## Fixes if supported. "
+        "source facts. Use ## Highlights, ## Changes and ## Fixes, in that order, and omit "
+        "any section that has no supported entries. "
         "The README describes existing capabilities, not necessarily changes in this release: "
         "claim a new change only when supported by the commit range or source diff. "
-        "Describe observable behavior, not guesses. Cite a commit hash for each claim. "
+        "Describe observable behavior, not guesses. End each claim with its commits as "
+        "([abc1234](https://github.com/buglloc/axe/commit/<full hash>)), comma-separated. "
         "Do not include a heading for the version, preamble, code fence, or invented links. "
-        "If the evidence is insufficient, explicitly say so in the relevant section. "
+        "Never mention the evidence, its sources or its limits; leave out what it does not support. "
         "Output ONLY the Markdown body; a human will review before publication. Use skill://avoid-ai-writing"
     )
 
