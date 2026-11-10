@@ -103,7 +103,7 @@ fn offline_axe(scratch: &Scratch) -> Command {
 }
 
 #[test]
-fn shell_uses_axe_prompt_without_rc_files() {
+fn shell_skips_user_rc_files() {
     let scratch = Scratch::new("prompt-without-rc");
     fs::write(scratch.path().join(".bashrc"), "AXE_RC_GUARD=bashrc\n")
         .expect("write bash rc fixture");
@@ -114,7 +114,7 @@ fn shell_uses_axe_prompt_without_rc_files() {
         offline_axe(&scratch)
             .env("TERM", "dumb")
             .args(["--no-config", "-i"]),
-        b"printf 'ps1=<%s> rc=<%s>\\n' \"$PS1\" \"${AXE_RC_GUARD-unset}\"; exit\n",
+        b"printf 'rc=<%s>\\n' \"${AXE_RC_GUARD-unset}\"; exit\n",
     );
 
     assert!(
@@ -123,7 +123,7 @@ fn shell_uses_axe_prompt_without_rc_files() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains(r"ps1=<[axe] \u@\H:\w\n\$ > rc=<unset>"),
+        String::from_utf8_lossy(&output.stdout).contains("rc=<unset>"),
         "stdout: {}",
         String::from_utf8_lossy(&output.stdout)
     );

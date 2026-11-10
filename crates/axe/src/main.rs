@@ -122,7 +122,7 @@ fn main() {
     }
 
     disable_persistent_shell_history();
-    brush_shell::entry::run_with_default_args(Some(r"[axe] \u@\H:\w\n\$ "), &["--norc"]);
+    brush_shell::entry::run_with_default_args(Some(r"\n[axe] \u@\H:\w\n\$ "), &["--norc"]);
 }
 
 /// Prints AXE's own help or version for a lone `--help`/`-h`/`--version`.

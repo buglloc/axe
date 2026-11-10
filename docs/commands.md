@@ -46,9 +46,11 @@ The applet PATH bridge is best-effort; bundled commands still resolve without it
 
 ## Interactive prompt
 
-The default `PS1` is `[axe] \u@\H:\w\n\$ `: the user and full hostname,
-followed by the current directory, a new line, and `$` for a regular user or
-`#` for root. The prompt is independent of the executable's filename.
+The default `PS1` is `\n[axe] \u@\H:\w\n\$ `: a blank line separating the
+prompt from command output, the user and full hostname, the current directory,
+then a new line and `$` for a regular user or `#` for root. The blank line also
+appears before the first prompt. The prompt is independent of the executable's
+filename.
 
 AXE does not automatically load `~/.bashrc` or `~/.brushrc`. An inherited
 `PS1`, including an empty value, still takes precedence over the default.
