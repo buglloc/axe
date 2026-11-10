@@ -2,6 +2,22 @@
 title = "Changelog"
 +++
 
+## [v0.16.2](https://github.com/buglloc/axe/releases/tag/v0.16.2) — 2026-11-10
+
+### Highlights
+
+- Interactive shell prompts now begin with a blank line, separating them from command output. ([8cfafee](https://github.com/buglloc/axe/commit/8cfafee858eb4d91906719a9fa114fb5be7e44ac))
+
+### Changes
+
+- Expanded and corrected the website’s Store patch descriptions, including first-start behavior, OpenSSH host-key defaults, and bundled CA roots. ([1400216](https://github.com/buglloc/axe/commit/1400216450adda7ec30b4344e1e6cd3aa3c752e0))
+- Release-note generation now omits empty sections and uses a consistent commit-link format. ([ccaf614](https://github.com/buglloc/axe/commit/ccaf614585010d51d5eb6903e1518ce522df1ea4))
+
+### Fixes
+
+- Website navigation and failure-table labels remain visible on narrow screens. Download and bootstrap copy buttons now have descriptive screen-reader labels. ([1400216](https://github.com/buglloc/axe/commit/1400216450adda7ec30b4344e1e6cd3aa3c752e0))
+- Corrected changelog commit links and removed generator residue and the stale Unreleased section. ([1400216](https://github.com/buglloc/axe/commit/1400216450adda7ec30b4344e1e6cd3aa3c752e0))
+
 ## [v0.16.1](https://github.com/buglloc/axe/releases/tag/v0.16.1) — 2026-11-08
 
 ### Changes
