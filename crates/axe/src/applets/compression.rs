@@ -921,28 +921,19 @@ impl Options {
         let decoded = match self.format {
             Format::Gzip => decode_gzip(input, &mut output, passthrough)?,
             Format::Bzip2 => decode_bzip2(input, &mut output, passthrough && !self.test)?,
-            Format::Xz | Format::Zstd => {
+            Format::Xz => {
                 let mut input = input;
                 let mut magic = [0; 6];
                 let length = read_prefix(&mut input, &mut magic)?;
                 let prefix = &magic[..length];
-                let recognized = match self.format {
-                    Format::Xz => matches_magic(prefix, b"\xfd7zXZ\0"),
-                    Format::Zstd => zstd_magic(prefix),
-                    _ => unreachable!("only xz and zstd need this probe"),
-                };
                 let mut input = prefix.chain(input);
-                if passthrough && !self.test && !recognized {
+                if passthrough && !self.test && !matches_magic(prefix, b"\xfd7zXZ\0") {
                     Decoded::clean(io::copy(&mut input, &mut output)?)
-                } else if matches!(self.format, Format::Xz) {
-                    Decoded::clean(io::copy(&mut XzReader::new(input, true), &mut output)?)
                 } else {
-                    Decoded::clean(io::copy(
-                        &mut zstd::stream::read::Decoder::new(input)?,
-                        &mut output,
-                    )?)
+                    Decoded::clean(io::copy(&mut XzReader::new(input, true), &mut output)?)
                 }
             }
+            Format::Zstd => decode_zstd(input, &mut output, passthrough && !self.test)?,
         };
         output.flush()?;
         Ok(decoded)
@@ -1373,6 +1364,37 @@ fn zstd_magic(prefix: &[u8]) -> bool {
     }
     let magic = u32::from_le_bytes(prefix[..4].try_into().expect("four-byte magic"));
     (0xfd2f_b522..=0xfd2f_b528).contains(&magic) || magic & 0xffff_fff0 == 0x184d_2a50
+}
+
+fn decode_zstd(input: impl Read, mut output: impl Write, passthrough: bool) -> io::Result<Decoded> {
+    let mut input = io::BufReader::with_capacity(zstd::zstd_safe::DCtx::in_size(), input);
+    let mut decoded = Decoded::clean(0);
+    let mut context = None;
+    loop {
+        let mut magic = [0; 4];
+        let length = read_prefix(&mut input, &mut magic)?;
+        if length == 0 && context.is_some() {
+            return Ok(decoded);
+        }
+        let prefix = &magic[..length];
+        // Probe every frame boundary; recognized but corrupt frames must still fail.
+        if passthrough && !zstd_magic(prefix) {
+            output.write_all(prefix)?;
+            decoded.bytes += length as u64 + io::copy(&mut input, &mut output)?;
+            return Ok(decoded);
+        }
+        if context.is_none() {
+            context = Some(zstd::zstd_safe::DCtx::try_create().ok_or_else(|| {
+                io::Error::other("zstd could not allocate a decompression context")
+            })?);
+        }
+        let mut frame = zstd::stream::read::Decoder::with_context(
+            prefix.chain(&mut input),
+            context.as_mut().expect("initialized decompression context"),
+        )
+        .single_frame();
+        decoded.bytes += io::copy(&mut frame, &mut output)?;
+    }
 }
 
 fn decode_bzip2(

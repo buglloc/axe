@@ -182,3 +182,44 @@ fn strings_all_whitespace_includes_vertical_tabs() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"one\ntwo\n");
 }
+
+#[test]
+fn zstd_forced_stdout_copies_plaintext_after_complete_frames() {
+    let scratch = Scratch::new("zstd-tail");
+    let first = zstd::stream::encode_all(&b"first\0\xff\n"[..], 1).unwrap();
+    let second = zstd::stream::encode_all(&b"second\n"[..], 1).unwrap();
+    for frames in [vec![first.as_slice()], vec![first.as_slice(), second.as_slice()]] {
+        for tail in [&b"GARBAGE"[..], &[0][..], &[0; 4][..], &[0; 8][..]] {
+            let mut compressed = frames.concat();
+            compressed.extend_from_slice(tail);
+            let mut expected = b"first\0\xff\n".to_vec();
+            if frames.len() == 2 {
+                expected.extend_from_slice(b"second\n");
+            }
+            expected.extend_from_slice(tail);
+            let output = run(scratch.path(), "zstd", &["-dcf"], &compressed);
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(output.stdout, expected);
+            let output = run(scratch.path(), "zstd", &["-dc"], &compressed);
+            assert!(!output.status.success(), "{output:?}");
+        }
+    }
+    for tail in [
+        &first[..3],
+        &b"\x50\x2a\x4d"[..],
+        &b"\x50\x2a\x4d\x18\x04\0\0\0x"[..],
+    ] {
+        let mut compressed = first.clone();
+        compressed.extend_from_slice(tail);
+        let output = run(scratch.path(), "zstd", &["-dcf"], &compressed);
+        assert!(!output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"first\0\xff\n");
+    }
+    let mut compressed = first;
+    compressed.extend_from_slice(b"\x50\x2a\x4d\x18\x03\0\0\0xyz");
+    compressed.extend_from_slice(&second);
+    compressed.extend_from_slice(b"tail");
+    let output = run(scratch.path(), "zstd", &["-dcf"], &compressed);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"first\0\xff\nsecond\ntail");
+}
