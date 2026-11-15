@@ -33,7 +33,7 @@ const NO_SHELL_EXECUTABLE: &str = "sshd: cannot locate AXE executable for shell 
 const DEFAULT_SSH_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const SSH_HOME_DIRECTORY: &str = ".axe-home";
 
-const SHELL_WELCOME: &[u8] = b"AXE shell | agent context: skill://axe | runtime: doctor --json | host evidence: vzik capabilities\r\n---\r\n\r\n";
+const SHELL_WELCOME: &[u8] = b"AXE shell | agent context: skill://axe | runtime: doctor --json | host evidence: vzik capabilities\r\n---\r\n";
 
 #[derive(Parser)]
 #[command(
