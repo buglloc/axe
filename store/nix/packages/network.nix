@@ -242,6 +242,11 @@
       withLinuxMemlock = false;
     }).overrideAttrs
     (old: {
+      version = "10.6p2";
+      src = buildPkgs.fetchurl {
+        url = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p2.tar.gz";
+        hash = "sha256-muRIcgkM8vBrPPn/FH5/FvMJZxNAdj7S+ZJIOYrinVs=";
+      };
       outputs = ["out"];
       configureFlags =
         (old.configureFlags or [])
@@ -249,7 +254,9 @@
           "--prefix=/usr"
           "--sysconfdir=/etc/ssh"
         ];
-      patches = (old.patches or []) ++ [../patches/openssh-axe-defaults.patch];
+      patches =
+        builtins.filter (patch: builtins.baseNameOf (toString patch) != "locale_archive.patch") (old.patches or [])
+        ++ [../patches/openssh-axe-defaults.patch];
       buildPhase = ''
         runHook preBuild
         make SSH_PROGRAM=ssh ssh scp sftp ssh-add ssh-agent ssh-keygen ssh-keyscan

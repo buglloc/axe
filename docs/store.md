@@ -236,7 +236,7 @@ Neither tool sends telemetry or checks for application updates automatically. Su
 
 ## Security source updates
 
-OpenSSL, curl, and NSS CA data come from the nixpkgs revision pinned in `flake.lock`. Update them with `nix flake update nixpkgs`, then regenerate and check the Store bootstrap metadata. The development shell uses the same pin so unmodified toolchain dependencies can be substituted from `cache.nixos.org`.
+OpenSSL and NSS CA data come from the nixpkgs revision pinned in `flake.lock`. Curl has an independent source pin in `store/nix/packages/network.nix`. Review package-specific overrides when updating nixpkgs, then regenerate and check the Store bootstrap metadata. The development shell retains the unmodified root pin.
 
 Library and CA-bundle updates require rebuilding their consumers, including tools whose own version is unchanged. A new AXE executable does not replace published Store payloads. Build and publish the updated packages, then refresh the signed bootstrap snapshot through the publication workflow below.
 
