@@ -83,6 +83,7 @@ zstd = "0.14"
 
 [patch.crates-io]
 jaq-json = { path = "vendor/jaq-json" }
+jaq-std = { path = "vendor/jaq-std" }
 brush-shell = { path = "vendor/brush-shell" }
 brush-core = { path = "vendor/brush-core" }
 brush-builtins = { path = "vendor/brush-builtins" }
@@ -106,19 +107,25 @@ procutils-watch = { path = "vendor/procutils-watch" }
 procutils-ps = { path = "vendor/procutils-ps" }
 uu_df = { path = "vendor/uu_df" }
 uu_base32 = { path = "vendor/uu_base32" }
+uu_comm = { path = "vendor/uu_comm" }
+uu_cp = { path = "vendor/uu_cp" }
 uu_csplit = { path = "vendor/uu_csplit" }
 uu_env = { path = "vendor/uu_env" }
 uu_expand = { path = "vendor/uu_expand" }
 uu_fmt = { path = "vendor/uu_fmt" }
 uu_fold = { path = "vendor/uu_fold" }
 uu_grep = { path = "vendor/uu_grep" }
+uu_head = { path = "vendor/uu_head" }
 uu_install = { path = "vendor/uu_install" }
+uu_join = { path = "vendor/uu_join" }
 uu_logname = { path = "vendor/uu_logname" }
 uu_ls = { path = "vendor/uu_ls" }
 uu_mkdir = { path = "vendor/uu_mkdir" }
 uu_mkfifo = { path = "vendor/uu_mkfifo" }
 uu_mknod = { path = "vendor/uu_mknod" }
 uu_more = { path = "vendor/uu_more" }
+uu_mv = { path = "vendor/uu_mv" }
+uu_paste = { path = "vendor/uu_paste" }
 uu_pr = { path = "vendor/uu_pr" }
 uu_printf = { path = "vendor/uu_printf" }
 uu_printenv = { path = "vendor/uu_printenv" }
@@ -128,9 +135,12 @@ uu_sort = { path = "vendor/uu_sort" }
 uu_stat = { path = "vendor/uu_stat" }
 uu_stty = { path = "vendor/uu_stty" }
 uu_tail = { path = "vendor/uu_tail" }
+uu_timeout = { path = "vendor/uu_timeout" }
+uu_uniq = { path = "vendor/uu_uniq" }
 uu_unexpand = { path = "vendor/uu_unexpand" }
-# uucore embeds utility locales from the complete upstream source tree.
-uucore = { git = "https://github.com/uutils/coreutils", tag = "0.12.0" }
+uu_wc = { path = "vendor/uu_wc" }
+# uucore retains the complete pinned utility locale inventory.
+uucore = { path = "vendor/uucore" }
 
 # brush-interactive depends on its upstream brush-core sibling by path; keep one patched copy.
 [patch."https://github.com/reubeno/brush"]
