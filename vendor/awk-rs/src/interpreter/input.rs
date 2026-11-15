@@ -75,13 +75,18 @@ impl<'a> RecordReader<'a> {
         }
     }
 
-    fn record(&mut self, end: usize, next: usize) -> BString {
+    fn record(&mut self, end: usize, next: usize) -> (BString, BString) {
         let record = self.buffer[self.start..end].to_vec().into();
+        let terminator = self.buffer[end..next].to_vec().into();
         self.start = next;
-        record
+        (record, terminator)
     }
 
-    pub(super) fn read_record(&mut self, rs: &[u8], multibyte: bool) -> Result<Option<BString>> {
+    pub(super) fn read_record(
+        &mut self,
+        rs: &[u8],
+        multibyte: bool,
+    ) -> Result<Option<(BString, BString)>> {
         self.discard_consumed();
         if rs.is_empty() {
             return self.paragraph();
@@ -110,7 +115,7 @@ impl<'a> RecordReader<'a> {
         result
     }
 
-    fn paragraph(&mut self) -> Result<Option<BString>> {
+    fn paragraph(&mut self) -> Result<Option<(BString, BString)>> {
         while self.ensure(self.start)? {
             let blanks = self.buffer[self.start..]
                 .iter()
@@ -141,7 +146,11 @@ impl<'a> RecordReader<'a> {
                 at += 1;
                 continue;
             }
-            return Ok(Some(self.record(at, at + 2)));
+            let mut next = at + 2;
+            while self.ensure(next)? && self.buffer[next] == b'\n' {
+                next += 1;
+            }
+            return Ok(Some(self.record(at, next)));
         }
     }
 }
@@ -199,7 +208,7 @@ impl RegexSeparator {
         })
     }
 
-    fn read(&mut self, reader: &mut RecordReader<'_>) -> Result<Option<BString>> {
+    fn read(&mut self, reader: &mut RecordReader<'_>) -> Result<Option<(BString, BString)>> {
         self.seeds.clear();
         let mut best: Option<Range<usize>> = None;
         let mut at = reader.start;

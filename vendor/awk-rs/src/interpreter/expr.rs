@@ -412,7 +412,11 @@ impl<'a> Interpreter<'a> {
                     .get_mut(&filename)
                     .expect("input file is open");
                 match reader.read_record(&self.rs[..separator_len], self.multibyte) {
-                    Ok(record) => record,
+                    Ok(Some((record, terminator))) => {
+                        self.variables.insert("RT".into(), Value::from_string(terminator));
+                        Some(record)
+                    }
+                    Ok(None) => None,
                     Err(crate::error::Error::Io(error)) => {
                         self.set_variable_value("ERRNO", Value::from_string(error.to_string()))?;
                         return Ok(Value::Number(-1.0));
@@ -455,7 +459,11 @@ impl<'a> Interpreter<'a> {
                     .reader
                     .read_record(&self.rs[..separator_len], self.multibyte)
                 {
-                    Ok(record) => record,
+                    Ok(Some((record, terminator))) => {
+                        self.variables.insert("RT".into(), Value::from_string(terminator));
+                        Some(record)
+                    }
+                    Ok(None) => None,
                     Err(crate::error::Error::Io(error)) => {
                         self.set_variable_value("ERRNO", Value::from_string(error.to_string()))?;
                         return Ok(Value::Number(-1.0));

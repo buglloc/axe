@@ -20,6 +20,8 @@ Source: the `awk-rs` 0.2.0 crate from crates.io, upstream revision
   `%c` behavior, and byte-preserving case/length operations.
 - Parse exponentiation above unary signs and below increment operators, with
   right-associative powers and signed exponents.
+- Populate `RT` with the consumed string, regex, or paragraph record separator
+  for main input and redirected `getline`; unterminated records have empty `RT`.
 - Keep a standalone library manifest without the upstream binary, integration
   tests, benchmarks, benchmark dependencies, and release profile; AXE invokes
   the library through its own applet wrapper.

@@ -342,9 +342,10 @@ impl<'a> Interpreter<'a> {
             }
             let separator_len = self.record_separator_len();
             if let Some(input) = self.main_input.as_mut() {
-                if let Some(record) =
+                if let Some((record, terminator)) =
                     input.read_record(&self.rs[..separator_len], self.multibyte)?
                 {
+                    self.variables.insert("RT".into(), Value::from_string(terminator));
                     return Ok(Some(record));
                 }
             }

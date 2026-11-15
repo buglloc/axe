@@ -43,3 +43,51 @@ fn awk_power_binds_above_signs_and_below_increments() {
         b"-4 4 0.25 512 -0.25 9 9 4\n",
     );
 }
+
+#[test]
+fn awk_rt_tracks_regex_string_and_paragraph_terminators() {
+    assert_output(
+        run(
+            "awk",
+            &[r#"BEGIN { RS="a+" } { print NR, "<"$0">", "<"RT">" }"#],
+            b"aaaXaaY",
+            "C",
+        ),
+        0,
+        b"1 <> <aaa>\n2 <X> <aa>\n3 <Y> <>\n",
+    );
+    assert_output(
+        run(
+            "awk",
+            &[r#"{ print "<"$0">", length(RT); if (NR==1) { getline x; print "<"x">", length(RT) } }"#],
+            b"one\ntwo\nthree",
+            "C",
+        ),
+        0,
+        b"<one> 1\n<two> 1\n<three> 0\n",
+    );
+    assert_output(
+        run(
+            "awk",
+            &[r#"BEGIN { RS="" } { print "<"$0">", length(RT) }"#],
+            b"\n\none\n\n\n\ntwo\n",
+            "C",
+        ),
+        0,
+        b"<one> 4\n<two> 1\n",
+    );
+}
+
+#[test]
+fn awk_redirected_getline_sets_rt_without_changing_main_counters() {
+    assert_output(
+        run(
+            "awk",
+            &[r#"BEGIN { RS="a+"; while ((getline x < "/dev/stdin") > 0) print NR, "<"x">", "<"RT">" }"#],
+            b"aaXaaaY",
+            "C",
+        ),
+        0,
+        b"0 <> <aa>\n0 <X> <aaa>\n0 <Y> <>\n",
+    );
+}
