@@ -80,6 +80,7 @@ struct OutputOptions {
     merge_files_print: Option<usize>,
     offset_spaces: usize,
     form_feed_used: bool,
+    retain_form_feeds: bool,
     col_sep_for_printing: String,
     line_width: Option<usize>,
     expand_tabs: Option<ExpandTabsOptions>,
@@ -1134,6 +1135,7 @@ fn build_options(
         merge_files_print,
         offset_spaces,
         form_feed_used,
+        retain_form_feeds: !matches.get_flag(options::OMIT_PAGINATION),
         col_sep_for_printing,
         line_width,
         expand_tabs,
@@ -1417,7 +1419,7 @@ fn write_page(
     }
     if options.display_header_and_trailer || options.form_feed_used {
         writer.write_all(page_separator)?;
-    } else if lines.iter().any(|line| line.form_feed) {
+    } else if options.retain_form_feeds && lines.iter().any(|line| line.form_feed) {
         writer.write_all(&[FF])?;
     }
     writer.flush()?;

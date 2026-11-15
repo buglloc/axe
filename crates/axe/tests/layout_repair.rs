@@ -345,3 +345,12 @@ fn ptx_reference_mode_accepts_nonempty_matches_at_offset_zero() {
     assert!(output.stdout.windows(3).any(|bytes| bytes == b"REF"));
     assert!(output.stdout.windows(6).any(|bytes| bytes == b"SECOND"));
 }
+
+#[test]
+fn pr_omit_pagination_discards_input_form_feeds() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(scratch.path(), "pr", &["-T"], b"a\x0cb\nc\n"),
+        b"a\nb\nc\n",
+    );
+}

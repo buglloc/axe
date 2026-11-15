@@ -15,8 +15,8 @@ Source: the `uu_pr` 0.12.0 crate from crates.io, upstream revision
   now follow GNU pr.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
-- Preserve input form-feed page boundaries with omitted headers, including
-  empty pages, and keep record numbering continuous across those boundaries.
+- Preserve input form-feed page boundaries with omitted headers (except `-T`),
+  including empty pages, and keep record numbering continuous across boundaries.
 - Do not double-space after an unterminated final record or a form-feed break.
 - Keep inter-column padding pending until a following number or content byte
   needs it, so truncated empty columns neither shift later columns nor leak
