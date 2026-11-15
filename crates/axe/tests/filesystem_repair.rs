@@ -177,3 +177,21 @@ fn cp_backup_preserves_original_hardlinks_and_replaces_destination() {
     assert_eq!(fs::read(scratch.path().join("source")).unwrap(), b"original");
     assert_eq!(fs::read(scratch.path().join("destination~")).unwrap(), b"original");
 }
+
+#[test]
+fn cp_no_clobber_skips_same_inode_but_reports_cyclic_lookup() {
+    let scratch = Scratch::new("cp-no-clobber");
+    fs::create_dir(scratch.path().join("source")).unwrap();
+    fs::write(scratch.path().join("source/file"), b"original").unwrap();
+    fs::hard_link(scratch.path().join("source/file"), scratch.path().join("hard")).unwrap();
+    symlink("source", scratch.path().join("alias")).unwrap();
+    for destination in ["source/file", "hard", "alias", "alias/"] {
+        success(&run(scratch.path(), "cp", &["-n", "source/file", destination]));
+        assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
+    }
+    symlink("cycle", scratch.path().join("cycle")).unwrap();
+    let output = run(scratch.path(), "cp", &["-n", "source/file", "cycle"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(fs::read_link(scratch.path().join("cycle")).unwrap(), Path::new("cycle"));
+    assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
+}

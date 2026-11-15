@@ -2169,6 +2169,9 @@ fn handle_existing_dest(
     source_in_command_line: bool,
     copied_files: &HashMap<FileInformation, PathBuf>,
 ) -> CopyResult<()> {
+    if options.overwrite == OverwriteMode::NoClobber {
+        return options.overwrite.verify(dest, options.debug);
+    }
     // Disallow copying a file to itself, unless `--force` and
     // `--backup` are both specified.
     if is_forbidden_to_copy_to_same_file(source, dest, options, source_in_command_line) {
@@ -2621,7 +2624,16 @@ fn copy_file(
     let dest_is_symlink = initial_dest_metadata
         .as_ref()
         .is_some_and(|md| md.file_type().is_symlink());
-    let dest_target_exists = dest.try_exists().unwrap_or(false);
+    let dest_target_exists = match dest.try_exists() {
+        Ok(exists) => exists,
+        Err(error) if options.overwrite == OverwriteMode::NoClobber => {
+            return Err(CpError::IoErrContext(
+                error,
+                format!("cannot stat {}", dest.quote()),
+            ));
+        }
+        Err(_) => false,
+    };
     // Fail if dest is a dangling symlink or a symlink this program created previously
     if dest_is_symlink {
         if FileInformation::from_path(dest, false).is_ok_and(|info| symlinked_files.contains(&info))

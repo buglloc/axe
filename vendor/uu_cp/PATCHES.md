@@ -10,3 +10,6 @@ following nested symlinks.
 
 Backups rename the destination entry instead of copying its contents, preserving
 its inode and hardlink relationships while creating an independent replacement.
+
+No-clobber skips existing same-inode destinations before same-file rejection,
+but propagates destination lookup errors such as symlink loops.
