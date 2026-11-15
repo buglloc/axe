@@ -97,6 +97,13 @@
     });
 
   nucleiTemplates = buildPkgs.nuclei-templates.overrideAttrs (old: {
+    version = "10.5.2";
+    src = buildPkgs.fetchFromGitHub {
+      owner = "projectdiscovery";
+      repo = "nuclei-templates";
+      rev = "5442582a875f96887bfe403c6de562de460897e7";
+      hash = "sha256-d3+1GcqLNCcr+HlOY6y3Jkh39uCPQHN6DvXLIN68AzY=";
+    };
     installPhase =
       (old.installPhase or "")
       + ''
