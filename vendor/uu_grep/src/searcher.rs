@@ -419,7 +419,7 @@ impl<'a> Searcher<'a> {
                 let (line_beg, line_end) = line_bounds(chunk, p + rel);
 
                 // A NUL anywhere up to this line marks the file binary, as does
-                // an invalid-UTF-8 matching line.
+                // an invalid matching line in a UTF-8 locale.
                 if detect_binary && !binary {
                     if memchr(0, &chunk[nul_scanned..line_end]).is_some() {
                         binary = true;
@@ -435,7 +435,7 @@ impl<'a> Searcher<'a> {
                     line
                 };
 
-                if detect_binary && !binary && std::str::from_utf8(line).is_err() {
+                if detect_binary && !binary && self.config.utf8 && std::str::from_utf8(line).is_err() {
                     binary = true;
                 }
 
@@ -528,8 +528,8 @@ impl<'a> Searcher<'a> {
             }
 
             if let Some(positions) = self.session_match_line(line) {
-                // TODO: GNU grep respects LANG. Here, I'm always checking for valid UTF-8.
-                if self.config.binary_mode != BinaryMode::WithoutMatch
+                if self.config.utf8
+                    && self.config.binary_mode != BinaryMode::WithoutMatch
                     && !self.session_mark_binary_if(|| std::str::from_utf8(line).is_err())
                 {
                     return Ok(false);

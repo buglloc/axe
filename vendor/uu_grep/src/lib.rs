@@ -103,6 +103,7 @@ pub struct Config<'a> {
 
     // Matcher
     pub patterns: &'a [&'a str],
+    pub utf8: bool,
     pub regex_mode: RegexMode,
     pub ignore_case: bool,
     pub invert_match: bool,
@@ -412,6 +413,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
         // Matcher
         patterns: &patterns,
+        utf8: utf8_locale(),
         regex_mode,
         ignore_case,
         invert_match,
@@ -474,6 +476,29 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     }
 
     searcher.finish()
+}
+
+fn utf8_locale() -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: the locale and codeset pointers are NUL-terminated C strings.
+        // Initialization happens before matching or any search workers.
+        unsafe {
+            if libc::setlocale(libc::LC_CTYPE, c"".as_ptr()).is_null() {
+                return false;
+            }
+            let codeset = libc::nl_langinfo(libc::CODESET);
+            if codeset.is_null() {
+                return false;
+            }
+            let codeset = std::ffi::CStr::from_ptr(codeset).to_bytes();
+            codeset.eq_ignore_ascii_case(b"UTF-8") || codeset.eq_ignore_ascii_case(b"UTF8")
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 pub fn uu_app() -> Command {

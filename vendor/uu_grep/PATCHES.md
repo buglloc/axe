@@ -10,6 +10,9 @@ upstream packaging provenance, not a local AXE edit.
   Unicode replacement characters, matching GNU grep in the C locale.
 - Preserve raw path arguments and xargs records through the grep invocation
   boundary, including non-UTF-8 names.
+- Resolve the active locale codeset before matching. C/POSIX uses byte regexes,
+  ASCII POSIX classes and word boundaries, and only NUL marks binary data;
+  UTF-8 locales retain Unicode matching and invalid-encoding binary detection.
 - Keep a standalone manifest without upstream CI, fuzzing, pre-commit, and
   development-only package files; AXE owns dependency resolution.
 
@@ -17,4 +20,5 @@ Upstreamability: byte-oriented paths and records are intended for upstream;
 upstream's byte-output/error propagation work is the known compatibility gap
 that motivated this fork. No upstream issue or commit is recorded in AXE.
 
-AXE consumer regressions are in `crates/axe/tests/path_transport_compat.rs`.
+AXE consumer regressions are in `crates/axe/tests/path_transport_compat.rs` and
+`crates/axe/tests/language_repair.rs`.

@@ -7,7 +7,8 @@ use crate::{Config, RegexMode};
 use memchr::memmem;
 use onig::{RegexOptions, Region, SearchOptions, Syntax, SyntaxBehavior, SyntaxOperator};
 use onig_sys::{
-    ONIGERR_EMPTY_RANGE_IN_CHAR_CLASS, OnigEncCtype_ONIGENC_CTYPE_WORD, OnigEncodingUTF8,
+    ONIGERR_EMPTY_RANGE_IN_CHAR_CLASS, OnigEncCtype_ONIGENC_CTYPE_WORD, OnigEncodingASCII,
+    OnigEncodingUTF8,
 };
 use std::ptr::{null, null_mut};
 use std::sync::Mutex;
@@ -73,7 +74,7 @@ impl<'a> Matcher<'a> {
                     return false;
                 }
                 // Drop matches that aren't word matches if `-w` was requested.
-                if self.config.word_regexp && !Self::is_word_match(line, start, end) {
+                if self.config.word_regexp && !self.is_word_match(line, start, end) {
                     return false;
                 }
                 any_selected = true;
@@ -115,7 +116,12 @@ impl<'a> Matcher<'a> {
     /// Word-boundary check `-w`.
     /// NOTE that `-w` does not check both sides, unlike `\b` in a regex.
     /// Start/End-of-line count as non-words.
-    fn is_word_match(line: &[u8], start: usize, end: usize) -> bool {
+    fn is_word_match(&self, line: &[u8], start: usize, end: usize) -> bool {
+        if !self.config.utf8 {
+            let word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+            return (start == 0 || !word(line[start - 1]))
+                && (end == line.len() || !word(line[end]));
+        }
         // SAFETY: This code uses OnigEncodingType such that it can support other types of encodings in the future.
         unsafe {
             let mbc_to_code = OnigEncodingUTF8.mbc_to_code.unwrap_unchecked();
@@ -325,8 +331,9 @@ impl CompiledPattern {
             pattern: &str,
             syntax: &Syntax,
             options: RegexOptions,
+            utf8: bool,
         ) -> UResult<OnigRegex> {
-            OnigRegex::compile(pattern, syntax, options).map_err(|err| {
+            OnigRegex::compile(pattern, syntax, options, utf8).map_err(|err| {
                 // A reversed range like `[b-a]` is ONIGERR_EMPTY_RANGE_IN_CHAR_CLASS.
                 // GNU grep reports it simply as "Invalid range end" (no pattern
                 // echoed), so translate this code to match its diagnostic.
@@ -338,11 +345,12 @@ impl CompiledPattern {
             })
         }
 
-        let leftmost = compile_with(pattern, &syntax, options)?;
+        let leftmost = compile_with(pattern, &syntax, options, config.utf8)?;
         let longest_anchored = compile_with(
             pattern,
             &syntax,
             options | RegexOptions::REGEX_OPTION_FIND_LONGEST,
+            config.utf8,
         )?;
         Ok(Self {
             leftmost,
@@ -384,7 +392,12 @@ unsafe impl Send for OnigRegex {}
 unsafe impl Sync for OnigRegex {}
 
 impl OnigRegex {
-    fn compile(pattern: &str, syntax: &Syntax, options: RegexOptions) -> Result<Self, OnigError> {
+    fn compile(
+        pattern: &str,
+        syntax: &Syntax,
+        options: RegexOptions,
+        utf8: bool,
+    ) -> Result<Self, OnigError> {
         let pattern = pattern.as_bytes();
         let mut raw = null_mut();
         let mut error = onig_sys::OnigErrorInfo {
@@ -398,10 +411,15 @@ impl OnigRegex {
             case_fold_flag &= !onig_sys::INTERNAL_ONIGENC_CASE_FOLD_MULTI_CHAR;
         }
 
+        let encoding = if utf8 {
+            &raw mut OnigEncodingUTF8
+        } else {
+            &raw mut OnigEncodingASCII
+        };
         let mut compile_info = onig_sys::OnigCompileInfo {
             num_of_elements: 5,
-            pattern_enc: &raw mut OnigEncodingUTF8,
-            target_enc: &raw mut OnigEncodingUTF8,
+            pattern_enc: encoding,
+            target_enc: encoding,
             syntax: syntax as *const Syntax as *mut Syntax as *mut onig_sys::OnigSyntaxType,
             option: options.bits(),
             case_fold_flag,
@@ -409,8 +427,8 @@ impl OnigRegex {
 
         let _guard = ONIG_NEW_MUTEX.lock().unwrap();
         // SAFETY: `pattern` supplies a valid start/end pointer pair for the
-        // duration of the call, and `compile_info` uses Oniguruma's built-in
-        // UTF-8 encoding plus a syntax value borrowed from the safe wrapper.
+        // duration of the call, and `compile_info` uses the selected built-in
+        // encoding plus a syntax value borrowed from the safe wrapper.
         let result = unsafe {
             onig_sys::onig_new_deluxe(
                 &mut raw,

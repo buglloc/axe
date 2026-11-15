@@ -115,3 +115,43 @@ fn awk_arithmetic_and_fields_recognize_signed_infinity() {
         b"+inf +inf 0\n-0\n+nan -nan\n",
     );
 }
+
+#[test]
+fn grep_c_locale_classes_and_words_are_byte_oriented() {
+    assert_output(
+        run("grep", &["-a", "-o", "[[:alpha:]]"], "éa\n猫a\ne\u{301}\n".as_bytes(), "C"),
+        0,
+        b"a\na\ne\n",
+    );
+    assert_output(
+        run("grep", &["-a", "-o", r"\<a"], b"\xffa\xfe\n", "C"),
+        0,
+        b"a\n",
+    );
+    assert_output(
+        run("grep", &["-a", "-w", "-o", "a"], "éa猫 a_ a\n".as_bytes(), "C"),
+        0,
+        b"a\na\n",
+    );
+    assert_output(
+        run("grep", &["-a", "-o", "[[:alpha:]]"], "é猫a\n".as_bytes(), "C.UTF-8"),
+        0,
+        "é\n猫\na\n".as_bytes(),
+    );
+    assert_output(
+        run("grep", &["-a", "-w", "-o", "a"], "éa猫 a_ a\n".as_bytes(), "C.UTF-8"),
+        0,
+        b"a\n",
+    );
+}
+
+#[test]
+fn grep_c_locale_does_not_treat_high_bytes_as_binary() {
+    for args in [&[""][..], &["a"][..]] {
+        assert_output(run("grep", args, b"\xffa\xfe\n", "C"), 0, b"\xffa\xfe\n");
+    }
+    let output = run("grep", &[""], b"\xffa\xfe\n", "C.UTF-8");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(!output.stderr.is_empty(), "{output:?}");
+}
