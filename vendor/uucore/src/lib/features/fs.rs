@@ -423,24 +423,28 @@ pub fn canonicalize<P: AsRef<Path>>(
         }
         match resolve_symlink(&result) {
             Ok(Some(link_path)) => {
-                for link_part in link_path.components().rev() {
-                    parts.push_front(link_part.into());
-                }
-                if followed_symlinks < SYMLINKS_TO_LOOK_FOR_LOOPS {
+                if followed_symlinks < SYMLINKS_TO_LOOK_FOR_LOOPS
+                    && miss_mode != MissingHandling::Missing
+                {
                     followed_symlinks += 1;
                 } else {
-                    let file_info =
-                        FileInformation::from_path(result.parent().unwrap(), false).unwrap();
-                    let mut path_to_follow = PathBuf::new();
+                    let file_info = FileInformation::from_path(result.parent().unwrap(), false)?;
+                    let mut path_to_follow = PathBuf::from(part.as_os_str());
                     for part in &parts {
                         path_to_follow.push(part.as_os_str());
                     }
                     if !visited_files.insert((file_info, path_to_follow)) {
+                        if miss_mode == MissingHandling::Missing {
+                            continue;
+                        }
                         return Err(Error::new(
                             ErrorKind::InvalidInput,
                             "Too many levels of symbolic links",
                         )); // TODO use ErrorKind::FilesystemLoop when stable
                     }
+                }
+                for link_part in link_path.components().rev() {
+                    parts.push_front(link_part.into());
                 }
                 result.pop();
             }

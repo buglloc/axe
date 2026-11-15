@@ -4,4 +4,9 @@ Source: `uucore` 0.12.0 from the pinned uutils/coreutils source checkout, commit
 
 The standalone manifest resolves upstream workspace dependencies. `locale-source/` retains the complete pinned utility locale inventory required by the multicall build.
 
+- Missing-mode canonicalization detects repeated symlink components before
+  expansion and keeps the unresolved component, allowing later `..` traversal.
+  Normal and existing-only modes still reject cycles. This also preserves
+  the correct relative target for `ln -sr` pointing at a cyclic symlink.
+
 `just vendor-test` skips upstream test targets that require the non-member package's dev-dependency graph. AXE integration regressions exercise the bundled consumer.

@@ -94,3 +94,38 @@ fn find_empty_streamed_roots_fail_without_skipping_valid_neighbors() {
     assert_eq!(output.stdout, b"raw-\xff\0other\0");
     assert!(!output.stderr.is_empty());
 }
+
+#[test]
+fn missing_mode_preserves_cyclic_components_and_resolves_later_parents() {
+    let scratch = Scratch::new();
+    let root = scratch.0.canonicalize().unwrap();
+    fs::write(root.join("present"), b"present").unwrap();
+    for cycle in [&["a", "b"][..], &["x", "y", "z"][..]] {
+        for (index, name) in cycle.iter().enumerate() {
+            std::os::unix::fs::symlink(cycle[(index + 1) % cycle.len()], root.join(name))
+                .unwrap();
+        }
+        for tool in ["readlink", "realpath"] {
+            for (operand, expected) in [
+                (cycle[0].to_owned(), root.join(cycle[0])),
+                (format!("{}/../present", cycle[0]), root.join("present")),
+            ] {
+                let argv = args(&["-m", &operand]);
+                let output = run(&root, tool, &refs(&argv), b"");
+                assert!(output.status.success(), "{tool} {operand}: {:?}", output.stderr);
+                let mut bytes = expected.as_os_str().as_bytes().to_vec();
+                bytes.push(b'\n');
+                assert_eq!(output.stdout, bytes);
+            }
+            let argv = args(&["-e", cycle[0]]);
+            let output = run(&root, tool, &refs(&argv), b"");
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+        }
+    }
+    fs::create_dir(root.join("dst")).unwrap();
+    let argv = args(&["-sr", "a", "dst/link"]);
+    let output = run(&root, "ln", &refs(&argv), b"");
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert_eq!(fs::read_link(root.join("dst/link")).unwrap(), Path::new("../a"));
+}
