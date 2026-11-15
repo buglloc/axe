@@ -1,6 +1,8 @@
 #![cfg(unix)]
 
+use std::ffi::OsStr;
 use std::fs::{self, DirBuilder};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt, symlink};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -241,5 +243,25 @@ fn ls_literal_quoting_preserves_tabs_but_explicit_q_hides_them() {
             .unwrap();
         success(&output);
         assert_eq!(output.stdout, b"tab?name\n");
+    }
+}
+
+#[test]
+fn stat_literal_quoting_preserves_path_and_symlink_target_bytes() {
+    let scratch = Scratch::new("stat-literal");
+    let name = OsStr::from_bytes(b"raw-\xff\nname");
+    let link = OsStr::from_bytes(b"link-\xff\nname");
+    fs::write(scratch.path().join(name), b"original").unwrap();
+    symlink(name, scratch.path().join(link)).unwrap();
+    for locale in ["C", "C.UTF-8"] {
+        let output = command(scratch.path(), "stat")
+            .env("LC_ALL", locale)
+            .env("QUOTING_STYLE", "literal")
+            .args(["-c", "%N"])
+            .args([name, link])
+            .output()
+            .unwrap();
+        success(&output);
+        assert_eq!(output.stdout, b"raw-\xff\nname\nlink-\xff\nname -> raw-\xff\nname\n");
     }
 }

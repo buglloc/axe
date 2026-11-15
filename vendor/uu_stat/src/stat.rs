@@ -262,6 +262,7 @@ impl std::str::FromStr for QuotingStyle {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "literal" => Ok(Self::Quote),
             "locale" => Ok(Self::Locale),
             "shell" => Ok(Self::Shell),
             "shell-escape" => Ok(Self::ShellEscape),

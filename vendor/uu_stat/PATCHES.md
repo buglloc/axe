@@ -8,6 +8,7 @@ Source: the `uu_stat` 0.12.0 crate from crates.io, upstream revision
   expansion, preserving invalid bytes instead of using lossy UTF-8 strings.
 - Add GNU's `shell-escape` quoting style and use locale-aware quoting for
   `locale`, `shell`, and `shell-escape-always`, including symlink targets.
+- Accept `QUOTING_STYLE=literal` and emit raw filename and symlink-target bytes.
 - Keep a standalone manifest without upstream workspace lint/benchmark wiring;
   AXE owns dependency resolution.
 
