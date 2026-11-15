@@ -19,6 +19,8 @@ provenance, not a local AXE edit. Archive SHA-256:
 - Activate the requested C/locale byte collation and ctype state around find's
   matching work so raw-byte glob/regex behavior follows GNU find in the C
   locale without changing process-global locale state.
+- Retry unmatched invalid-byte glob inputs in the C locale when libc reports
+  `FNM_NOMATCH` instead of `EILSEQ`, preserving musl UTF-8 filename matches.
 - Treat `BrokenPipe` as an ordinary write failure, including stdout's shared
   error handler. The upstream success special case disagrees with GNU find
   when the inherited disposition is `SIG_IGN`; AXE reports the write error and

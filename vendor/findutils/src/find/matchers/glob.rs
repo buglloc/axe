@@ -212,12 +212,20 @@ impl Pattern {
         };
         // SAFETY: both strings are NUL-terminated and remain alive for the call.
         let result = unsafe { libc::fnmatch(pattern.as_ptr(), string.as_ptr(), self.flags) };
-        if result == 0 || result == libc::FNM_NOMATCH {
-            return Ok(result == 0);
+        if result == 0 {
+            return Ok(true);
         }
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::EILSEQ) {
-            return Err(error);
+        if result == libc::FNM_NOMATCH {
+            if std::str::from_utf8(pattern.as_bytes()).is_ok()
+                && std::str::from_utf8(string.as_bytes()).is_ok()
+            {
+                return Ok(false);
+            }
+        } else {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::EILSEQ) {
+                return Err(error);
+            }
         }
         // Invalid multibyte sequences are still valid Unix filename bytes.
         let _bytes_locale = super::super::locale::SearchLocale::bytes()?;
