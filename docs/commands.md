@@ -160,13 +160,16 @@ null-input mode. JSON input uses jq-compatible number spellings, invalid UTF-8 i
 replaced with U+FFFD, and output is valid JSON. `--tab`, `--indent`, `--seq`,
 `--raw-output0`, `--jsonargs`, and `$__loc__` are supported; `halt_error` keeps
 string payloads raw and terminates non-string JSON payloads with a newline.
-`--stream` and `--stream-errors` are not supported.
+`--stream` reads path/value and container-end events without building the input
+document; `--stream-errors` emits parse errors as events. `--unbuffered` flushes
+each output value. The selected jaq library does not provide `fromstream`,
+`truncate_stream`, or `tostream`.
 Sequence mode ignores bytes before the first record separator and discards a
 final numeric record without a terminator, which may have been truncated.
 
 `diff` computes raw line edit scripts with Myers; `-d`/`--minimal` selects the
 minimal variant. It supports normal, unified (`-u`/`-U`), context (`-c`/`-C`),
-ed (`-e`), side-by-side (`-y`), and `--horizon-lines`, ASCII case folding,
+ed (`-e`), side-by-side (`-y`), and `--horizon-lines`, locale-aware case folding,
 whitespace modes (`-i`, `-w`, `-b`, `-E`, `-Z`), `-B`, `-I`,
 `--strip-trailing-cr`, labels, directory recursion, and
 `--unidirectional-new-file`. Side-by-side widths count bytes in the C locale
@@ -177,8 +180,8 @@ Without `-a`, differing binary inputs produce a stdout report and status 1;
 identical binary inputs produce no output. Binary merge output is empty unless
 `-a` forces text handling, matching GNU.
 `diff`, `cmp`, and `sdiff` distinguish differences or merge decisions from
-input errors. Case folding is ASCII-only. `diff -I` accepts a byte-oriented
-BRE subset and rejects unsupported constructs, including backreferences.
+input errors. `diff -I` accepts byte-oriented BRE patterns with backreferences;
+matching does not emulate locale-sensitive collation or equivalence classes.
 
 NUL-delimited pathname output from `find -print0` and `grep -lZ` preserves Unix
 filename bytes. `stat` filename formats and `which` PATH lookup also preserve
@@ -271,10 +274,16 @@ targets against the destination. Missing requested members exit with status 2.
 Independent entries continue after a `--keep-old-files` collision; existing
 directories retain their metadata in this mode.
 
-Tar creation uses GNU headers; reading accepts GNU and PAX metadata. `-a`, `-h`,
-`--wildcards`, `--zstd`, and `-m`/`--touch` are supported. `--format`, including
-PAX creation, is not supported. Globs operate on bytes with ASCII character
-classes, not locale collation.
+Tar creation defaults to GNU headers. `--format=gnu|ustar|posix|pax` selects
+the output format; `posix` and `pax` use PAX extensions for names and metadata
+that do not fit USTAR fields. USTAR creation rejects unrepresentable fields
+instead of truncating them or adding GNU extensions. Reading accepts GNU,
+USTAR and PAX metadata. `-a`, `-h`, `--wildcards`, `--zstd`, and `-m`/`--touch`
+are supported. Globs operate on bytes with ASCII character classes, not locale
+collation.
+
+The upstream tar provider's GNU creation path encodes pre-epoch modification
+times as unsigned values. PAX creation preserves signed and fractional times.
 
 ## Storage reports
 
