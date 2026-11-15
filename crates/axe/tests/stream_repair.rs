@@ -222,3 +222,26 @@ fn expand_accepts_extended_tab_intervals_smaller_than_fixed_stops() {
     assert_eq!(invalid.status.code(), Some(1));
     assert!(!invalid.stderr.is_empty());
 }
+
+#[test]
+fn join_whitespace_fields_do_not_invent_empty_output_columns() {
+    let scratch = Scratch::new();
+    fs::write(scratch.path().join("a"), b"\n\n").unwrap();
+    fs::write(scratch.path().join("b"), b"\n").unwrap();
+    assert_success(
+        run(scratch.path(), "join", &["-1", "2", "-2", "2", "a", "b"], b""),
+        b"\n\n",
+    );
+    fs::write(scratch.path().join("a"), b"  a  x\nb y\nc z\n").unwrap();
+    fs::write(scratch.path().join("b"), b"a 1\nb 2\nd 3\n").unwrap();
+    assert_success(
+        run(scratch.path(), "join", &["-z", "a", "b"], b""),
+        b"a x b y c z 1 b 2 d 3\0",
+    );
+    fs::write(scratch.path().join("a"), b"k:\n").unwrap();
+    fs::write(scratch.path().join("b"), b"k:\n").unwrap();
+    assert_success(
+        run(scratch.path(), "join", &["-t:", "a", "b"], b""),
+        b"k::\n",
+    );
+}

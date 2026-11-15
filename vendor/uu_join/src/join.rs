@@ -146,7 +146,9 @@ impl Separator for WhitespaceSep {
             }
             last_end = i + 1;
         }
-        field_ranges.push((last_end, haystack.len()));
+        if last_end < haystack.len() {
+            field_ranges.push((last_end, haystack.len()));
+        }
         field_ranges
     }
 
