@@ -298,3 +298,27 @@ fn gzip_listing_rejects_trailing_junk_without_publishing_a_row_or_header() {
     assert_eq!(fs::read(scratch.path().join("junk.gz")).unwrap(), junk);
     assert!(!scratch.path().join("junk").exists());
 }
+
+#[test]
+fn base32_invalid_alphabet_bytes_commit_the_preceding_padded_prefix() {
+    let scratch = Scratch::new("base32-invalid-after-padding");
+    for (applet, format, encoded, decoded) in [
+        ("base32", None, &b"ME======"[..], &b"a"[..]),
+        ("basenc", Some("--base32"), &b"2U======"[..], &b"\xd5"[..]),
+        ("basenc", Some("--base32hex"), &b"5S======"[..], &b"/"[..]),
+    ] {
+        let mut args = vec!["-d"];
+        args.extend(format);
+        for invalid in [&b"!"[..], &b"\r\n"[..], &b" "[..]] {
+            let mut input = encoded[..3].to_vec();
+            input.extend_from_slice(invalid);
+            input.extend_from_slice(&encoded[3..]);
+            let output = run(scratch.path(), applet, &args, &input);
+            assert_eq!(output.status.code(), Some(1), "{input:?}: {output:?}");
+            assert_eq!(output.stdout, decoded, "{input:?}: {output:?}");
+        }
+        let output = run(scratch.path(), applet, &args, &encoded[..7]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+    }
+}

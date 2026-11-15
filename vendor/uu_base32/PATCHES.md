@@ -13,8 +13,9 @@ Source: the `uu_base32` 0.12.0 crate from crates.io, upstream revision
   matching GNU's byte-level alphabet validation.
 - Decode complete unpadded base64url final quanta with the unpadded alphabet,
   without changing padded encoding output or accepting malformed padding.
-- Reject incomplete padded base32 quanta without emitting their data; prefix
-  recovery still preserves earlier complete quanta and unpadded prefixes.
+- Reject incomplete padded base32 quanta at EOF without emitting their data.
+  An invalid alphabet byte instead commits the bytes preceding it, including
+  data before partial padding; preserve that prefix before reporting the error.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
 

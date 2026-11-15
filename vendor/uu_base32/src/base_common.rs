@@ -687,7 +687,7 @@ pub mod fast_decode {
     ) -> UResult<()> {
         if let Err(error) = codec.decode_into_vec(input, decoded) {
             decoded.clear();
-            flush_valid_prefix(codec, input, decoded, output)?;
+            flush_valid_prefix(codec, input, decoded, output, false)?;
             return Err(error);
         }
         write_to_output(decoded, output)?;
@@ -708,6 +708,7 @@ pub mod fast_decode {
         input: &[u8],
         decoded: &mut Vec<u8>,
         output: &mut dyn Write,
+        invalid_byte_follows: bool,
     ) -> UResult<()> {
         decoded.clear();
         if codec.decode_into_vec(input, decoded).is_ok() {
@@ -731,8 +732,9 @@ pub mod fast_decode {
                 .position(|&byte| byte == b'=')
                 .unwrap_or(chunk.len());
             let bytes_per_quantum = codec.unpadded_multiple();
-            // An incomplete padded base32 quantum has no committed bytes.
-            if quantum == 8
+            // EOF cannot commit a short padded quantum; an invalid byte commits its prefix.
+            if !invalid_byte_follows
+                && quantum == 8
                 && bytes_per_quantum == 5
                 && chunk.len() < quantum
                 && symbols < chunk.len()
@@ -843,6 +845,7 @@ pub mod fast_decode {
                     &buffer,
                     &mut decoded_buffer,
                     output,
+                    true,
                 )?;
                 return Err(USimpleError::new(1, "error: invalid input"));
             }
@@ -945,6 +948,7 @@ pub mod fast_decode {
                         &buffer,
                         &mut decoded_buffer,
                         output,
+                        true,
                     )?;
                     return Err(USimpleError::new(1, "error: invalid input"));
                 }
