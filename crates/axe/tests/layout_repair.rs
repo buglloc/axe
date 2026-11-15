@@ -371,3 +371,33 @@ fn pr_omit_pagination_discards_input_form_feeds() {
         b"a\nb\nc\n",
     );
 }
+
+#[test]
+fn pr_retains_padding_for_empty_records_and_terminal_columns() {
+    let scratch = Scratch::new();
+    for (args, input, expected) in [
+        (
+            &["-t", "-2", "-w12"][..],
+            &b"\n\n"[..],
+            &b"      \n"[..],
+        ),
+        (
+            &["-t", "-a", "-3", "-w20"][..],
+            &b"\n\n"[..],
+            &b"       \n"[..],
+        ),
+        (
+            &["-t", "-2", "-w12"][..],
+            &b"  alpha  beta\t gamma\n\t delta  epsilon\n"[..],
+            &b"  alp \n"[..],
+        ),
+    ] {
+        assert_success(run(scratch.path(), "pr", args, input), expected);
+    }
+    fs::write(scratch.path().join("a"), b"a\nb\n").unwrap();
+    fs::write(scratch.path().join("b"), b"1\n").unwrap();
+    assert_success(
+        run(scratch.path(), "pr", &["-t", "-m", "-w12", "a", "b"], b""),
+        b"a     1\nb     \n",
+    );
+}

@@ -1607,7 +1607,10 @@ fn write_columns(
                     output.pad_to(before_separator)?;
                 }
                 output.bytes(options.col_sep_for_printing.as_bytes())?;
-                if number.is_some() {
+                if number.is_some()
+                    || index + 1 == columns
+                    || cell.is_none_or(|line| line.line_content.is_empty())
+                {
                     output.flush_spaces()?;
                 }
             }
