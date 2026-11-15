@@ -1157,7 +1157,10 @@ impl Options {
             total.add(&listing)?;
         }
         if self.files.len() > 1 && level <= 2 {
-            writeln!(output, "----------------------------------------------------------------- ")?;
+            writeln!(
+                output,
+                "----------------------------------------------------------------- "
+            )?;
             total.print_row(
                 &mut output,
                 OsStr::new(&format!("{} files", total.files)),
@@ -1249,8 +1252,8 @@ impl ZstdListing {
                 let base = 1_u64 << (10 + (header[5] >> 3));
                 base + (base >> 3) * u64::from(header[5] & 7)
             };
-            let dict_id = zstd::zstd_safe::get_dict_id_from_frame(&header[..read])
-                .map_or(0, NonZeroU32::get);
+            let dict_id =
+                zstd::zstd_safe::get_dict_id_from_frame(&header[..read]).map_or(0, NonZeroU32::get);
             self.dict_id = if self.dict_id != 0 && self.dict_id != dict_id {
                 0
             } else {
@@ -1338,12 +1341,7 @@ impl ZstdListing {
         write_zstd_name(output, "", name, "\n")
     }
 
-    fn print_verbose(
-        &self,
-        output: &mut impl Write,
-        name: &OsStr,
-        level: i32,
-    ) -> io::Result<()> {
+    fn print_verbose(&self, output: &mut impl Write, name: &OsStr, level: i32) -> io::Result<()> {
         write_zstd_name(output, "", name, " \n")?;
         writeln!(output, "# Zstandard Frames: {}", self.frames)?;
         if self.skips != 0 {

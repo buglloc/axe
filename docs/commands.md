@@ -237,6 +237,10 @@ decompression (`-d`), stdout (`-c`), explicit output (`-o FILE`), integrity chec
 20–22, `--fast[=N]`, and worker counts (`-T N`; zero selects available CPUs).
 Compression includes a checksum; decompression accepts concatenated frames.
 Successful `-t` reports the decoded byte count on stderr unless quiet.
+`-l`/`--list` reports frame counts, sizes, and checksum presence without
+decompressing payloads, including concatenated and skippable frames. It requires
+file operands, not stdin. Listing checks structure, not payload integrity or
+checksum validity; use `-t` for integrity checks.
 `zstd -dcf` copies non-frame plaintext to stdout, including a plaintext tail
 after complete frames. Recognized corrupt frame headers remain errors.
 
@@ -259,8 +263,8 @@ explicit stdout mode (`-c` or a cat alias), not merely stdin's default output.
 Bzip2 forced plaintext stdin is preserved even where the reference emits none.
 File-to-file outputs preserve source ownership when the operating system permits
 it; ACL and extended-attribute preservation are not promised. Unsupported
-options include bzip2 `-s`/`-T`, XZ `-e`/`--check`/`--single-stream`, and
-Zstd `-l`; these are rejected, not silently ignored.
+options include bzip2 `-s`/`-T` and XZ `-e`/`--check`/`--single-stream`;
+these are rejected, not silently ignored.
 
 `tar` accepts old-style clusters such as `tar cfz archive.tgz directory`;
 argument-taking options consume following words, and `-C` is positional.
