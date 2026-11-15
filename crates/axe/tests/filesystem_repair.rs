@@ -2,6 +2,7 @@
 
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt, symlink};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,6 +47,13 @@ fn command(directory: &Path, applet: &str) -> Command {
         .env("PATH", "/nonexistent")
         .env("LC_ALL", "C")
         .env("TZ", "UTC");
+    // SAFETY: only the child calls the async-signal-safe umask syscall.
+    unsafe {
+        command.pre_exec(|| {
+            libc::umask(0o022);
+            Ok(())
+        });
+    }
     command
 }
 
@@ -193,5 +201,19 @@ fn cp_no_clobber_skips_same_inode_but_reports_cyclic_lookup() {
     let output = run(scratch.path(), "cp", &["-n", "source/file", "cycle"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert_eq!(fs::read_link(scratch.path().join("cycle")).unwrap(), Path::new("cycle"));
+    assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
+}
+
+#[test]
+fn cp_recursive_l_restores_umask_permissions_after_a_loop_error() {
+    let scratch = Scratch::new("cp-loop-mode");
+    fs::create_dir(scratch.path().join("source")).unwrap();
+    fs::set_permissions(scratch.path().join("source"), fs::Permissions::from_mode(0o777)).unwrap();
+    fs::write(scratch.path().join("source/file"), b"original").unwrap();
+    symlink(".", scratch.path().join("source/loop")).unwrap();
+    symlink("source", scratch.path().join("alias")).unwrap();
+    let output = run(scratch.path(), "cp", &["-RL", "alias", "destination"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(fs::metadata(scratch.path().join("destination")).unwrap().permissions().mode() & 0o777, 0o755);
     assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
 }

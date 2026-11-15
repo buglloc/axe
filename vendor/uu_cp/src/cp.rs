@@ -1942,6 +1942,9 @@ pub(crate) fn copy_attributes(
             let source_perms = {
                 use std::os::unix::fs::PermissionsExt;
                 let mut perms = source_metadata.permissions();
+                if dest_is_freshly_created_dir && !matches!(attributes.mode, Preserve::Yes { .. }) {
+                    perms.set_mode(perms.mode() & !uucore::mode::get_umask());
+                }
                 if !ownership_preserved.get() {
                     // GNU cp strips setuid (04000) and setgid (02000) when
                     // ownership could not be preserved. Keep the sticky bit

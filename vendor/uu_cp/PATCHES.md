@@ -13,3 +13,6 @@ its inode and hardlink relationships while creating an independent replacement.
 
 No-clobber skips existing same-inode destinations before same-file rejection,
 but propagates destination lookup errors such as symlink loops.
+
+Final permissions for newly copied directories respect the caller's umask unless
+mode preservation is requested, including when traversal reports a symlink loop.
