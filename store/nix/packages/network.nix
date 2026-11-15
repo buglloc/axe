@@ -337,6 +337,11 @@
       zstdSupport = false;
     }).overrideAttrs
     (old: {
+      version = "8.23.0";
+      src = buildPkgs.fetchurl {
+        url = "https://curl.se/download/curl-8.23.0.tar.xz";
+        hash = "sha256-ja3X0lNqMU+YKtBaZRtxP0Jr99Aswsds/7l5byIY5sU=";
+      };
       outputs = ["out"];
       separateDebugInfo = false;
       configureFlags =
