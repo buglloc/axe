@@ -305,7 +305,7 @@ vendor-test:
             uu_df)
                 printf '%s' 'upstream tests reference the omitted tempfile dev-dependency in the standalone manifest'
                 ;;
-            uu_more)
+            uu_more|uu_tail)
                 printf '%s' 'requires dev-dependencies but is not a workspace member; Cargo refuses its vendored test targets under the shipped lockfile'
                 ;;
             *)

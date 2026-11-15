@@ -8898,8 +8898,6 @@ dependencies = [
 [[package]]
 name = "uu_tail"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04ff141dd3fab47b991b2063fb8c1c9ff5ca4f9f23f5bcba75c691a247e1aca4"
 dependencies = [
  "clap",
  "fluent",

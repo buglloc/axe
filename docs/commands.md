@@ -90,6 +90,19 @@ For `sshd` forwarding, environment policy (`--accept-env`), PTYs, signals, and S
 
 For passive host context and targeted evidence, see [Vzik](vzik.md).
 
+## Following logs
+
+`tail -f FILE` follows the open file descriptor. Appends remain visible through
+symbolic links, hard links, and file bind mounts, and after the file is renamed
+or unlinked. Replacing the pathname does not switch the descriptor to the new
+file. `tail -f < FILE` also follows a regular file supplied on standard input;
+standard input from a pipe is read to EOF without waiting for later writers.
+
+Use `tail -F FILE` to follow a pathname across log rotation. It follows symbolic
+links to their current targets and retries when the pathname or target is
+temporarily missing. For a rotating symlink such as `server.log` pointing to
+`server.log.YYYY-MM-DD`, use `-F`, not `-f`.
+
 ## Linux diagnostics
 
 `namei`, `fuser`, `lslocks`, `pstree`, and `lsblk` are Linux-only bundled
