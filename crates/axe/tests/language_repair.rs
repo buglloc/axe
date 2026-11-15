@@ -91,3 +91,27 @@ fn awk_redirected_getline_sets_rt_without_changing_main_counters() {
         b"0 <> <aa>\n0 <X> <aaa>\n0 <Y> <>\n",
     );
 }
+
+#[test]
+fn awk_arithmetic_and_fields_recognize_signed_infinity() {
+    assert_output(
+        run(
+            "awk",
+            &[r#"{ print ($0<2), ($1<2), ($0+0), ($1+0) }"#],
+            b"+inf\n-InF\ninf\n",
+            "C",
+        ),
+        0,
+        b"0 0 +inf +inf\n1 1 -inf -inf\n0 0 0 0\n",
+    );
+    assert_output(
+        run(
+            "awk",
+            &[r#"BEGIN { print ("+inf"+0), sprintf("%.6g","+inf"), strtonum("+inf"); print sprintf("%.6g","-0"); print ("+NaN"+0), ("-NaN"+0) }"#],
+            b"",
+            "C",
+        ),
+        0,
+        b"+inf +inf 0\n-0\n+nan -nan\n",
+    );
+}

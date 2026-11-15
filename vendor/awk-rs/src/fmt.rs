@@ -293,7 +293,7 @@ fn pad_numeric(
 fn float_sign(n: f64, plus: bool, space: bool) -> &'static str {
     if n.is_sign_negative() {
         "-"
-    } else if plus {
+    } else if plus || !n.is_finite() {
         "+"
     } else if space {
         " "
@@ -305,6 +305,9 @@ fn float_sign(n: f64, plus: bool, space: bool) -> &'static str {
 /// Format `n` (already non-negative) as fixed-point with `precision` digits after
 /// the decimal point, honoring the alternate-form flag (force a decimal point).
 fn format_float_fixed(n: f64, precision: usize, alt: bool) -> String {
+    if !n.is_finite() {
+        return if n.is_nan() { "nan" } else { "inf" }.into();
+    }
     let mut s = format!("{:.*}", precision, n);
     if alt && precision == 0 {
         s.push('.');
@@ -314,6 +317,14 @@ fn format_float_fixed(n: f64, precision: usize, alt: bool) -> String {
 
 /// Format `n` (already non-negative) in `d.ddde±dd` form.
 fn format_float_exp(n: f64, precision: usize, upper: bool, alt: bool) -> String {
+    if !n.is_finite() {
+        return match (n.is_nan(), upper) {
+            (true, true) => "NAN",
+            (true, false) => "nan",
+            (false, true) => "INF",
+            (false, false) => "inf",
+        }.into();
+    }
     let raw = format!("{:.*e}", precision, n);
     let (mantissa, exp_str) = raw.split_once('e').unwrap_or((raw.as_str(), "0"));
     let exp: i32 = exp_str.parse().unwrap_or(0);
@@ -333,6 +344,14 @@ fn format_float_exp(n: f64, precision: usize, upper: bool, alt: bool) -> String 
 
 /// Format `n` (already non-negative) using the shorter of %e/%f style, per C's %g rules.
 fn format_float_g(n: f64, precision: usize, upper: bool, alt: bool) -> String {
+    if !n.is_finite() {
+        return match (n.is_nan(), upper) {
+            (true, true) => "NAN",
+            (true, false) => "nan",
+            (false, true) => "INF",
+            (false, false) => "inf",
+        }.into();
+    }
     let p = if precision == 0 { 1 } else { precision };
 
     // Determine the decimal exponent that %e would use after rounding to `p`

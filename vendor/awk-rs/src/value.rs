@@ -203,6 +203,9 @@ pub fn parse_leading_number(s: impl AsRef<[u8]>) -> f64 {
         return 0.0;
     }
 
+    if let Some(number) = signed_special(bytes[i..].trim_ascii_end()) {
+        return number;
+    }
     let start = i;
 
     // Optional sign
@@ -253,11 +256,25 @@ pub fn parse_leading_number(s: impl AsRef<[u8]>) -> f64 {
     let is_integer_like =
         !num_str.contains('.') && !num_str.contains('e') && !num_str.contains('E');
     match num_str.parse::<i64>() {
-        Ok(n) if is_integer_like => return n as f64,
+        Ok(n) if is_integer_like && (n != 0 || bytes[start] != b'-') => return n as f64,
         _ => {}
     }
 
     num_str.parse().unwrap_or(0.0)
+}
+
+fn signed_special(bytes: &[u8]) -> Option<f64> {
+    if bytes.len() != 4 || !matches!(bytes[0], b'+' | b'-') {
+        return None;
+    }
+    let number = if bytes[1..].eq_ignore_ascii_case(b"inf") {
+        f64::INFINITY
+    } else if bytes[1..].eq_ignore_ascii_case(b"nan") {
+        f64::NAN
+    } else {
+        return None;
+    };
+    Some(number.copysign(if bytes[0] == b'-' { -1.0 } else { 1.0 }))
 }
 
 /// Check if a string is a numeric string (looks entirely like a number)
@@ -266,6 +283,9 @@ fn parse_numeric_string(s: &[u8]) -> Option<f64> {
     let trimmed = std::str::from_utf8(s.trim_ascii()).ok()?;
     if trimmed.is_empty() {
         return None;
+    }
+    if let Some(number) = signed_special(trimmed.as_bytes()) {
+        return Some(number);
     }
 
     // Fast path: check if it's a simple integer
@@ -308,10 +328,10 @@ fn parse_numeric_string(s: &[u8]) -> Option<f64> {
 /// Format a number according to printf-style format
 pub fn format_number(n: f64, format: impl AsRef<[u8]>) -> BString {
     if n.is_nan() {
-        return BString::from("nan");
+        return BString::from(if n.is_sign_negative() { "-nan" } else { "+nan" });
     }
     if n.is_infinite() {
-        return BString::from(if n > 0.0 { "inf" } else { "-inf" });
+        return BString::from(if n > 0.0 { "+inf" } else { "-inf" });
     }
 
     // POSIX: values that are exactly integral convert as integers, with no
@@ -533,12 +553,12 @@ mod tests {
 
     #[test]
     fn test_format_number_nan() {
-        assert_eq!(format_number(f64::NAN, "%.6g"), "nan");
+        assert_eq!(format_number(f64::NAN, "%.6g"), "+nan");
     }
 
     #[test]
     fn test_format_number_inf() {
-        assert_eq!(format_number(f64::INFINITY, "%.6g"), "inf");
+        assert_eq!(format_number(f64::INFINITY, "%.6g"), "+inf");
         assert_eq!(format_number(f64::NEG_INFINITY, "%.6g"), "-inf");
     }
 
