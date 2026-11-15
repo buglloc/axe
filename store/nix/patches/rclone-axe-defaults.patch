@@ -158,47 +158,52 @@ diff --git a/cmd/version/version.go b/cmd/version/version.go
 diff --git a/fs/rc/rc.go b/fs/rc/rc.go
 --- a/fs/rc/rc.go
 +++ b/fs/rc/rc.go
-@@ -44,31 +44,6 @@
+@@ -44,36 +44,6 @@
  	Help:    "Don't require auth for certain methods",
  	Groups:  "RC",
  }, {
 -	Name:    "rc_web_gui",
 -	Default: false,
--	Help:    "Launch WebGUI on localhost",
+-	Help:    "Launch WebGUI on localhost **DEPRECATED**",
 -	Groups:  "RC",
+-	Hide:    fs.OptionHideBoth,
 -}, {
 -	Name:    "rc_web_gui_update",
 -	Default: false,
--	Help:    "Check and update to latest version of web gui",
+-	Help:    "Check and update to latest version of web gui **DEPRECATED**",
 -	Groups:  "RC",
+-	Hide:    fs.OptionHideBoth,
 -}, {
 -	Name:    "rc_web_gui_force_update",
 -	Default: false,
--	Help:    "Force update to latest version of web gui",
+-	Help:    "Force update to latest version of web gui **DEPRECATED**",
 -	Groups:  "RC",
+-	Hide:    fs.OptionHideBoth,
 -}, {
 -	Name:    "rc_web_gui_no_open_browser",
 -	Default: false,
--	Help:    "Don't open the browser automatically",
+-	Help:    "Don't open the browser automatically **DEPRECATED**",
 -	Groups:  "RC",
+-	Hide:    fs.OptionHideBoth,
 -}, {
 -	Name:    "rc_web_fetch_url",
 -	Default: "https://api.github.com/repos/rclone/rclone-webui-react/releases/latest",
--	Help:    "URL to fetch the releases for webgui",
+-	Help:    "URL to fetch the releases for webgui **DEPRECATED**",
 -	Groups:  "RC",
+-	Hide:    fs.OptionHideBoth,
 -}, {
  	Name:    "rc_enable_metrics",
  	Default: false,
  	Help:    "Enable the Prometheus metrics path at the remote control server",
-@@ -107,11 +82,6 @@
+@@ -112,11 +82,6 @@
  	Serve               bool                   `config:"rc_serve"`                   // set to serve files from remotes
  	ServeNoModTime      bool                   `config:"rc_serve_no_modtime"`        // don't read the modification time
  	NoAuth              bool                   `config:"rc_no_auth"`                 // set to disable auth checks on methods which require it
--	WebUI               bool                   `config:"rc_web_gui"`                 // set to launch the web ui
--	WebGUIUpdate        bool                   `config:"rc_web_gui_update"`          // set to check new update
--	WebGUIForceUpdate   bool                   `config:"rc_web_gui_force_update"`    // set to force download new update
--	WebGUINoOpenBrowser bool                   `config:"rc_web_gui_no_open_browser"` // set to disable auto opening browser
--	WebGUIFetchURL      string                 `config:"rc_web_fetch_url"`           // set the default url for fetching webgui
+-	WebUI               bool                   `config:"rc_web_gui"`                 // set to launch the web ui **DEPRECATED**
+-	WebGUIUpdate        bool                   `config:"rc_web_gui_update"`          // set to check new update **DEPRECATED**
+-	WebGUIForceUpdate   bool                   `config:"rc_web_gui_force_update"`    // set to force download new update **DEPRECATED**
+-	WebGUINoOpenBrowser bool                   `config:"rc_web_gui_no_open_browser"` // set to disable auto opening browser **DEPRECATED**
+-	WebGUIFetchURL      string                 `config:"rc_web_fetch_url"`           // set the default url for fetching webgui **DEPRECATED**
  	EnableMetrics       bool                   `config:"rc_enable_metrics"`          // set to disable prometheus metrics on /metrics
  	MetricsHTTP         libhttp.Config         `config:"metrics"`
  	MetricsAuth         libhttp.AuthConfig     `config:"metrics"`
@@ -232,9 +237,10 @@ diff --git a/cmd/cmd.go b/cmd/cmd.go
  	"sync"
  	"time"
  
-@@ -558,9 +557,6 @@
- 	setupRootCommand(Root)
- 	AddBackendFlags()
+@@ -560,10 +559,7 @@
+ 	if err := registerEnumFlagCompletions(Root); err != nil {
+ 		fs.Fatalf(nil, "Failed to register flag completions: %v", err)
+ 	}
  	if err := Root.Execute(); err != nil {
 -		if strings.HasPrefix(err.Error(), "unknown command") && selfupdateEnabled {
 -			Root.PrintErrf("You could use '%s selfupdate' to get latest features.\n\n", Root.CommandPath())
@@ -245,7 +251,7 @@ diff --git a/cmd/cmd.go b/cmd/cmd.go
 diff --git a/fs/rc/rcserver/rcserver.go b/fs/rc/rcserver/rcserver.go
 --- a/fs/rc/rcserver/rcserver.go
 +++ b/fs/rc/rcserver/rcserver.go
-@@ -3,15 +3,12 @@
+@@ -3,10 +3,8 @@
  
  import (
  	"context"
@@ -256,24 +262,15 @@ diff --git a/fs/rc/rcserver/rcserver.go b/fs/rc/rcserver/rcserver.go
  	"fmt"
  	"mime"
  	"net/http"
- 	"net/url"
--	"path/filepath"
- 	"regexp"
- 	"sort"
- 	"strings"
-@@ -25,11 +22,8 @@
- 	"github.com/rclone/rclone/fs/list"
- 	"github.com/rclone/rclone/fs/rc"
+@@ -26,7 +24,6 @@
  	"github.com/rclone/rclone/fs/rc/jobs"
--	"github.com/rclone/rclone/fs/rc/webgui"
  	libhttp "github.com/rclone/rclone/lib/http"
  	"github.com/rclone/rclone/lib/http/serve"
--	"github.com/rclone/rclone/lib/random"
 -	"github.com/skratchdot/open-golang/open"
  )
  
  // Start the remote control server if configured
-@@ -53,60 +47,25 @@
+@@ -55,14 +52,12 @@
  	ctx            context.Context // for global config
  	server         *libhttp.Server
  	files          http.Handler
@@ -288,42 +285,12 @@ diff --git a/fs/rc/rcserver/rcserver.go b/fs/rc/rcserver/rcserver.go
  	// Add some more mime types which are often missing
  	_ = mime.AddExtensionType(".wasm", "application/wasm")
  	_ = mime.AddExtensionType(".js", "application/javascript")
- 
--	cachePath := filepath.Join(config.GetCacheDir(), "webgui")
--	extractPath := filepath.Join(cachePath, "current/build")
--	// File handling
+@@ -71,16 +66,13 @@
  	if opt.Files != "" {
--		if opt.WebUI {
--			fs.Logf(nil, "--rc-files overrides --rc-web-gui command\n")
--		}
  		fs.Logf(nil, "Serving files from %q", opt.Files)
  		fileHandler = http.FileServer(http.Dir(opt.Files))
 -	} else if opt.WebUI {
--		if err := webgui.CheckAndDownloadWebGUIRelease(opt.WebGUIUpdate, opt.WebGUIForceUpdate, opt.WebGUIFetchURL, config.GetCacheDir()); err != nil {
--			fs.Errorf(nil, "Error while fetching the latest release of Web GUI: %v", err)
--		}
--		if opt.NoAuth {
--			fs.Logf(nil, "It is recommended to use web gui with auth.")
--		} else {
--			if opt.Auth.BasicUser == "" && opt.Auth.HtPasswd == "" {
--				opt.Auth.BasicUser = "gui"
--				fs.Infof(nil, "No username specified. Using default username: %s \n", rc.Opt.Auth.BasicUser)
--			}
--			if opt.Auth.BasicPass == "" && opt.Auth.HtPasswd == "" {
--				randomPass, err := random.Password(128)
--				if err != nil {
--					fs.Fatalf(nil, "Failed to make password: %v", err)
--				}
--				opt.Auth.BasicPass = randomPass
--				fs.Infof(nil, "No password specified. Using random password: %s \n", randomPass)
--			}
--		}
--		opt.Serve = true
--
--		fs.Logf(nil, "Serving Web GUI")
--		fileHandler = http.FileServer(http.Dir(extractPath))
--
--		pluginsHandler = http.FileServer(http.Dir(webgui.PluginsPath))
+-		return nil, errors.New("--rc-web-gui has been superseded by the `rclone gui` command")
  	}
  
  	s := &Server{
@@ -334,7 +301,8 @@ diff --git a/fs/rc/rcserver/rcserver.go b/fs/rc/rcserver/rcserver.go
  		noAuth:         opt.NoAuth,
  	}
  
-@@ -149,35 +108,7 @@
+ 	var err error
+@@ -122,35 +114,6 @@
  
  	for _, URL := range s.server.URLs() {
  		fs.Logf(nil, "Serving remote control on %s", URL)
@@ -359,7 +327,7 @@ diff --git a/fs/rc/rcserver/rcserver.go b/fs/rc/rcserver/rcserver.go
 -				openURL.RawPath = "/#/login"
 -			}
 -			// Don't open browser if serving in testing environment or required not to do so.
--			if flag.Lookup("test.v") == nil && !s.opt.WebGUINoOpenBrowser {
+-			if flag.Lookup("test.v") == nil {
 -				if err := open.Start(openURL.String()); err != nil {
 -					fs.Errorf(nil, "Failed to open Web GUI in browser: %v. Manually access it at: %s", err, openURL.String())
 -				}
@@ -367,32 +335,9 @@ diff --git a/fs/rc/rcserver/rcserver.go b/fs/rc/rcserver/rcserver.go
 -				fs.Logf(nil, "Web GUI is not automatically opening browser. Navigate to %s to use.", openURL.String())
 -			}
 -		}
-+
  	}
  	return nil
  }
-@@ -459,21 +390,6 @@
- 		s.serveRoot(w, r)
- 		return
- 	case s.files != nil:
--		if s.opt.WebUI {
--			pluginsMatchResult := webgui.PluginsMatch.FindStringSubmatch(path)
--
--			if len(pluginsMatchResult) > 2 {
--				ok := webgui.ServePluginOK(w, r, pluginsMatchResult)
--				if !ok {
--					r.URL.Path = fmt.Sprintf("/%s/%s/app/build/%s", pluginsMatchResult[1], pluginsMatchResult[2], pluginsMatchResult[3])
--					s.pluginsHandler.ServeHTTP(w, r)
--					return
--				}
--				return
--			} else if webgui.ServePluginWithReferrerOK(w, r, path) {
--				return
--			}
--		}
- 		// Serve the files
- 		r.URL.Path = "/" + path
- 		s.files.ServeHTTP(w, r)
 diff --git a/rclone.go b/rclone.go
 --- a/rclone.go
 +++ b/rclone.go

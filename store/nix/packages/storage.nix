@@ -118,6 +118,15 @@
       else (packageSetFor target targetPkgs).rclone.override {enableCmount = false;}
     ).overrideAttrs
     (old: {
+      version = "1.76.0";
+      src = buildPkgs.fetchFromGitHub {
+        owner = "rclone";
+        repo = "rclone";
+        tag = "v1.76.0";
+        hash = "sha256-QHmiqASFr4ZJQE+QsSXEbIlgNfsw8iOVvBLdl57bbDQ=";
+      };
+      vendorHash = "sha256-+08M76VSLYFZjblRMFXg925k0qOzW25By0YyeIOLNo4=";
+      ldflags = ["-s" "-w" "-linkmode=internal" "-X github.com/rclone/rclone/fs.Version=v1.76.0"];
       outputs = ["out"];
       buildInputs = [];
       env =
@@ -135,7 +144,7 @@
         '';
       postConfigure = ''
         rm -r cmd/gui cmd/selfupdate cmd/selfupdate_enabled.go \
-          cmd/selfupdate_disabled.go fs/rc/webgui
+          cmd/selfupdate_disabled.go
         export GOFLAGS="$GOFLAGS -tags=noselfupdate"
       '';
       postInstall = "";
