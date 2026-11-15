@@ -242,6 +242,7 @@ impl Xargs {
             BufReader::new(stdin.lock()),
             self.delimiter,
             self.replace.is_some(),
+            self.max_lines.is_some() || self.replace.is_some(),
             self.eof.clone(),
             budget,
         );
@@ -251,7 +252,16 @@ impl Xargs {
         let mut status = 0;
         let mut saw_input = false;
 
-        while let Some(record) = records.next_record()? {
+        let mut input_failure = None;
+        loop {
+            let record = match records.next_record() {
+                Ok(Some(record)) => record,
+                Ok(None) => break,
+                Err(error) => {
+                    input_failure = Some(error);
+                    break;
+                }
+            };
             saw_input = true;
             if self.replace.is_some() {
                 if !self.arguments_fit(&record, budget) {
@@ -312,13 +322,20 @@ impl Xargs {
             if !self.queue_batch(&pending, budget, &mut active, &mut status)? {
                 return Ok(status);
             }
-        } else if !saw_input && !self.no_run_if_empty && self.replace.is_none() {
+        } else if !saw_input
+            && input_failure.is_none()
+            && !self.no_run_if_empty
+            && self.replace.is_none()
+        {
             self.queue_batch(&[], budget, &mut active, &mut status)?;
         }
         while let Some(child) = active.pop_front() {
             status = combine_status(status, wait_child(child)?);
         }
-        Ok(status)
+        match input_failure {
+            Some(error) => Err(error),
+            None => Ok(status),
+        }
     }
 
     fn arguments_fit_with(
@@ -493,6 +510,7 @@ struct InputRecords<R> {
     delimiter: Option<u8>,
     eof: Option<Vec<u8>>,
     replacement: bool,
+    linewise: bool,
     trailing_blank: bool,
     field: Vec<u8>,
     record: Vec<OsString>,
@@ -523,6 +541,7 @@ impl<R: BufRead> InputRecords<R> {
         input: R,
         delimiter: Option<u8>,
         replacement: bool,
+        linewise: bool,
         eof: Option<OsString>,
         budget: usize,
     ) -> Self {
@@ -531,6 +550,7 @@ impl<R: BufRead> InputRecords<R> {
             delimiter,
             eof: eof.map(|value| value.as_encoded_bytes().to_vec()),
             replacement,
+            linewise,
             trailing_blank: false,
             field: Vec::new(),
             record: Vec::new(),
@@ -695,6 +715,10 @@ impl<R: BufRead> InputRecords<R> {
                                 if self.exhausted {
                                     completed = (!self.record.is_empty())
                                         .then(|| std::mem::take(&mut self.record));
+                                    break;
+                                }
+                                if !self.linewise && !self.record.is_empty() {
+                                    completed = Some(std::mem::take(&mut self.record));
                                     break;
                                 }
                                 if byte == b'\n'

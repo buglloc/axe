@@ -129,3 +129,19 @@ fn missing_mode_preserves_cyclic_components_and_resolves_later_parents() {
     assert!(output.status.success(), "{:?}", output.stderr);
     assert_eq!(fs::read_link(root.join("dst/link")).unwrap(), Path::new("../a"));
 }
+
+#[test]
+fn xargs_runs_completed_arguments_before_a_later_quote_error() {
+    let scratch = Scratch::new();
+    for options in [&[][..], &["-n1"][..], &["-s512"][..]] {
+        let mut argv = args(options);
+        argv.extend(args(&["printf", "%s\\0"]));
+        let output = run(&scratch.0, "xargs", &refs(&argv), b"unclosed \"quote");
+        assert_eq!(output.status.code(), Some(1), "{options:?}");
+        assert_eq!(output.stdout, b"unclosed\0", "{options:?}");
+    }
+    let argv = args(&["-L1", "printf", "%s\\0"]);
+    let output = run(&scratch.0, "xargs", &refs(&argv), b"unclosed \"quote");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+}

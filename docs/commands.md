@@ -181,6 +181,8 @@ including invalid UTF-8, and `-regex`/`-iregex` accept byte-oriented operands.
 Output write failures report an error and return status 1. `xargs` supports
 GNU logical EOF options `-E`, legacy `-e`, and `--eof`; the marker is ignored
 with `-0` and `-d`.
+Completed arguments before a malformed quoted field are executed before
+`xargs` reports failure. `-L` and `-I` keep incomplete logical records together.
 
 `tree -h` prints compact human-readable sizes before names, for example
 `[4.9K]  big`. It accepts clustered and repeated flags; `--help` prints help.
