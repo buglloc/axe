@@ -13,10 +13,8 @@ pub struct Flags {
     n: bool,
     // case-insensitive
     i: bool,
-    // multi-line mode: ^ and $ match begin/end of line
+    // jq multiline mode: allow . to match \n
     m: bool,
-    // single-line mode: allow . to match \n
-    s: bool,
     // greedy
     l: bool,
     // extended mode: ignore whitespace and allow line comments (starting with `#`)
@@ -32,13 +30,11 @@ impl Flags {
                 'n' => out.n = true,
                 'i' => out.i = true,
                 'm' => out.m = true,
-                's' => out.s = true,
+                // Perl NG already uses whole-input anchors by default.
+                's' => {}
                 'l' => out.l = true,
                 'x' => out.x = true,
-                'p' => {
-                    out.m = true;
-                    out.s = true;
-                }
+                'p' => out.m = true,
                 c => return Err(c),
             }
         }
@@ -56,8 +52,8 @@ impl Flags {
     fn impact(self, builder: &mut RegexBuilder) -> &mut RegexBuilder {
         builder
             .case_insensitive(self.i)
-            .multi_line(self.m)
-            .dot_matches_new_line(self.s)
+            .multi_line(false)
+            .dot_matches_new_line(self.m)
             .swap_greed(self.l)
             .ignore_whitespace(self.x)
     }

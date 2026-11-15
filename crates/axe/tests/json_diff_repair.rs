@@ -182,3 +182,22 @@ fn jq_global_regex_preserves_adjacent_and_trailing_empty_matches() {
         b"\"XX\"\n",
     );
 }
+
+#[test]
+fn jq_regex_multiline_flag_changes_dot_not_anchors() {
+    let scratch = Scratch::new();
+    expect_output(
+        scratch.run("jq", &["-cn", "[\"a\\nb\" | splits(\"^\"; \"m\")]"], b""),
+        0,
+        b"[\"\",\"a\\nb\"]\n",
+    );
+    expect_output(
+        scratch.run(
+            "jq",
+            &["-cn", "\"a\\nb\" | [test(\"a.b\"), test(\"a.b\"; \"m\"), test(\"a.b\"; \"s\"), test(\"a.b\"; \"p\"), test(\"^b\"; \"m\")]"],
+            b"",
+        ),
+        0,
+        b"[false,true,false,true,false]\n",
+    );
+}

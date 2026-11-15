@@ -7,4 +7,7 @@ Source: the `jaq-std` 3.0.4 crate from crates.io, commit `f7fea9219d8d5364c91c6a
 - Iterate global regex searches explicitly so an empty match adjacent to a
   nonempty match, including at end of input, is preserved. Advance an empty
   match by one character to guarantee progress.
+- Map jq's `m` flag to dot-matches-newline. Keep whole-input anchors for
+  jq's Perl NG default, `s`, and `p`, rather than treating `m` as Rust's
+  line-anchor flag.
 - Consumer coverage: `crates/axe/tests/json_diff_repair.rs`.
