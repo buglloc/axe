@@ -106,3 +106,32 @@ fn base64url_accepts_unpadded_final_quanta() {
         assert_eq!(output.status.code(), Some(1), "{input:?}: {output:?}");
     }
 }
+
+#[test]
+fn base32_short_padded_quanta_do_not_emit_uncommitted_bytes() {
+    let scratch = Scratch::new("base32-short-padding");
+    for (applet, format, alphabet) in [
+        ("base32", None, &b"ME======"[..]),
+        ("basenc", Some("--base32"), &b"ME======"[..]),
+        ("basenc", Some("--base32hex"), &b"C4======"[..]),
+    ] {
+        let mut args = vec!["-d"];
+        args.extend(format);
+        for length in 3..8 {
+            let output = run(scratch.path(), applet, &args, &alphabet[..length]);
+            assert_eq!(output.status.code(), Some(1), "{applet} {length}: {output:?}");
+            assert!(output.stdout.is_empty(), "{applet} {length}: {output:?}");
+            let mut input = alphabet.to_vec();
+            input.extend_from_slice(&alphabet[..length]);
+            let output = run(scratch.path(), applet, &args, &input);
+            assert_eq!(output.status.code(), Some(1), "{applet} {length}: {output:?}");
+            assert_eq!(output.stdout, b"a", "{applet} {length}: {output:?}");
+        }
+        let output = run(scratch.path(), applet, &args, alphabet);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"a");
+        let output = run(scratch.path(), applet, &args, &alphabet[..2]);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"a");
+    }
+}

@@ -731,6 +731,14 @@ pub mod fast_decode {
                 .position(|&byte| byte == b'=')
                 .unwrap_or(chunk.len());
             let bytes_per_quantum = codec.unpadded_multiple();
+            // An incomplete padded base32 quantum has no committed bytes.
+            if quantum == 8
+                && bytes_per_quantum == 5
+                && chunk.len() < quantum
+                && symbols < chunk.len()
+            {
+                break;
+            }
             let decoded_len = symbols * bytes_per_quantum / quantum;
             if decoded_len == 0 || bytes_per_quantum > 8 {
                 break;
