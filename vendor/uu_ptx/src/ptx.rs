@@ -554,6 +554,7 @@ struct Chunks {
     before: Range<usize>,
     keyafter: Range<usize>,
     head: Range<usize>,
+    before_credit: usize,
     tail_truncated: bool,
     before_truncated: bool,
     keyafter_truncated: bool,
@@ -579,10 +580,13 @@ impl Chunks {
             .align_start(before_end.saturating_sub(layout.before_width).max(left))
             .min(before_end);
         let mut before_truncated = mark && trim_end(bytes, left, before_start) > left;
-        let before = trim_start(bytes, before_start, before_end)..before_end;
+        let before_start = trim_start(bytes, before_start, word.start);
+        let before_credit = before_start.saturating_sub(before_end);
+        let before = before_start.min(before_end)..before_end;
 
         let tail_width = layout
             .before_width
+            .saturating_add(before_credit)
             .saturating_sub(before.len())
             .saturating_sub(config.gap_size);
         let mut tail = keyafter.end..keyafter.end;
@@ -622,6 +626,7 @@ impl Chunks {
             before,
             keyafter,
             head,
+            before_credit,
             tail_truncated,
             before_truncated,
             keyafter_truncated,
@@ -730,6 +735,7 @@ fn format_dumb_line(
         layout
             .half_width
             .saturating_sub(config.gap_size)
+            .saturating_add(chunks.before_credit)
             .saturating_sub(left_used),
     )?;
     write_mark(writer, config, chunks.before_truncated)?;

@@ -229,3 +229,17 @@ fn pr_empty_truncated_columns_do_not_shift_following_content() {
         b"  alph\n",
     );
 }
+
+#[test]
+fn ptx_leading_context_whitespace_does_not_drop_a_fitting_tail() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(
+            scratch.path(),
+            "ptx",
+            &["-w30", "-g1"],
+            b"  alpha\tbeta\n\nGamma delta.",
+        ),
+        b"     alpha beta Gamma delta.\n Gamma delta.     alpha beta\n delta/   alpha beta  Gamma\n    beta  Gamma delta.   /alpha\n",
+    );
+}
