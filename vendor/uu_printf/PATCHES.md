@@ -20,6 +20,8 @@ Source: the `uu_printf` 0.12.0 crate from crates.io, upstream revision
 - Emit Unicode escapes in the active `LC_CTYPE` codeset through uucore's
   shared format writer, including `%b`; unrepresentable characters use
   uppercase `\\uHHHH`/`\\UHHHHHHHH` fallback notation.
+- Propagate malformed numeric escape errors in `%b` instead of substituting a
+  literal `\x`; emit completed prefixes without buffering the whole operand.
 - Keep a standalone manifest without upstream workspace lint/benchmark wiring;
   AXE owns dependency resolution. The checked-in `tests/` cover the AXE native
   bridge.

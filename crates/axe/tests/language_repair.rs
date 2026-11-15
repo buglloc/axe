@@ -242,3 +242,28 @@ fn grep_binary_nul_boundaries_affect_counts_and_anchors() {
         assert!(!inverted.stderr.is_empty(), "{inverted:?}");
     }
 }
+
+#[test]
+fn printf_rejects_malformed_argument_escapes_without_losing_printed_prefixes() {
+    for locale in ["C", "C.UTF-8"] {
+        for escape in [r"\x", r"\uZZZZ", r"\u123", r"\uD800", r"\U0000DFFF"] {
+            let operand = format!("before{escape}");
+            let argument = run("printf", &["%bafter", &operand], b"", locale);
+            assert_eq!(argument.status.code(), Some(1), "{argument:?}");
+            assert_eq!(argument.stdout, b"before", "{argument:?}");
+            assert!(!argument.stderr.is_empty(), "{argument:?}");
+
+            let format = format!("{operand}|after");
+            let literal = run("printf", &[&format], b"", locale);
+            assert_eq!(literal.status.code(), Some(1), "{literal:?}");
+            assert_eq!(literal.stdout, b"before", "{literal:?}");
+            assert!(!literal.stderr.is_empty(), "{literal:?}");
+        }
+        assert_output(
+            run("printf", &["%bafter", r"before\c\uD800"], b"", locale),
+            0,
+            b"before",
+        );
+        assert_output(run("printf", &["%b", r"\q"], b"", locale), 0, br"\q");
+    }
+}
