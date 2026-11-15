@@ -86,3 +86,23 @@ fn base_decoders_reject_carriage_returns_unless_ignoring_garbage() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"\x8d\x07\xb7");
 }
+
+#[test]
+fn base64url_accepts_unpadded_final_quanta() {
+    let scratch = Scratch::new("base64url-tail");
+    for (input, expected) in [
+        (&b"Aw"[..], &b"\x03"[..]),
+        (&b"AwQ"[..], &b"\x03\x04"[..]),
+        (&b"AwQFAw"[..], &b"\x03\x04\x05\x03"[..]),
+        (&b"Aw=="[..], &b"\x03"[..]),
+        (&b"AwQ="[..], &b"\x03\x04"[..]),
+    ] {
+        let output = run(scratch.path(), "basenc", &["--base64url", "-d"], input);
+        assert!(output.status.success(), "{input:?}: {output:?}");
+        assert_eq!(output.stdout, expected);
+    }
+    for input in [&b"A"[..], &b"Aw="[..], &b"Aw==="[..]] {
+        let output = run(scratch.path(), "basenc", &["--base64url", "-d"], input);
+        assert_eq!(output.status.code(), Some(1), "{input:?}: {output:?}");
+    }
+}

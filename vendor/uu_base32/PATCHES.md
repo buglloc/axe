@@ -11,6 +11,8 @@ Source: the `uu_base32` 0.12.0 crate from crates.io, upstream revision
   error does not discard bytes already accepted by the decoder.
 - Skip line feeds while decoding; carriage returns require `--ignore-garbage`,
   matching GNU's byte-level alphabet validation.
+- Decode complete unpadded base64url final quanta with the unpadded alphabet,
+  without changing padded encoding output or accepting malformed padding.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
 

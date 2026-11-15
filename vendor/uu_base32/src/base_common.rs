@@ -14,7 +14,7 @@ use uucore::display::Quotable;
 use uucore::encoding::{
     BASE2LSBF, BASE2MSBF, Base32Wrapper, Base58Wrapper, Base64SimdWrapper, EncodingWrapper, Format,
     SupportsFastDecodeAndEncode, Z85Wrapper,
-    for_base_common::{BASE32, BASE32HEX, BASE64URL, HEXUPPER_PERMISSIVE},
+    for_base_common::{BASE32, BASE32HEX, BASE64URL, BASE64URL_NOPAD, HEXUPPER_PERMISSIVE},
 };
 use uucore::error::{FromIo, UResult, USimpleError, UUsageError, strip_errno};
 use uucore::format_usage;
@@ -276,15 +276,53 @@ pub fn get_supports_fast_decode_and_encode(
                 alphabet,
             ))
         }
-        Format::Base64Url => Box::from(EncodingWrapper::new(
+        Format::Base64Url => Box::from(Base64UrlWrapper(EncodingWrapper::new(
             BASE64URL,
             BASE64_VALID_DECODING_MULTIPLE,
             BASE64_UNPADDED_MULTIPLE,
             // spell-checker:disable-next-line
             b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789=_-",
-        )),
+        ))),
         Format::Z85 => Box::from(Z85Wrapper {}),
         Format::Base58 => Box::from(Base58Wrapper {}),
+    }
+}
+
+struct Base64UrlWrapper(EncodingWrapper);
+
+impl SupportsFastDecodeAndEncode for Base64UrlWrapper {
+    fn alphabet(&self) -> &'static [u8] {
+        self.0.alphabet()
+    }
+
+    fn decode_into_vec(&self, input: &[u8], output: &mut Vec<u8>) -> UResult<()> {
+        if !input.len().is_multiple_of(4) && !input.contains(&b'=') {
+            EncodingWrapper::new(
+                BASE64URL_NOPAD,
+                self.valid_decoding_multiple(),
+                self.unpadded_multiple(),
+                self.alphabet(),
+            )
+            .decode_into_vec(input, output)
+        } else {
+            self.0.decode_into_vec(input, output)
+        }
+    }
+
+    fn encode_to_vec_deque(
+        &self,
+        input: &[u8],
+        output: &mut std::collections::VecDeque<u8>,
+    ) -> UResult<()> {
+        self.0.encode_to_vec_deque(input, output)
+    }
+
+    fn unpadded_multiple(&self) -> usize {
+        self.0.unpadded_multiple()
+    }
+
+    fn valid_decoding_multiple(&self) -> usize {
+        self.0.valid_decoding_multiple()
     }
 }
 
