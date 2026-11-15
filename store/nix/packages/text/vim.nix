@@ -10,6 +10,13 @@
     ncurses = portableNcurses packageSet;
   in
     (packageSet.vim.override {inherit ncurses;}).overrideAttrs (old: {
+      version = "9.2.1351";
+      src = buildPkgs.fetchFromGitHub {
+        owner = "vim";
+        repo = "vim";
+        rev = "v9.2.1351";
+        hash = "sha256-jkcpNtpBLqS+9ngQwGfJ5oXO0BZFL7DVUSKpQJFztcg=";
+      };
       outputs = ["out"];
       meta = old.meta // {outputsToInstall = ["out"];};
       patches = (old.patches or []) ++ [../../patches/vim-portable-runtime.patch];
