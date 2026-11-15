@@ -170,3 +170,20 @@ fn fold_respects_locale_and_keeps_multibyte_units_in_byte_mode() {
         "界\né\n\tA\n".as_bytes(),
     );
 }
+
+#[test]
+fn csplit_suppresses_records_at_repeated_numeric_boundaries() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(
+            scratch.path(),
+            "csplit",
+            &["--suppress-matched", "-", "2", "2"],
+            b"a\nb\nc",
+        ),
+        b"2\n0\n0\n",
+    );
+    assert_eq!(fs::read(scratch.path().join("xx00")).unwrap(), b"a\n");
+    assert_eq!(fs::read(scratch.path().join("xx01")).unwrap(), b"");
+    assert_eq!(fs::read(scratch.path().join("xx02")).unwrap(), b"");
+}

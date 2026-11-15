@@ -12,6 +12,8 @@ Source: the `uu_csplit` 0.12.0 crate from crates.io, upstream revision
   dependencies; AXE owns dependency resolution and locales.
 - Accept a numeric boundary immediately after the final record when suppressing
   the boundary record; an absent suppressed record is not an out-of-range split.
+- Suppress the current record even when a numeric split boundary precedes the
+  current input position, including repeated explicit numeric patterns.
 
 Upstreamability: byte-preserving records and final-split behavior are intended
 for upstream; no upstream issue or commit is recorded in AXE.
