@@ -9,78 +9,7 @@ use std::{
     io::{stderr, Write},
 };
 
-use super::{Matcher, MatcherIO, WalkEntry};
-
-#[cfg(unix)]
-fn format_permissions(mode: uucore::libc::mode_t) -> String {
-    let file_type = match mode & (uucore::libc::S_IFMT as uucore::libc::mode_t) {
-        uucore::libc::S_IFDIR => "d",
-        uucore::libc::S_IFREG => "-",
-        _ => "?",
-    };
-
-    // S_$$USR means "user permissions"
-    let user_perms = format!(
-        "{}{}{}",
-        if mode & uucore::libc::S_IRUSR != 0 {
-            "r"
-        } else {
-            "-"
-        },
-        if mode & uucore::libc::S_IWUSR != 0 {
-            "w"
-        } else {
-            "-"
-        },
-        if mode & uucore::libc::S_IXUSR != 0 {
-            "x"
-        } else {
-            "-"
-        }
-    );
-
-    // S_$$GRP means "group permissions"
-    let group_perms = format!(
-        "{}{}{}",
-        if mode & uucore::libc::S_IRGRP != 0 {
-            "r"
-        } else {
-            "-"
-        },
-        if mode & uucore::libc::S_IWGRP != 0 {
-            "w"
-        } else {
-            "-"
-        },
-        if mode & uucore::libc::S_IXGRP != 0 {
-            "x"
-        } else {
-            "-"
-        }
-    );
-
-    // S_$$OTH means "other permissions"
-    let other_perms = format!(
-        "{}{}{}",
-        if mode & uucore::libc::S_IROTH != 0 {
-            "r"
-        } else {
-            "-"
-        },
-        if mode & uucore::libc::S_IWOTH != 0 {
-            "w"
-        } else {
-            "-"
-        },
-        if mode & uucore::libc::S_IXOTH != 0 {
-            "x"
-        } else {
-            "-"
-        }
-    );
-
-    format!("{}{}{}{}", file_type, user_perms, group_perms, other_perms)
-}
+use super::{Matcher, MatcherIO, StdoutErrors, WalkEntry};
 
 #[cfg(windows)]
 fn format_permissions(file_attributes: u32) -> String {
@@ -111,11 +40,20 @@ fn format_permissions(file_attributes: u32) -> String {
 
 pub struct Ls {
     output_file: Option<File>,
+    stdout_errors: StdoutErrors,
 }
 
 impl Ls {
     pub fn new(output_file: Option<File>) -> Self {
-        Self { output_file }
+        Self {
+            output_file,
+            stdout_errors: StdoutErrors::default(),
+        }
+    }
+
+    pub fn with_stdout_errors(mut self, stdout_errors: StdoutErrors) -> Self {
+        self.stdout_errors = stdout_errors;
+        self
     }
 
     #[cfg(unix)]
@@ -126,28 +64,14 @@ impl Ls {
         mut out: impl Write,
         print_error_message: bool,
     ) {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        use std::os::unix::fs::MetadataExt;
 
         let metadata = file_info.metadata().unwrap();
 
         let inode_number = metadata.ino();
-        let number_of_blocks = {
-            let size = metadata.size();
-            let number_of_blocks = size / 1024;
-            let remainder = number_of_blocks % 4;
-
-            if remainder == 0 {
-                if number_of_blocks == 0 {
-                    4
-                } else {
-                    number_of_blocks
-                }
-            } else {
-                number_of_blocks + (4 - (remainder))
-            }
-        };
-        let permission =
-            { format_permissions(metadata.permissions().mode() as uucore::libc::mode_t) };
+        // st_blocks counts 512-byte units; -ls shows 1 KiB ones
+        let number_of_blocks = metadata.blocks().div_ceil(2);
+        let permission = uucore::fs::display_permissions(metadata, true);
         let hard_links = metadata.nlink();
         // Fall back to the numeric id when the uid/gid has no passwd/group entry
         // (unmapped owner) — matching GNU find, which never crashes. uucore::entries
@@ -159,10 +83,16 @@ impl Ls {
         let size = metadata.size();
         let last_modified = {
             let system_time = metadata.modified().unwrap();
-            let now_utc: DateTime<chrono::Utc> = system_time.into();
-            now_utc.format("%b %e %H:%M")
+            let local: DateTime<chrono::Local> = system_time.into();
+            local.format("%b %e %H:%M")
         };
-        let path = file_info.path().to_string_lossy();
+        let mut path = file_info.path().to_string_lossy().into_owned();
+        if file_info.file_type().is_symlink() {
+            if let Ok(target) = std::fs::read_link(file_info.path()) {
+                path.push_str(" -> ");
+                path.push_str(&target.to_string_lossy());
+            }
+        }
 
         match writeln!(
             out,
@@ -188,6 +118,8 @@ impl Ls {
                     )
                     .unwrap();
                     matcher_io.set_exit_code(1);
+                } else {
+                    self.stdout_errors.handle(&e, matcher_io);
                 }
             }
         }
@@ -232,8 +164,8 @@ impl Ls {
         let group = 0;
         let last_modified = {
             let system_time = metadata.modified().unwrap();
-            let now_utc: DateTime<chrono::Utc> = system_time.into();
-            now_utc.format("%b %e %H:%M")
+            let local: DateTime<chrono::Local> = system_time.into();
+            local.format("%b %e %H:%M")
         };
         let path = file_info.path().to_string_lossy();
 
@@ -261,6 +193,8 @@ impl Ls {
                     )
                     .unwrap();
                     matcher_io.set_exit_code(1);
+                } else {
+                    self.stdout_errors.handle(&e, matcher_io);
                 }
             }
         }
@@ -284,26 +218,5 @@ impl Matcher for Ls {
 
     fn has_side_effects(&self) -> bool {
         true
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    #[cfg(unix)]
-    fn test_format_permissions() {
-        use super::format_permissions;
-
-        let mode: uucore::libc::mode_t = 0o100_644;
-        let expected = "-rw-r--r--";
-        assert_eq!(format_permissions(mode), expected);
-
-        let mode: uucore::libc::mode_t = 0o040_755;
-        let expected = "drwxr-xr-x";
-        assert_eq!(format_permissions(mode), expected);
-
-        let mode: uucore::libc::mode_t = 0o100_777;
-        let expected = "-rwxrwxrwx";
-        assert_eq!(format_permissions(mode), expected);
     }
 }

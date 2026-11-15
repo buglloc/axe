@@ -107,7 +107,7 @@ fn type_creator(type_string: &str, mode: &str) -> Result<HashSet<FileType>, Box<
     if type_string.contains(',') {
         for part in type_string.split(',') {
             if part.is_empty() {
-                return Err(From::from(format!("find: Last file type in list argument to {mode} is missing, i.e., list is ending on: ','")));
+                return Err(From::from(format!("Last file type in list argument to {mode} is missing, i.e., list is ending on: ','")));
             }
             let file_type = parse(part, mode)?;
             if !file_types.insert(file_type) {
@@ -186,7 +186,7 @@ mod tests {
             }
         };
         #[cfg(windows)]
-        let _ = {
+        {
             if let Err(e) = symlink_file("abbbc", "test_data/links/link-f") {
                 assert!(
                     e.kind() == ErrorKind::AlreadyExists,

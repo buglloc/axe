@@ -1,4 +1,4 @@
-# Vendored from uutils/procps d318892db47de95ed181aab4270dd9b4a1130c43, src/uu/pidof.
+# Vendored from uutils/procps 498c88fdfc93db6893a66e5465f42e8246e3f995, src/uu/pidof.
 # AXE changes: executable/argv pathname matching without flattening argument boundaries.
 [package]
 name = "uu_pidof"
@@ -12,8 +12,8 @@ license = "MIT"
 
 [dependencies]
 clap = { version = "4.5.4", features = ["wrap_help", "cargo", "env"] }
-uucore = "=0.7.0"
-uu_pgrep = { git = "https://github.com/uutils/procps", rev = "d318892db47de95ed181aab4270dd9b4a1130c43" }
+uucore = "=0.12.0"
+uu_pgrep = { git = "https://github.com/uutils/procps", rev = "498c88fdfc93db6893a66e5465f42e8246e3f995" }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.2", features = ["fs", "process", "param"] }

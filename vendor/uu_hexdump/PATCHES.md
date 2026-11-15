@@ -1,7 +1,7 @@
 # uu_hexdump patches
 
 Source: `uu_hexdump` 0.0.1 from `https://github.com/uutils/util-linux`,
-revision `0cb1f90b9983c504a7f895ba65caa4b0b1f51c20` (source path
+revision `6e305109ff428fd2906357a402ef5e42c8ec13fd` (source path
 `src/uu/hexdump`).
 
 - Parse input operands as `PathBuf` and retain them through chained reading and

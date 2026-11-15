@@ -1,7 +1,7 @@
 # uu_mountpoint patches
 
 Source: `uu_mountpoint` 0.0.1 from `https://github.com/uutils/util-linux`,
-revision `0cb1f90b9983c504a7f895ba65caa4b0b1f51c20` (source path
+revision `6e305109ff428fd2906357a402ef5e42c8ec13fd` (source path
 `src/uu/mountpoint`).
 
 - Add GNU/util-linux `-q`, `-d`/`--fs-devno`, and `-x`/`--devno` modes with

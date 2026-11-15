@@ -1,9 +1,9 @@
-# Vendored from findutils 0.10.0; see .cargo_vcs_info.json for upstream provenance.
+# Vendored from findutils 0.11.0; see .cargo_vcs_info.json for upstream provenance.
 [package]
 name = "findutils"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
-authors = ["uutils developers"]
+rust-version = "1.88.0"
 autobins = false
 autotests = false
 autobenches = false
@@ -23,9 +23,10 @@ chrono = "0.4.45"
 faccess = "0.2.4"
 nix = { version = "0.31", features = ["fs", "user"] }
 onig = { version = "6.5", default-features = false }
+parse_datetime = "0.17.0"
 regex = "1.12"
 thiserror = "2.0.12"
-uucore = { version = "0.9.0", features = ["entries", "fs", "fsext", "mode"] }
+uucore = { version = "0.12.0", features = ["diagnostics", "entries", "fs", "fsext", "mode"] }
 walkdir = "2.5"
 
 [dev-dependencies]

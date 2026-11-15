@@ -25,7 +25,7 @@ bzip2.workspace = true
 chrono.workspace = true
 clap.workspace = true
 diffutils = { version = "0.6.0" }
-findutils = { version = "0.10.0" }
+findutils = { version = "0.11.0" }
 flate2.workspace = true
 file-format = { version = "0.29.0", features = ["reader"] }
 lzma-rust2.workspace = true
@@ -94,7 +94,6 @@ inotify.workspace = true
 linux-raw-sys.workspace = true
 netlink-packet-route.workspace = true
 rtnetlink.workspace = true
-procps-uucore = { package = "uucore", version = "=0.7.0" }
 procutils-free = { version = "=0.2.0" }
 procutils-hugetop = { version = "=0.2.0" }
 procutils-killall = { version = "=0.2.0" }
@@ -113,11 +112,11 @@ procutils-vmstat = { version = "=0.2.0" }
 procutils-w = { version = "=0.2.0" }
 procutils-watch = { version = "=0.2.0" }
 uu_pidof = { path = "../../vendor/uu_pidof" }
-uu_pidwait = { git = "https://github.com/uutils/procps", rev = "d318892db47de95ed181aab4270dd9b4a1130c43" }
+uu_pidwait = { git = "https://github.com/uutils/procps", rev = "498c88fdfc93db6893a66e5465f42e8246e3f995" }
 util-linux-uucore = { package = "uucore", version = "=0.2.2" }
-uu_dmesg = { git = "https://github.com/uutils/util-linux", rev = "0cb1f90b9983c504a7f895ba65caa4b0b1f51c20" }
+uu_dmesg = { git = "https://github.com/uutils/util-linux", rev = "6e305109ff428fd2906357a402ef5e42c8ec13fd" }
 uu_hexdump = { path = "../../vendor/uu_hexdump" }
-uu_last = { git = "https://github.com/uutils/util-linux", rev = "0cb1f90b9983c504a7f895ba65caa4b0b1f51c20" }
+uu_last = { git = "https://github.com/uutils/util-linux", rev = "6e305109ff428fd2906357a402ef5e42c8ec13fd" }
 uu_mountpoint = { path = "../../vendor/uu_mountpoint" }
 
 [dev-dependencies]

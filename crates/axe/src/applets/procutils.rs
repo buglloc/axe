@@ -129,11 +129,11 @@ fn run_uutil(
     args: Vec<OsString>,
     run: impl FnOnce(std::vec::IntoIter<OsString>) -> i32,
 ) -> i32 {
-    procps_uucore::panic::preserve_inherited_sigpipe();
-    procps_uucore::panic::mute_sigpipe_panic();
+    uucore::panic::preserve_inherited_sigpipe();
+    uucore::panic::mute_sigpipe_panic();
 
-    let name = procps_uucore::get_canonical_util_name(util_crate_name);
-    if let Err(error) = procps_uucore::locale::setup_localization(name) {
+    let name = uucore::get_canonical_util_name(util_crate_name);
+    if let Err(error) = uucore::locale::setup_localization(name) {
         eprintln!("axe: could not initialize localization for '{name}': {error}");
         return 99;
     }

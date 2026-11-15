@@ -1,7 +1,7 @@
 # uu_pidof patches
 
 Source: `uu_pidof` 0.0.1 from `https://github.com/uutils/procps`, revision
-`d318892db47de95ed181aab4270dd9b4a1130c43` (source path `src/uu/pidof`).
+`498c88fdfc93db6893a66e5465f42e8246e3f995` (source path `src/uu/pidof`).
 
 - Read `/proc/<pid>/cmdline` as NUL-separated arguments and compare executable
   paths, basenames, and script arguments without flattening spaces; this keeps

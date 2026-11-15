@@ -4,15 +4,16 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::fs::{self, File};
-use std::path::Path;
+use std::io::{stderr, Write};
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use std::{borrow::Cow, io::{self, Write}};
 
 use chrono::{format::StrftimeItems, DateTime, Local};
 
-use super::{FileType, Matcher, MatcherIO, WalkEntry, WalkError};
+use super::{FileType, Matcher, MatcherIO, StdoutErrors, WalkEntry, WalkError};
 
 #[cfg(unix)]
 use std::os::unix::prelude::MetadataExt;
@@ -24,6 +25,16 @@ const STANDARD_BLOCK_SIZE: u64 = 512;
 enum Justify {
     Left,
     Right,
+}
+
+/// The `+`, space, `#` and `0` flags of a directive. Like GNU find, they only
+/// change the numeric directives `%d` and `%m`.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Flags {
+    plus: bool,
+    space: bool,
+    alternate: bool,
+    zero: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -44,7 +55,7 @@ impl TimeFormat {
                 format!("{}.{:09}0", duration.as_secs(), duration.subsec_nanos())
             }
             Self::Ctime => {
-                const CTIME_FORMAT: &str = "%a %b %d %H:%M:%S.%f0 %Y";
+                const CTIME_FORMAT: &str = "%a %b %e %H:%M:%S.%f0 %Y";
 
                 DateTime::<Local>::from(time)
                     .format(CTIME_FORMAT)
@@ -122,12 +133,14 @@ enum FormatDirective {
 #[derive(Debug, PartialEq, Eq)]
 enum FormatComponent {
     Literal(String),
+    Byte(u8),
     Flush,
     Directive {
         directive: FormatDirective,
         width: Option<usize>,
         precision: Option<usize>,
         justify: Justify,
+        flags: Flags,
     },
 }
 
@@ -153,7 +166,7 @@ impl FormatStringParser<'_> {
 
     fn advance_one(&mut self) -> Result<char, Box<dyn Error>> {
         let c = self.front()?;
-        self.string = &self.string[1..];
+        self.string = &self.string[c.len_utf8()..];
         Ok(c)
     }
 
@@ -169,6 +182,14 @@ impl FormatStringParser<'_> {
         const OCTAL_LEN: usize = 3;
         const OCTAL_RADIX: u32 = 8;
 
+        if self.string.is_empty() {
+            eprintln!(
+                "{}: warning: escape `\\' followed by nothing at all",
+                crate::find::program_name()
+            );
+            return Ok(FormatComponent::Literal("\\".to_owned()));
+        }
+
         // Try parsing an octal sequence first.
         let first = self.front()?;
         if first.is_digit(OCTAL_RADIX) {
@@ -183,10 +204,8 @@ impl FormatStringParser<'_> {
                 .collect();
             let code = u32::from_str_radix(&octal, OCTAL_RADIX)?;
             self.advance_by(octal.len())?;
-            return match char::from_u32(code) {
-                Some(c) => Ok(FormatComponent::Literal(c.to_string())),
-                None => Err(format!("Invalid character value: \\{octal}").into()),
-            };
+            // GNU octal escapes emit one byte, truncating values above 0xff.
+            return Ok(FormatComponent::Byte(code as u8));
         }
 
         self.advance_one()?;
@@ -204,7 +223,13 @@ impl FormatStringParser<'_> {
                 'v' => "\x0B",
                 '0' => "\0",
                 '\\' => "\\",
-                c => return Err(format!("Invalid escape sequence: \\{c}").into()),
+                c => {
+                    eprintln!(
+                        "{}: warning: unrecognized escape '\\{c}'",
+                        crate::find::program_name()
+                    );
+                    return Ok(FormatComponent::Literal(format!("\\{c}")));
+                }
             };
 
             Ok(FormatComponent::Literal(c.to_string()))
@@ -212,6 +237,16 @@ impl FormatStringParser<'_> {
     }
 
     fn parse_format_width(&mut self) -> Result<Option<usize>, Box<dyn Error>> {
+        let width = self.parse_format_number()?;
+        match width {
+            Some(width) if width > u16::MAX as usize => {
+                Err(format!("Format width too large: {width}").into())
+            }
+            _ => Ok(width),
+        }
+    }
+
+    fn parse_format_number(&mut self) -> Result<Option<usize>, Box<dyn Error>> {
         let start = self.string;
         let mut digits = 0;
 
@@ -226,20 +261,10 @@ impl FormatStringParser<'_> {
             let width: usize = digits
                 .parse()
                 .map_err(|_| format!("Invalid format width: {digits}"))?;
-            if width > u16::MAX as usize {
-                return Err(format!("Format width too large: {digits}").into());
-            }
             Ok(Some(width))
         } else {
             Ok(None)
         }
-    }
-    fn parse_format_precision(&mut self) -> Result<Option<usize>, Box<dyn Error>> {
-        if !self.string.starts_with('.') {
-            return Ok(None);
-        }
-        self.advance_one()?;
-        Ok(Some(self.parse_format_width()?.unwrap_or(0)))
     }
 
     fn parse_time_specifier(&mut self, first: char) -> Result<TimeFormat, Box<dyn Error>> {
@@ -262,10 +287,14 @@ impl FormatStringParser<'_> {
     }
 
     fn parse_format_specifier(&mut self) -> Result<FormatComponent, Box<dyn Error>> {
+        let start = self.string;
         let mut justify = Justify::Right;
+        let mut flags = Flags::default();
         loop {
             match self.front()? {
-                ' ' | '+' | '#' | '\'' | '0' => (),
+                ' ' => flags.space = true,
+                '+' => flags.plus = true,
+                '#' => flags.alternate = true,
                 '-' => justify = Justify::Left,
                 _ => break,
             }
@@ -273,9 +302,24 @@ impl FormatStringParser<'_> {
             // safe to unwrap: .front() already succeeded above.
             self.advance_one().unwrap();
         }
+        // GNU find only takes `0` after the other flags.
+        if self.front()? == '0' {
+            flags.zero = true;
+            self.advance_one()?;
+        }
 
         let width = self.parse_format_width()?;
-        let precision = self.parse_format_precision()?;
+        let precision = if self.front()? == '.' {
+            self.advance_one()?;
+            // A precision too large for usize is still too large to print, so
+            // saturate it; print() reports it as GNU find does.
+            Some(match self.parse_format_number() {
+                Ok(precision) => precision.unwrap_or(0),
+                Err(_) => usize::MAX,
+            })
+        } else {
+            None
+        };
 
         let first = self.advance_one()?;
         if first == '%' {
@@ -321,7 +365,14 @@ impl FormatStringParser<'_> {
             },
             'Y' => FormatDirective::Type { follow_links: true },
             // TODO: %Z
-            _ => return Ok(FormatComponent::Literal(first.to_string())),
+            _ => {
+                eprintln!(
+                    "{}: warning: unrecognized format directive '%{first}'",
+                    crate::find::program_name()
+                );
+                let text = &start[..start.len() - self.string.len()];
+                return Ok(FormatComponent::Literal(format!("%{text}")));
+            }
         };
 
         Ok(FormatComponent::Directive {
@@ -329,6 +380,7 @@ impl FormatStringParser<'_> {
             width,
             precision,
             justify,
+            flags,
         })
     }
 
@@ -386,35 +438,6 @@ impl<'entry> From<Cow<'static, str>> for FormatContent<'entry> {
     }
 }
 
-fn write_content(
-    out: &mut impl Write,
-    content: &FormatContent<'_>,
-    width: Option<usize>,
-    precision: Option<usize>,
-    justify: &Justify,
-) -> std::io::Result<()> {
-    let content = match content {
-        FormatContent::Text(text) => text.as_bytes(),
-        FormatContent::Bytes(bytes) => bytes.as_ref(),
-    };
-    let bytes = precision.map_or(content, |precision| {
-        &content[..precision.min(content.len())]
-    });
-    let padding = width.map_or(0, |width| width.saturating_sub(bytes.len()));
-    if matches!(justify, Justify::Right) {
-        for _ in 0..padding {
-            out.write_all(b" ")?;
-        }
-    }
-    out.write_all(bytes)?;
-    if matches!(justify, Justify::Left) {
-        for _ in 0..padding {
-            out.write_all(b" ")?;
-        }
-    }
-    Ok(())
-}
-
 struct FormatString {
     components: Vec<FormatComponent>,
 }
@@ -444,6 +467,79 @@ fn format_non_link_file_type(file_type: FileType) -> char {
         FileType::Fifo => 'p',
         FileType::Socket => 's',
         _ => 'U',
+    }
+}
+
+/// Apply a directive's precision and flags the way GNU find does: `%d` and
+/// `%m` are printed like a C integer conversion (decimal and octal), `%S` is
+/// left alone, and every other directive is a string, cut to the precision.
+fn apply_precision_and_flags<'a>(
+    directive: &FormatDirective,
+    content: FormatContent<'a>,
+    precision: Option<usize>,
+    flags: &Flags,
+    width: Option<usize>,
+    justify: &Justify,
+) -> Cow<'a, [u8]> {
+    let content = match content {
+        FormatContent::Text(content) => content,
+        FormatContent::Bytes(mut bytes) => {
+            if let Some(precision) = precision {
+                match &mut bytes {
+                    Cow::Borrowed(bytes) => *bytes = &bytes[..precision.min(bytes.len())],
+                    Cow::Owned(bytes) => bytes.truncate(precision),
+                }
+            }
+            return bytes;
+        }
+    };
+    let octal = match directive {
+        FormatDirective::Depth => false,
+        FormatDirective::Permissions(PermissionsFormat::Octal) => true,
+        FormatDirective::Sparseness => return str_bytes(content),
+        _ => {
+            // Like GNU find, the precision counts bytes, even inside a character.
+            let mut bytes = str_bytes(content);
+            if let Some(precision) = precision {
+                match &mut bytes {
+                    Cow::Borrowed(b) => *b = &b[..precision.min(b.len())],
+                    Cow::Owned(b) => b.truncate(precision),
+                }
+            }
+            return bytes;
+        }
+    };
+
+    let mut digits = content.into_owned();
+    if precision == Some(0) && digits == "0" {
+        digits.clear();
+    }
+    if let Some(precision) = precision {
+        let zeros = precision.saturating_sub(digits.len());
+        digits.insert_str(0, &"0".repeat(zeros));
+    }
+    if octal && flags.alternate && !digits.starts_with('0') {
+        digits.insert(0, '0');
+    }
+    let sign = match (octal, flags.plus, flags.space) {
+        (false, true, _) => "+",
+        (false, false, true) => " ",
+        _ => "",
+    };
+    if let (Some(width), true) = (
+        width,
+        flags.zero && precision.is_none() && *justify == Justify::Right,
+    ) {
+        let pad = width.saturating_sub(sign.len());
+        digits = format!("{digits:0>pad$}");
+    }
+    format!("{sign}{digits}").into_bytes().into()
+}
+
+fn str_bytes(s: Cow<'_, str>) -> Cow<'_, [u8]> {
+    match s {
+        Cow::Borrowed(s) => Cow::Borrowed(s.as_bytes()),
+        Cow::Owned(s) => Cow::Owned(s.into_bytes()),
     }
 }
 
@@ -579,7 +675,7 @@ fn format_directive<'entry>(
         FormatDirective::Permissions(PermissionsFormat::Octal) => "777".into(),
         #[cfg(unix)]
         FormatDirective::Permissions(PermissionsFormat::Octal) => {
-            format!("{:>03o}", meta()?.mode() & 0o777).into()
+            format!("{:o}", meta()?.mode() & 0o7777).into()
         }
 
         FormatDirective::Size => meta()?.len().to_string().into(),
@@ -658,34 +754,68 @@ fn format_directive<'entry>(
 /// find's printf syntax.
 pub struct Printf {
     format: FormatString,
-    output_file: Option<File>,
+    output_file: Option<(File, PathBuf)>,
+    stdout_errors: StdoutErrors,
 }
 
 impl Printf {
-    pub fn new(format: &str, output_file: Option<File>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(format: &str, output_file: Option<(File, PathBuf)>) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             format: FormatString::parse(format)?,
             output_file,
+            stdout_errors: StdoutErrors::default(),
         })
     }
 
-    fn print(&self, file_info: &WalkEntry, mut out: impl Write) -> io::Result<()> {
+    pub fn with_stdout_errors(mut self, stdout_errors: StdoutErrors) -> Self {
+        self.stdout_errors = stdout_errors;
+        self
+    }
+
+    fn print(&self, file_info: &WalkEntry, mut out: impl Write) -> std::io::Result<()> {
+        let mut result = Ok(());
         for component in &self.format.components {
             match component {
-                FormatComponent::Literal(literal) => out.write_all(literal.as_bytes())?,
-                FormatComponent::Flush => out.flush()?,
+                FormatComponent::Literal(literal) => write!(out, "{literal}")?,
+                FormatComponent::Byte(byte) => out.write_all(&[*byte])?,
+                // \c stops the rest of this format, as in GNU find
+                FormatComponent::Flush => {
+                    out.flush()?;
+                    break;
+                }
+                FormatComponent::Directive {
+                    precision: Some(precision),
+                    ..
+                } if *precision > i32::MAX as usize => {
+                    // Like GNU find, print nothing for it, go on with the rest
+                    // of the format, and fail with EOVERFLOW.
+                    result = Err(std::io::Error::other(
+                        "Value too large for defined data type",
+                    ));
+                }
                 FormatComponent::Directive {
                     directive,
                     width,
                     precision,
                     justify,
+                    flags,
                 } => match format_directive(file_info, directive) {
                     Ok(content) => {
-                        write_content(&mut out, &content, *width, *precision, justify)?
+                        let content = apply_precision_and_flags(
+                            directive, content, *precision, flags, *width, justify,
+                        );
+                        // GNU find pads to the width in bytes, not characters.
+                        let pad = width.map_or(0, |width| width.saturating_sub(content.len()));
+                        if *justify == Justify::Right {
+                            write!(out, "{:pad$}", "")?;
+                        }
+                        out.write_all(&content)?;
+                        if *justify == Justify::Left {
+                            write!(out, "{:pad$}", "")?;
+                        }
                     }
                     Err(e) => {
-                        let _ = writeln!(
-                            &mut io::stderr(),
+                        eprintln!(
                             "Error processing '{}': {}",
                             file_info.path().to_string_lossy(),
                             e
@@ -695,20 +825,38 @@ impl Printf {
                 },
             }
         }
-        Ok(())
+
+        result
+    }
+
+    fn handle_output_error(&self, error: &std::io::Error, matcher_io: &mut MatcherIO) {
+        let Some((_, path)) = &self.output_file else {
+            self.stdout_errors.handle(error, matcher_io);
+            return;
+        };
+        if error.kind() == std::io::ErrorKind::BrokenPipe {
+            matcher_io.quit();
+        }
+        let _ = writeln!(
+            &mut stderr(),
+            "{}: {}: {error}",
+            crate::find::program_name(),
+            path.display()
+        );
+        matcher_io.set_exit_code(1);
     }
 }
 
 impl Matcher for Printf {
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
-        let result = if let Some(file) = &self.output_file {
+        let result = if let Some((file, _)) = &self.output_file {
             self.print(file_info, file)
         } else {
             self.print(file_info, &mut *matcher_io.deps.get_output().borrow_mut())
         };
+
         if let Err(error) = result {
-            let _ = writeln!(&mut io::stderr(), "find: write error: {error}");
-            matcher_io.set_exit_code(1);
+            self.handle_output_error(&error, matcher_io);
         }
 
         true
@@ -722,7 +870,7 @@ impl Matcher for Printf {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
-    use std::io::ErrorKind;
+    use std::io::{ErrorKind, Write};
 
     use chrono::{Duration, TimeZone};
     use tempfile::Builder;
@@ -737,6 +885,56 @@ mod tests {
 
     #[cfg(windows)]
     use std::os::windows::fs::{symlink_dir, symlink_file};
+
+    struct FailingWriter(ErrorKind);
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(self.0.into())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(self.0.into())
+        }
+    }
+
+    #[test]
+    fn print_propagates_output_errors() -> Result<(), Box<dyn Error>> {
+        let abbbc = get_dir_entry_for("./test_data/simple", "abbbc");
+
+        for format in ["literal", "%p", "\\c", "\\377"] {
+            let printf = Printf::new(format, None)?;
+            assert_eq!(
+                printf
+                    .print(&abbbc, FailingWriter(ErrorKind::Other))
+                    .map_err(|error| error.kind()),
+                Err(ErrorKind::Other)
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn handles_output_errors() -> Result<(), Box<dyn Error>> {
+        let printf = Printf::new("literal", None)?;
+
+        for (error_kind, initial_exit_code, expected_exit_code, expected_quit) in [
+            (ErrorKind::Other, 0, 1, false),
+            (ErrorKind::BrokenPipe, 0, 1, true),
+            (ErrorKind::BrokenPipe, 1, 1, true),
+        ] {
+            let deps = FakeDependencies::new();
+            let mut matcher_io = MatcherIO::new(&deps);
+            matcher_io.set_exit_code(initial_exit_code);
+
+            printf.handle_output_error(&error_kind.into(), &mut matcher_io);
+            assert_eq!(matcher_io.exit_code(), expected_exit_code);
+            assert_eq!(matcher_io.should_quit(), expected_quit);
+        }
+
+        Ok(())
+    }
 
     #[test]
     fn test_parse_basics() {
@@ -755,19 +953,34 @@ mod tests {
                 .components,
             vec![
                 FormatComponent::Literal("abc".to_owned()),
-                FormatComponent::Literal("\0".to_owned()),
+                FormatComponent::Byte(0),
                 FormatComponent::Literal("\t".to_owned()),
                 FormatComponent::Literal("\n".to_owned()),
                 FormatComponent::Literal("\\".to_owned()),
-                FormatComponent::Literal("a".to_owned()),
+                FormatComponent::Byte(b'a'),
                 FormatComponent::Literal("de".to_owned()),
                 FormatComponent::Flush,
                 FormatComponent::Literal("f".to_owned())
             ]
         );
 
-        assert!(FormatString::parse("\\X").is_err());
-        assert!(FormatString::parse("\\").is_err());
+        // An unrecognized escape is a warning, not an error: it's printed
+        // literally (backslash included), matching GNU find.
+        assert_eq!(
+            FormatString::parse("\\X").unwrap().components,
+            vec![FormatComponent::Literal("\\X".to_owned())]
+        );
+        assert_eq!(
+            FormatString::parse("\\").unwrap().components,
+            vec![FormatComponent::Literal("\\".to_owned())]
+        );
+        assert_eq!(
+            FormatString::parse("abc\\").unwrap().components,
+            vec![
+                FormatComponent::Literal("abc".to_owned()),
+                FormatComponent::Literal("\\".to_owned()),
+            ]
+        );
     }
 
     #[test]
@@ -775,24 +988,37 @@ mod tests {
         assert_eq!(
             FormatString::parse("\\0€").unwrap().components,
             vec![
-                FormatComponent::Literal("\0".to_owned()),
+                FormatComponent::Byte(0),
                 FormatComponent::Literal("€".to_owned()),
             ]
         );
         assert_eq!(
             FormatString::parse("\\1😀").unwrap().components,
             vec![
-                FormatComponent::Literal("\u{1}".to_owned()),
+                FormatComponent::Byte(1),
                 FormatComponent::Literal("😀".to_owned()),
             ]
         );
         assert_eq!(
             FormatString::parse("\\00é").unwrap().components,
             vec![
-                FormatComponent::Literal("\0".to_owned()),
+                FormatComponent::Byte(0),
                 FormatComponent::Literal("é".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn test_parse_multibyte_char_after_directive() {
+        assert_eq!(
+            FormatString::parse("%€").unwrap().components,
+            vec![FormatComponent::Literal("%€".to_owned())]
+        );
+        assert_eq!(
+            FormatString::parse("\\€").unwrap().components,
+            vec![FormatComponent::Literal("\\€".to_owned())]
+        );
+        assert!(FormatString::parse("%A€").is_err());
     }
 
     #[test]
@@ -803,6 +1029,7 @@ mod tests {
                 width: None,
                 precision: None,
                 justify: Justify::Right,
+                flags: Flags::default(),
             }
         }
 
@@ -867,7 +1094,9 @@ mod tests {
                     follow_links: false
                 }),
                 unaligned_directive(FormatDirective::Type { follow_links: true }),
-                FormatComponent::Literal("?".to_owned()),
+                // An unrecognized directive is a warning, not a silent drop of
+                // the '%': it's printed literally, matching GNU find.
+                FormatComponent::Literal("%?".to_owned()),
             ]
         );
 
@@ -886,40 +1115,159 @@ mod tests {
                     directive: FormatDirective::Depth,
                     justify: Justify::Right,
                     width: None,
-                    precision: None
+                    precision: None,
+                    flags: Flags::default(),
                 },
                 FormatComponent::Directive {
                     directive: FormatDirective::Size,
                     justify: Justify::Left,
                     width: None,
-                    precision: None
+                    precision: None,
+                    flags: Flags::default(),
                 },
                 FormatComponent::Directive {
                     directive: FormatDirective::Sparseness,
                     justify: Justify::Right,
                     width: Some(5),
-                    precision: None
+                    precision: None,
+                    flags: Flags::default(),
                 },
                 FormatComponent::Directive {
                     directive: FormatDirective::HardlinkCount,
                     justify: Justify::Left,
                     width: Some(12),
-                    precision: None
+                    precision: None,
+                    flags: Flags::default(),
                 },
                 FormatComponent::Directive {
                     directive: FormatDirective::Basename,
                     justify: Justify::Right,
                     width: Some(3),
-                    precision: None
+                    precision: None,
+                    flags: Flags {
+                        space: true,
+                        ..Flags::default()
+                    },
                 },
                 FormatComponent::Directive {
                     directive: FormatDirective::Inode,
                     justify: Justify::Left,
                     width: Some(4),
-                    precision: None
+                    precision: None,
+                    flags: Flags {
+                        space: true,
+                        ..Flags::default()
+                    },
                 },
             ]
         );
+    }
+
+    #[test]
+    fn test_parse_precision_and_flags() {
+        assert_eq!(
+            FormatString::parse("%-+ #08.3d").unwrap().components,
+            vec![FormatComponent::Directive {
+                directive: FormatDirective::Depth,
+                width: Some(8),
+                precision: Some(3),
+                justify: Justify::Left,
+                flags: Flags {
+                    plus: true,
+                    space: true,
+                    alternate: true,
+                    zero: true,
+                },
+            }]
+        );
+        assert_eq!(
+            FormatString::parse("%.f").unwrap().components,
+            vec![FormatComponent::Directive {
+                directive: FormatDirective::Basename,
+                width: None,
+                precision: Some(0),
+                justify: Justify::Right,
+                flags: Flags::default(),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_printf_precision_and_flags() {
+        let file_info = get_dir_entry_for("test_data/simple", "abbbc");
+        let deps = FakeDependencies::new();
+
+        let matcher =
+            Printf::new("%.3f|%6.2f|%05f|%+f|%+d|%+04d|% d|%.2d|%.0d|%-4d|", None).unwrap();
+        assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
+        assert_eq!(
+            "abb|    ab|abbbc|abbbc|+1|+001| 1|01|1|1   |",
+            deps.get_output_as_string()
+        );
+    }
+
+    #[test]
+    fn test_printf_precision_big_and_depth_zero() {
+        let file_info = get_dir_entry_for("test_data/simple", "abbbc");
+        let deps = FakeDependencies::new();
+        let matcher = Printf::new("%.70000f|", None).unwrap();
+        assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
+        assert_eq!("abbbc|", deps.get_output_as_string());
+
+        let file_info = get_dir_entry_for("test_data/simple", "");
+        let deps = FakeDependencies::new();
+        let matcher = Printf::new("%.0d|%.1d|%#d|", None).unwrap();
+        assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
+        assert_eq!("|0|0|", deps.get_output_as_string());
+    }
+
+    #[test]
+    fn test_printf_unrecognized_directive_keeps_its_text() {
+        let file_info = get_dir_entry_for("test_data/simple", "abbbc");
+        let deps = FakeDependencies::new();
+
+        // GNU find only takes `0` after the other flags, so `%0-5d` is not `%d`.
+        let matcher = Printf::new("%0-5d|%+.2z|", None).unwrap();
+        assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
+        assert_eq!("%0-5d|%+.2z|", deps.get_output_as_string());
+    }
+
+    #[test]
+    fn test_printf_precision_and_width_count_bytes() {
+        let temp_dir = Builder::new().prefix("example").tempdir().unwrap();
+        let temp_dir_path = temp_dir.path().to_string_lossy();
+        File::create(temp_dir.path().join("\u{e9}_ab")).expect("create temp file");
+        let file_info = get_dir_entry_for(&temp_dir_path, "\u{e9}_ab");
+
+        let matcher = Printf::new("%.3f|%5.2f|%-5.1f|", None).unwrap();
+        let mut out = Vec::new();
+        matcher.print(&file_info, &mut out).unwrap();
+        assert_eq!(b"\xc3\xa9_|   \xc3\xa9|\xc3    |", out.as_slice());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_printf_permissions_precision_and_flags() {
+        let temp_dir = Builder::new().prefix("example").tempdir().unwrap();
+        let temp_dir_path = temp_dir.path().to_string_lossy();
+        let matcher = Printf::new("%#m|%05m|%#.0m|%#5m|%#05m|%.0m|", None).unwrap();
+
+        for (mode, expected) in [
+            (0o644, "0644|00644|0644| 0644|00644|644|"),
+            (0o000, "0|00000|0|    0|00000||"),
+            (0o4755, "04755|04755|04755|04755|04755|4755|"),
+        ] {
+            let name = format!("mode{mode:o}");
+            let file = File::create(temp_dir.path().join(&name)).expect("create temp file");
+            let mut perms = file.metadata().unwrap().permissions();
+            perms.set_mode(mode);
+            file.set_permissions(perms).unwrap();
+
+            let file_info = get_dir_entry_for(&temp_dir_path, &name);
+            let deps = FakeDependencies::new();
+            assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
+            assert_eq!(expected, deps.get_output_as_string());
+        }
     }
 
     #[test]
@@ -930,6 +1278,16 @@ mod tests {
         let matcher = Printf::new("%f,%7f,%-7f", None).unwrap();
         assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
         assert_eq!("abbbc,  abbbc,abbbc  ", deps.get_output_as_string());
+    }
+
+    #[test]
+    fn test_printf_backslash_c_stops_the_format() {
+        let file_info = get_dir_entry_for("test_data/simple", "abbbc");
+        let deps = FakeDependencies::new();
+
+        let matcher = Printf::new("%f\\c%s\n", None).unwrap();
+        assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
+        assert_eq!("abbbc", deps.get_output_as_string());
     }
 
     #[test]
@@ -1168,6 +1526,35 @@ mod tests {
     }
 
     #[test]
+    fn test_printf_ctime_pads_day_with_space() {
+        let temp_dir = Builder::new().prefix("example").tempdir().unwrap();
+        let temp_dir_path = temp_dir.path().to_string_lossy();
+        let new_file_name = "newFile";
+        let file_path = temp_dir.path().join(new_file_name);
+        File::create(&file_path).expect("create temp file");
+
+        let mtime = chrono::Local
+            .with_ymd_and_hms(2000, 1, 2, 9, 30, 21)
+            .unwrap();
+        filetime::set_file_mtime(
+            &file_path,
+            filetime::FileTime::from_unix_time(mtime.timestamp(), 0),
+        )
+        .expect("set temp file mtime");
+
+        let file_info = get_dir_entry_for(&temp_dir_path, new_file_name);
+        let deps = FakeDependencies::new();
+
+        // like ctime(3): "Jan  2", not "Jan 02"
+        let matcher = Printf::new("%t", None).unwrap();
+        assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
+        assert_eq!(
+            "Sun Jan  2 09:30:21.0000000000 2000",
+            deps.get_output_as_string()
+        );
+    }
+
+    #[test]
     fn test_printf_time_plus_format() {
         let temp_dir = Builder::new().prefix("example").tempdir().unwrap();
         let temp_dir_path = temp_dir.path().to_string_lossy();
@@ -1235,18 +1622,24 @@ mod tests {
 
         let temp_dir = Builder::new().prefix("example").tempdir().unwrap();
         let temp_dir_path = temp_dir.path().to_string_lossy();
-        let new_file_name = "newFile";
-        let file = File::create(temp_dir.path().join(new_file_name)).expect("create temp file");
 
-        let mut perms = file.metadata().unwrap().permissions();
-        perms.set_mode(0o755);
-        file.set_permissions(perms).unwrap();
+        for (mode, expected) in [
+            (0o755, "755 -rwxr-xr-x"),
+            (0o4755, "4755 -rwsr-xr-x"),
+            (0o044, "44 ----r--r--"),
+        ] {
+            let new_file_name = format!("file{mode:o}");
+            let file = File::create(temp_dir.path().join(&new_file_name)).unwrap();
+            let mut perms = file.metadata().unwrap().permissions();
+            perms.set_mode(mode);
+            file.set_permissions(perms).unwrap();
 
-        let file_info = get_dir_entry_for(&temp_dir_path, new_file_name);
-        let deps = FakeDependencies::new();
+            let file_info = get_dir_entry_for(&temp_dir_path, &new_file_name);
+            let deps = FakeDependencies::new();
 
-        let matcher = Printf::new("%m %M", None).unwrap();
-        assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
-        assert_eq!("755 -rwxr-xr-x", deps.get_output_as_string());
+            let matcher = Printf::new("%m %M", None).unwrap();
+            assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
+            assert_eq!(expected, deps.get_output_as_string());
+        }
     }
 }

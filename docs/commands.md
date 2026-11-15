@@ -325,6 +325,8 @@ Command text supports C and UTF-8 locales. Newlines in command-line arguments be
 
 `killall` sends a signal to every process with an exact Linux kernel command name (`comm`, limited to 15 bytes), not a command-line substring or regular expression. The default signal is `TERM`. Supported options are `-s SIGNAL`, `-SIGNAL`, `-NUM`, `-I` for case-insensitive names, `-u USER` for a real-UID filter, `-l` to list signals, `-q`, and `-v`. No match, failed signal delivery or an unknown option exits with status 1; missing names and invalid signals exit with status 2. It does not support signal 0, full-length executable-name matching, process-group signaling, interactive confirmation, waiting, or the regex, age, namespace, and SELinux filters from psmisc `killall`.
 
+`pidof -o '%PPID' NAME` excludes the calling process (usually the shell). `%PPID` also works in comma-separated omission lists, such as `-o '%PPID,1234'`.
+
 `free` reports used memory as `MemTotal - MemAvailable`, with the legacy
 free/buffers/cache calculation on kernels without `MemAvailable`. Its columns
 use procps-style headings and widths.

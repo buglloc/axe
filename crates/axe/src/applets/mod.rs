@@ -86,7 +86,6 @@ pub(crate) fn mark_applet_as_second_arg() {
     uucore::set_utility_is_second_arg();
     #[cfg(target_os = "linux")]
     {
-        procps_uucore::set_utility_is_second_arg();
         util_linux_uucore::set_utility_is_second_arg();
     }
 }

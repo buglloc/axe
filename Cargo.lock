@@ -213,6 +213,16 @@ dependencies = [
  "cpufeatures 0.3.1",
  "password-hash",
 ]
+]
+
+[[package]]
+name = "ariadne"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8454c8a44ce2cb9cc7e7fae67fc6128465b343b92c6631e94beca3c8d1524ea5"
+dependencies = [
+ "unicode-width 0.2.3",
+ "yansi",
 
 [[package]]
 name = "arrayvec"
@@ -454,7 +464,6 @@ dependencies = [
  "uu_who",
  "uucore 0.12.0",
  "uucore 0.2.2",
- "uucore 0.7.0",
  "vzik",
  "webpki-root-certs",
  "which",
@@ -2407,16 +2416,17 @@ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "findutils"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "argmax",
  "chrono",
  "faccess",
  "nix 0.31.3",
  "onig",
+ "parse_datetime 0.17.0",
  "regex",
  "thiserror 2.0.21",
- "uucore 0.9.0",
+ "uucore 0.12.0",
  "walkdir",
 ]
 
@@ -4888,6 +4898,17 @@ name = "parse_datetime"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "503fd4c8b0685e5eb32a8276533611f63e3b44768e9e8724e73f6852c2542f82"
+dependencies = [
+ "jiff",
+ "num-traits",
+ "winnow 1.0.5",
+]
+
+[[package]]
+name = "parse_datetime"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb51967a779ef73b125a243688e53e4bb2474f91cae72734ee5051e857fb2645"
 dependencies = [
  "jiff",
  "num-traits",
@@ -8012,7 +8033,7 @@ dependencies = [
 [[package]]
 name = "uu_dmesg"
 version = "0.0.1"
-source = "git+https://github.com/uutils/util-linux?rev=0cb1f90b9983c504a7f895ba65caa4b0b1f51c20#0cb1f90b9983c504a7f895ba65caa4b0b1f51c20"
+source = "git+https://github.com/uutils/util-linux?rev=6e305109ff428fd2906357a402ef5e42c8ec13fd#6e305109ff428fd2906357a402ef5e42c8ec13fd"
 dependencies = [
  "chrono",
  "clap",
@@ -8256,7 +8277,7 @@ dependencies = [
 [[package]]
 name = "uu_last"
 version = "0.0.1"
-source = "git+https://github.com/uutils/util-linux?rev=0cb1f90b9983c504a7f895ba65caa4b0b1f51c20#0cb1f90b9983c504a7f895ba65caa4b0b1f51c20"
+source = "git+https://github.com/uutils/util-linux?rev=6e305109ff428fd2906357a402ef5e42c8ec13fd#6e305109ff428fd2906357a402ef5e42c8ec13fd"
 dependencies = [
  "clap",
  "dns-lookup 4.0.2",
@@ -8516,12 +8537,12 @@ dependencies = [
 [[package]]
 name = "uu_pgrep"
 version = "0.0.1"
-source = "git+https://github.com/uutils/procps?rev=d318892db47de95ed181aab4270dd9b4a1130c43#d318892db47de95ed181aab4270dd9b4a1130c43"
+source = "git+https://github.com/uutils/procps?rev=498c88fdfc93db6893a66e5465f42e8246e3f995#498c88fdfc93db6893a66e5465f42e8246e3f995"
 dependencies = [
  "clap",
  "regex",
  "rustix",
- "uucore 0.7.0",
+ "uucore 0.12.0",
  "walkdir",
 ]
 
@@ -8532,19 +8553,19 @@ dependencies = [
  "clap",
  "rustix",
  "uu_pgrep",
- "uucore 0.7.0",
+ "uucore 0.12.0",
 ]
 
 [[package]]
 name = "uu_pidwait"
 version = "0.0.1"
-source = "git+https://github.com/uutils/procps?rev=d318892db47de95ed181aab4270dd9b4a1130c43#d318892db47de95ed181aab4270dd9b4a1130c43"
+source = "git+https://github.com/uutils/procps?rev=498c88fdfc93db6893a66e5465f42e8246e3f995#498c88fdfc93db6893a66e5465f42e8246e3f995"
 dependencies = [
  "clap",
  "regex",
  "rustix",
  "uu_pgrep",
- "uucore 0.7.0",
+ "uucore 0.12.0",
  "windows-sys 0.61.2",
 ]
 
@@ -9177,50 +9198,6 @@ dependencies = [
 
 [[package]]
 name = "uucore"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8038531f506a34ab4612b93f97d5f40759768cd34a83fd2af041b84fcbde474"
-dependencies = [
- "clap",
- "fluent",
- "fluent-bundle",
- "fluent-syntax",
- "libc",
- "nix 0.30.1",
- "os_display",
- "rustc-hash",
- "thiserror 2.0.21",
- "unic-langid",
- "uucore_procs 0.7.0",
- "wild",
-]
-
-[[package]]
-name = "uucore"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "069b34217c27f611e1589f540f58118dbf226a9e407d38ab472052ff075a1dc2"
-dependencies = [
- "bstr",
- "clap",
- "dunce",
- "fluent",
- "fluent-syntax",
- "libc",
- "nix 0.31.3",
- "os_display",
- "rustc-hash",
- "rustix",
- "thiserror 2.0.21",
- "unic-langid",
- "uucore_procs 0.9.0",
- "wild",
- "winapi-util",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "uucore"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e97dd0fd8bb2ed12affba9f956c3b94b8ad3f9432746717475420e916ae0b8d4"
@@ -9244,6 +9221,7 @@ name = "uucore"
 version = "0.12.0"
 source = "git+https://github.com/uutils/coreutils?tag=0.12.0#dc1efd89948a9ca4c78c3a4b9a6ac891019a8c69"
 dependencies = [
+ "ariadne",
  "base64-simd",
  "bigdecimal",
  "blake2b_simd",
@@ -9307,26 +9285,6 @@ dependencies = [
  "quote",
  "uuhelp_parser",
 ]
-]
-
-[[package]]
-name = "uucore_procs"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f63e2d5083ff0983193a33e2d57fd271c7e3e3e7df8e46e8f471865647b2cbc"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "uucore_procs"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34337da211e7abfff7189b794afb3b5018fe356fb36474b73645458fc1201350"
-dependencies = [
- "proc-macro2",
- "quote",
 
 [[package]]
 name = "uucore_procs"
@@ -10147,6 +10105,12 @@ dependencies = [
  "static_assertions",
  "web-time",
 ]
+
+[[package]]
+name = "yansi"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yasna"

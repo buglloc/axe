@@ -192,17 +192,16 @@ impl NewerTimeMatcher {
 
     fn matches_impl(&self, file_info: &WalkEntry) -> Result<bool, Box<dyn Error>> {
         let this_time = self.newer_time_type.get_file_time(file_info.metadata()?)?;
-        let timestamp = this_time
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_else(|e| e.duration());
-
-        // timestamp.as_millis() return u128 but time is i64
-        // This may leave memory implications. :(
-        Ok(self.time
-            <= timestamp
-                .as_millis()
-                .try_into()
-                .expect("timestamp memory implications"))
+        // `self.time` is in milliseconds and negative before 1970
+        let offset = Duration::from_millis(self.time.unsigned_abs());
+        let reference = if self.time >= 0 {
+            UNIX_EPOCH.checked_add(offset)
+        } else {
+            UNIX_EPOCH.checked_sub(offset)
+        };
+        // Strictly newer, like GNU find. A reference outside what the platform
+        // can store (e.g. before 1601 on Windows) is older or newer than any file.
+        Ok(reference.map_or(self.time < 0, |reference| this_time > reference))
     }
 }
 
@@ -825,6 +824,37 @@ mod tests {
                 "file inode changed time should after 'std_time'"
             );
         }
+    }
+
+    #[test]
+    fn newer_time_matcher_is_strict_and_signed() {
+        let temp_dir = Builder::new()
+            .prefix("newer_time_matcher_is_strict_and_signed")
+            .tempdir()
+            .unwrap();
+        let path = temp_dir.path().join("foo");
+        let file = File::create(&path).expect("create temp file");
+        let deps = FakeDependencies::new();
+        let newer = |file_time: SystemTime, millis: i64| {
+            file.set_modified(file_time).unwrap();
+            let file_info = get_dir_entry_for(&temp_dir.path().to_string_lossy(), "foo");
+            NewerTimeMatcher::new(NewerOptionType::Modified, millis)
+                .matches(&file_info, &mut deps.new_matcher_io())
+        };
+
+        // A file with the reference time itself is not newer.
+        let t = UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        assert!(!newer(t, 1_000_000_000_000));
+        assert!(newer(t, 999_999_999_999));
+
+        // Times before 1970 keep their sign.
+        let t = UNIX_EPOCH - Duration::from_secs(300_000_000);
+        assert!(!newer(t, -200_000_000_000));
+        assert!(newer(t, -400_000_000_000));
+
+        // References far outside any file time don't panic.
+        assert!(newer(t, i64::MIN));
+        assert!(!newer(t, i64::MAX));
     }
 
     #[test]
