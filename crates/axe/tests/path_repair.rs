@@ -145,3 +145,21 @@ fn xargs_runs_completed_arguments_before_a_later_quote_error() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
 }
+
+#[test]
+fn xargs_default_mode_truncates_nul_fields_but_zero_mode_keeps_arguments() {
+    let scratch = Scratch::new();
+    for options in [&[][..], &["-n1"][..], &["-L1"][..], &["-s512"][..]] {
+        let mut argv = args(options);
+        argv.extend(args(&["printf", "%s\\0"]));
+        let output = run(&scratch.0, "xargs", &refs(&argv), b"word\0other\n");
+        assert!(output.status.success(), "{options:?}: {:?}", output.stderr);
+        assert_eq!(output.stdout, b"word\0");
+        assert!(!output.stderr.is_empty());
+    }
+    let argv = args(&["-0", "printf", "%s\\0"]);
+    let output = run(&scratch.0, "xargs", &refs(&argv), b"word\0other\0");
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert_eq!(output.stdout, b"word\0other\0");
+    assert!(output.stderr.is_empty());
+}

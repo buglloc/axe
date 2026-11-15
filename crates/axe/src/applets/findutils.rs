@@ -518,6 +518,7 @@ struct InputRecords<R> {
     escaped: bool,
     started: bool,
     exhausted: bool,
+    warned_nul: bool,
     max_field_bytes: usize,
 }
 
@@ -525,7 +526,15 @@ fn take_input_field(
     field: &mut Vec<u8>,
     eof: Option<&[u8]>,
     replacement: bool,
+    warned_nul: &mut bool,
 ) -> Result<Option<OsString>, XargsFailure> {
+    if let Some(index) = field.iter().position(|byte| *byte == 0) {
+        field.truncate(index);
+        if !*warned_nul {
+            eprintln!("xargs: warning: a NUL character in input cannot be passed to a command; use -0");
+            *warned_nul = true;
+        }
+    }
     let field = os_string_from_input(&std::mem::take(field)).map_err(XargsFailure::usage)?;
     if !replacement && eof.is_some_and(|eof| eof == field.as_encoded_bytes()) {
         return Ok(None);
@@ -558,6 +567,7 @@ impl<R: BufRead> InputRecords<R> {
             escaped: false,
             started: false,
             exhausted: false,
+            warned_nul: false,
             max_field_bytes: budget.min(MAX_SINGLE_ARGUMENT),
         }
     }
@@ -631,6 +641,7 @@ impl<R: BufRead> InputRecords<R> {
                             &mut self.field,
                             self.eof.as_deref(),
                             self.replacement,
+                            &mut self.warned_nul,
                         )? {
                             self.record.push(field);
                         }
@@ -705,6 +716,7 @@ impl<R: BufRead> InputRecords<R> {
                                         &mut self.field,
                                         self.eof.as_deref(),
                                         self.replacement,
+                                        &mut self.warned_nul,
                                     )? {
                                         self.record.push(field);
                                     } else {

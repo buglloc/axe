@@ -183,6 +183,8 @@ GNU logical EOF options `-E`, legacy `-e`, and `--eof`; the marker is ignored
 with `-0` and `-d`.
 Completed arguments before a malformed quoted field are executed before
 `xargs` reports failure. `-L` and `-I` keep incomplete logical records together.
+Quoted-input mode warns about NUL bytes and passes the prefix before the first
+NUL in each argument; use `-0` for NUL-separated pathname transport.
 
 `tree -h` prints compact human-readable sizes before names, for example
 `[4.9K]  big`. It accepts clustered and repeated flags; `--help` prints help.
