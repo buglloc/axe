@@ -324,8 +324,34 @@ pub fn parse_spec_only(
     })
 }
 
-/// Parse escapes, reporting malformed numeric escapes without replacing them.
+/// Parse escapes permissively, preserving malformed sequences as literal bytes.
 pub fn parse_escape_only(
+    fmt: &[u8],
+    zero_octal_parsing: OctalParsing,
+    escape_set: EscapeSet,
+) -> impl Iterator<Item = EscapedChar> + '_ {
+    let mut current = fmt;
+    std::iter::from_fn(move || match current {
+        [] => None,
+        [b'\\', rest @ ..] => {
+            current = rest;
+            Some(
+                parse_escape_code(&mut current, zero_octal_parsing, escape_set)
+                    .unwrap_or_else(|_| {
+                        current = rest;
+                        EscapedChar::Byte(b'\\')
+                    }),
+            )
+        }
+        [c, rest @ ..] => {
+            current = rest;
+            Some(EscapedChar::Byte(*c))
+        }
+    })
+}
+
+/// Parse escapes for printf, where malformed numeric sequences are errors.
+fn parse_escape_only_checked(
     fmt: &[u8],
     zero_octal_parsing: OctalParsing,
     escape_set: EscapeSet,

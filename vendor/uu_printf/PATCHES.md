@@ -22,6 +22,8 @@ Source: the `uu_printf` 0.12.0 crate from crates.io, upstream revision
   uppercase `\\uHHHH`/`\\UHHHHHHHH` fallback notation.
 - Propagate malformed numeric escape errors in `%b` instead of substituting a
   literal `\x`; emit completed prefixes without buffering the whole operand.
+  The shared permissive iterator keeps echo's literal malformed-escape behavior;
+  printf uses its own checked iteration policy over the same escape parser.
 - Keep a standalone manifest without upstream workspace lint/benchmark wiring;
   AXE owns dependency resolution. The checked-in `tests/` cover the AXE native
   bridge.

@@ -267,3 +267,18 @@ fn printf_rejects_malformed_argument_escapes_without_losing_printed_prefixes() {
         assert_output(run("printf", &["%b", r"\q"], b"", locale), 0, br"\q");
     }
 }
+
+#[test]
+fn echo_keeps_permissive_escapes_while_printf_rejects_them() {
+    for locale in ["C", "C.UTF-8"] {
+        assert_output(
+            run("echo", &["-e", r"\x|\xZ|\uD800|\U0000DFFF"], b"", locale),
+            0,
+            b"\\x|\\xZ|\\uD800|\\U0000DFFF\n",
+        );
+        let strict = run("printf", &["%b", r"\x"], b"", locale);
+        assert_eq!(strict.status.code(), Some(1), "{strict:?}");
+        assert!(strict.stdout.is_empty(), "{strict:?}");
+        assert!(!strict.stderr.is_empty(), "{strict:?}");
+    }
+}

@@ -11,7 +11,7 @@ use super::{
         self, Case, FloatVariant, ForceDecimal, Formatter, NumberAlignment, PositiveSign, Prefix,
         UnsignedIntVariant,
     },
-    parse_escape_only,
+    parse_escape_only_checked,
 };
 use crate::{
     format::FormatArguments,
@@ -387,7 +387,7 @@ impl Spec {
                 let os_str = args.next_string(*position);
                 let bytes = os_str_as_bytes(os_str)?;
 
-                for c in parse_escape_only(
+                for c in parse_escape_only_checked(
                     bytes,
                     OctalParsing::ThreeDigits,
                     EscapeSet::WithUnicodeAndQuote,
