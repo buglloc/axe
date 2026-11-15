@@ -252,3 +252,31 @@ fn gzip_concatenated_listing_ratio_includes_member_framing() {
         assert_eq!(fields[2], format!("{ratio:.1}%"));
     }
 }
+
+#[test]
+fn gzip_listing_rejects_trailing_junk_without_publishing_a_row_or_header() {
+    let scratch = Scratch::new("gzip-list-junk");
+    let good = gzip_member(b"payload\n");
+    let mut junk = good.clone();
+    junk.extend_from_slice(b"GARBAGE");
+    fs::write(scratch.path().join("good.gz"), &good).unwrap();
+    fs::write(scratch.path().join("junk.gz"), &junk).unwrap();
+    for args in [&["-l", "junk.gz"][..], &["-lf", "junk.gz"][..], &["-l"][..]] {
+        let output = run(scratch.path(), "gzip", args, &junk);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        assert!(!output.stderr.is_empty(), "{args:?}: {output:?}");
+    }
+    let valid = run(scratch.path(), "gzip", &["-l", "good.gz"], b"");
+    assert!(valid.status.success(), "{valid:?}");
+    for args in [
+        &["-l", "junk.gz", "good.gz"][..],
+        &["-l", "good.gz", "junk.gz"][..],
+    ] {
+        let output = run(scratch.path(), "gzip", args, b"");
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert_eq!(output.stdout, valid.stdout);
+    }
+    assert_eq!(fs::read(scratch.path().join("junk.gz")).unwrap(), junk);
+    assert!(!scratch.path().join("junk").exists());
+}

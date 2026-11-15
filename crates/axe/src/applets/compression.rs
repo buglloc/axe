@@ -995,6 +995,10 @@ impl Options {
         } else {
             (self.decode(compressed, io::sink(), false)?, None)
         };
+        if decoded.trailing_garbage {
+            self.report_trailing_garbage(name, true);
+            return Ok(self.trailing_status(true));
+        }
         if !*header_printed {
             println!(
                 "{}",
@@ -1021,8 +1025,7 @@ impl Options {
             totals.overhead += decoded.overhead;
         }
         totals.files += 1;
-        self.report_trailing_garbage(name, decoded.trailing_garbage);
-        Ok(self.trailing_status(decoded.trailing_garbage))
+        Ok(0)
     }
 }
 
