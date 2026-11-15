@@ -857,46 +857,59 @@ fn feed_blank_run(
 
 #[cfg(target_os = "linux")]
 #[test]
-fn paragraph_delimiter_runs_keep_bounded_memory_and_do_not_wait_for_another_record() {
-    for trailing in [false, true] {
-        let scratch = Scratch::new();
-        let program = if trailing {
-            r#"BEGIN {RS=""; print "ready" > "ready"; close("ready")} {print; if(NR==2) exit}"#
-        } else {
-            r#"BEGIN {RS=""; print "ready" > "ready"; close("ready")} {print; exit}"#
-        };
-        let mut child = OwnedChild::spawn(&scratch, program, "C");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while fs::read(scratch.path().join("ready")).ok().as_deref() != Some(b"ready\n".as_slice())
-        {
-            assert!(
-                child
-                    .child()
-                    .try_wait()
-                    .expect("inspect paragraph process")
-                    .is_none()
-            );
-            assert!(
-                Instant::now() < deadline,
-                "paragraph process did not execute BEGIN"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let baseline = resident_bytes(&mut child);
-        let input = child.stdin();
-        let mut input = feed_blank_run(&mut child, input, if trailing { b"x\n\n" } else { b"" });
-        let resident = resident_bytes(&mut child);
-        input
-            .write_all(if trailing { b"y\n\n" } else { b"x\n\n" })
-            .expect("finish a paragraph without closing stdin");
-        let output = child.output_bounded();
-        drop(input);
-        assert_output(output, 0, if trailing { b"x\ny\n" } else { b"x\n" });
+fn leading_paragraph_blanks_use_bounded_memory_before_a_complete_record() {
+    let scratch = Scratch::new();
+    let program =
+        r#"BEGIN {RS=""; print "ready" > "ready"; close("ready")} {print $0,length(RT); exit}"#;
+    let mut child = OwnedChild::spawn(&scratch, program, "C");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while fs::read(scratch.path().join("ready")).ok().as_deref() != Some(b"ready\n".as_slice()) {
         assert!(
-            resident.saturating_sub(baseline) < 16 * 1024 * 1024,
-            "blank delimiter memory scaled with the 64 MiB run: baseline={baseline}, resident={resident}"
+            child
+                .child()
+                .try_wait()
+                .expect("inspect paragraph process")
+                .is_none()
         );
+        assert!(
+            Instant::now() < deadline,
+            "paragraph process did not execute BEGIN"
+        );
+        std::thread::sleep(Duration::from_millis(10));
     }
+    let baseline = resident_bytes(&mut child);
+    let input = child.stdin();
+    let mut input = feed_blank_run(&mut child, input, b"");
+    let resident = resident_bytes(&mut child);
+    input
+        .write_all(b"x\n\ny")
+        .expect("finish a paragraph without closing stdin");
+    let output = child.output_bounded();
+    drop(input);
+    assert_output(output, 0, b"x 2\n");
+    assert!(
+        resident.saturating_sub(baseline) < 16 * 1024 * 1024,
+        "leading blank memory scaled with the 64 MiB run: baseline={baseline}, resident={resident}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn paragraph_rt_contains_the_entire_trailing_blank_run_before_the_action() {
+    let scratch = Scratch::new();
+    let mut child = OwnedChild::spawn(
+        &scratch,
+        r#"BEGIN {RS=""} {print $0,length(RT); exit}"#,
+        "C",
+    );
+    let input = child.stdin();
+    let mut input = feed_blank_run(&mut child, input, b"x");
+    input
+        .write_all(b"y")
+        .expect("finish the paragraph separator while keeping stdin open");
+    let output = child.output_bounded();
+    drop(input);
+    assert_output(output, 0, b"x 67108864\n");
 }
 
 #[test]

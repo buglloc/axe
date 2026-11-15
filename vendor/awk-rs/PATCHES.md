@@ -22,6 +22,9 @@ Source: the `awk-rs` 0.2.0 crate from crates.io, upstream revision
   right-associative powers and signed exponents.
 - Populate `RT` with the consumed string, regex, or paragraph record separator
   for main input and redirected `getline`; unterminated records have empty `RT`.
+  Paragraph mode waits for a non-newline byte or EOF to complete `RT`, as
+  gawk's `io.c::rsnullscan` does. Leading blank runs are discarded with bounded
+  storage; a trailing run belongs to the observable separator and is retained.
 - Recognize signed, case-insensitive `inf`/`nan` numeric strings in arithmetic
   and field comparisons, and print their signs. Keep the documented `strtonum`
   rejection; numeric coercion preserves negative zero for floating formatting.
