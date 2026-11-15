@@ -2426,6 +2426,44 @@ fn stop_process_after_ready(
 }
 
 #[cfg(unix)]
+fn stop_sshd_after_listen_announcement(mut child: std::process::Child) -> std::process::Output {
+    use std::io::{BufRead, BufReader};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    let stdout = child.stdout.take().expect("sshd stdout is piped");
+    let (sender, receiver) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        let mut line = String::new();
+        let result = BufReader::new(stdout).read_line(&mut line).map(|_| line);
+        let _ = sender.send(result);
+    });
+    let announcement = receiver.recv_timeout(Duration::from_secs(5));
+    let address = announcement
+        .as_ref()
+        .ok()
+        .and_then(|result| result.as_ref().ok())
+        .and_then(|line| line.strip_prefix("sshd: serving on "))
+        .and_then(|address| address.trim().parse().ok());
+    if let Some(address) = address {
+        reader.join().expect("join sshd readiness reader");
+        return stop_process_after_ready(child, address);
+    }
+
+    let _ = child.kill();
+    let output = child
+        .wait_with_output()
+        .expect("collect failed sshd output");
+    reader.join().expect("join failed sshd readiness reader");
+    panic!(
+        "sshd did not report a listening address: {announcement:?}\nstatus: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
 #[test]
 fn sshd_daemon_fails_when_worker_cannot_bind() {
     use std::net::TcpListener;
@@ -2593,11 +2631,7 @@ fn sshd_starts_without_writable_storage() {
 #[cfg(unix)]
 #[test]
 fn sshd_selects_workdir_and_store_once_when_unspecified() {
-    use std::net::TcpListener;
-
     let scratch = Scratch::new("sshd-auto-workdir");
-    let reservation = TcpListener::bind("127.0.0.1:0").expect("reserve SSH port");
-    let address = reservation.local_addr().expect("read reserved address");
 
     let child = Command::new(env!("CARGO_BIN_EXE_axe"))
         .env_clear()
@@ -2609,23 +2643,26 @@ fn sshd_selects_workdir_and_store_once_when_unspecified() {
             "sshd",
             "--",
             "--listen",
-            &address.to_string(),
+            "127.0.0.1:0",
             "--no-relay",
         ])
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("start sshd");
-    drop(reservation);
-    let output = stop_process_after_ready(child, address);
+    let output = stop_sshd_after_listen_announcement(child);
 
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    #[cfg(target_os = "macos")]
+    let workdir = scratch.path().join("Library/Caches/axe");
+    #[cfg(not(target_os = "macos"))]
+    let workdir = scratch.path().join(".cache/axe");
     assert!(
-        scratch.path().join(".cache/axe/.axe-store").is_dir(),
+        workdir.join(".axe-store").is_dir(),
         "sshd did not prepare AXE Store inside its selected workdir"
     );
 }
