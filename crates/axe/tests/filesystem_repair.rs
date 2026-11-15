@@ -163,3 +163,17 @@ fn cp_recursive_h_follows_only_the_command_line_symlink() {
     assert_eq!(fs::read(scratch.path().join("destination/file")).unwrap(), b"original");
     assert_eq!(fs::read_link(scratch.path().join("destination/link")).unwrap(), Path::new("file"));
 }
+
+#[test]
+fn cp_backup_preserves_original_hardlinks_and_replaces_destination() {
+    let scratch = Scratch::new("cp-backup-hardlinks");
+    fs::write(scratch.path().join("source"), b"original").unwrap();
+    fs::hard_link(scratch.path().join("source"), scratch.path().join("destination")).unwrap();
+    success(&run(scratch.path(), "cp", &["-b", "source", "destination"]));
+    let source = fs::metadata(scratch.path().join("source")).unwrap();
+    assert_eq!(source.ino(), fs::metadata(scratch.path().join("destination~")).unwrap().ino());
+    assert_ne!(source.ino(), fs::metadata(scratch.path().join("destination")).unwrap().ino());
+    fs::write(scratch.path().join("destination"), b"replacement").unwrap();
+    assert_eq!(fs::read(scratch.path().join("source")).unwrap(), b"original");
+    assert_eq!(fs::read(scratch.path().join("destination~")).unwrap(), b"original");
+}

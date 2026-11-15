@@ -2098,20 +2098,8 @@ fn context_for(src: &Path, dest: &Path) -> String {
     format!("{} -> {}", src.quote(), dest.quote())
 }
 
-/// Implements a simple backup copy for the destination file .
-/// if `is_dest_symlink` flag is set to true dest will be renamed to `backup_path`
-/// TODO: for the backup, should this function be replaced by `copy_file(...)`?
-fn backup_dest(dest: &Path, backup_path: &Path, is_dest_symlink: bool) -> CopyResult<()> {
-    if is_dest_symlink {
-        fs::rename(dest, backup_path)?;
-    } else {
-        match fs::remove_file(backup_path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err.into()),
-        }
-        fs::copy(dest, backup_path)?;
-    }
+fn backup_dest(dest: &Path, backup_path: &Path) -> CopyResult<()> {
+    fs::rename(dest, backup_path)?;
     Ok(())
 }
 
@@ -2208,8 +2196,8 @@ fn handle_existing_dest(
             return Err(translate!("cp-error-backing-up-destroy-source", "dest" => dest.quote(), "source" => source.quote())
             .into());
         }
-        is_dest_removed = dest.is_symlink();
-        backup_dest(dest, &backup_path, is_dest_removed)?;
+        backup_dest(dest, &backup_path)?;
+        is_dest_removed = true;
     }
     if !is_dest_removed {
         delete_dest_if_needed_and_allowed(
@@ -2419,8 +2407,7 @@ fn handle_copy_mode(
                 let backup_path =
                     backup_control::get_backup_path(options.backup, dest, &options.backup_suffix);
                 if let Some(backup_path) = backup_path {
-                    backup_dest(dest, &backup_path, dest.is_symlink())?;
-                    fs::remove_file(dest)?;
+                    backup_dest(dest, &backup_path)?;
                 }
                 force = options.overwrite == OverwriteMode::Clobber(ClobberMode::Force);
             }
