@@ -10,5 +10,8 @@ The standalone manifest resolves upstream workspace dependencies. `locale-source
   the correct relative target for `ln -sr` pointing at a cyclic symlink.
 - Unicode escape output follows `LC_CTYPE`: UTF-8 stays UTF-8, C/POSIX
   escapes unrepresentable code points, and other codesets use conversion.
+- Group delivery of SIGKILL bypasses handler installation, which the kernel
+  rejects for an uncatchable signal. Non-foreground `timeout -s KILL` therefore
+  preserves the group termination status.
 
 `just vendor-test` skips upstream test targets that require the non-member package's dev-dependency graph. AXE integration regressions exercise the bundled consumer.

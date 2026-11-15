@@ -55,6 +55,11 @@ impl ChildExt for Child {
 
         let signal = Signal::try_from(signal as i32)
             .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+        // SIGKILL cannot be ignored; installing a handler would fail before delivery.
+        if signal == Signal::SIGKILL {
+            return nix_signal::kill(Pid::from_raw(0), Some(signal))
+                .map_err(|e| io::Error::from_raw_os_error(e as i32));
+        }
 
         // Ignore the signal temporarily so we don't receive it ourselves.
         let old_handler = unsafe { nix_signal::signal(signal, SigHandler::SigIgn) }

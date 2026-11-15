@@ -118,3 +118,25 @@ fn pstree_arguments_do_not_repeat_the_executable_path() {
         Some(format!("{} --noprofile --no-config -c read REPLY", comm.trim()).as_str())
     );
 }
+
+#[test]
+fn timeout_kill_terminates_its_group_but_foreground_returns_timeout_status() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let scratch = Scratch::new();
+    for foreground in [false, true] {
+        let mut command = applet(&scratch.0, "timeout");
+        if foreground {
+            command.arg("--foreground");
+        }
+        let output = command
+            .args(["-s", "KILL", "0.02", env!("CARGO_BIN_EXE_axe"), "--applet", "sleep", "--", "0.2"])
+            .output()
+            .unwrap();
+        if foreground {
+            assert_eq!(output.status.code(), Some(124), "{output:?}");
+        } else {
+            assert_eq!(output.status.signal(), Some(libc::SIGKILL), "{output:?}");
+        }
+    }
+}
