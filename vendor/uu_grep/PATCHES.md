@@ -16,6 +16,8 @@ upstream packaging provenance, not a local AXE edit.
 - Treat invalid UTF-8 bytes as unmatchable in UTF-8 locales rather than letting
   regex wildcards consume them; retain original line and buffer anchors across
   valid spans and advance empty matches by characters.
+- With `-o`, classify only emitted matches for encoding errors: unmatched
+  invalid bytes do not suppress valid UTF-8 spans or fabricate a binary notice.
 - Keep a standalone manifest without upstream CI, fuzzing, pre-commit, and
   development-only package files; AXE owns dependency resolution.
 

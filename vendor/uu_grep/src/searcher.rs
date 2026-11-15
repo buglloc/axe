@@ -529,6 +529,7 @@ impl<'a> Searcher<'a> {
 
             if let Some(positions) = self.session_match_line(line) {
                 if self.config.utf8
+                    && !self.config.only_matching
                     && self.config.binary_mode != BinaryMode::WithoutMatch
                     && !self.session_mark_binary_if(|| std::str::from_utf8(line).is_err())
                 {

@@ -216,3 +216,14 @@ fn grep_utf8_regexes_do_not_consume_invalid_characters() {
         b"a\n",
     );
 }
+
+#[test]
+fn grep_only_matching_does_not_emit_unmatched_invalid_bytes() {
+    for pattern in [".", "a*", r"a\|ab", "[[:alpha:]]"] {
+        assert_output(
+            run("grep", &["-o", pattern], b"\xffa\xfe\n", "C.UTF-8"),
+            0,
+            b"a\n",
+        );
+    }
+}
