@@ -125,6 +125,7 @@ and every other byte, including UTF-8, as `\ooo`. This matches psmisc
 `pstree`. It intentionally differs from psmisc `fuser`, which prints bytes
 above 0x7f as sign-extended `\37777777777`, and from util-linux `lslocks` and
 `lsof`, which print `\xNN`; `lsof` file names keep the `lsof` escaping.
+`pstree -a` prints arguments after `comm`, omitting the executable's `argv[0]`.
 
 
 ## Filters and paths

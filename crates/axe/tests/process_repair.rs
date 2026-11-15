@@ -80,3 +80,41 @@ fn lsof_directory_selection_uses_existing_entries_and_their_inode_aliases() {
         assert!(!contains(&held_deleted), "{option}: {output:?}");
     }
 }
+
+struct OwnedChild(std::process::Child);
+
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn pstree_arguments_do_not_repeat_the_executable_path() {
+    let scratch = Scratch::new();
+    let child = OwnedChild(
+        Command::new(env!("CARGO_BIN_EXE_axe"))
+            .args(["--noprofile", "--no-config", "-c", "read REPLY"])
+            .current_dir(&scratch.0)
+            .env("AXE_STORE_MODE", "off")
+            .env("PATH", "/nonexistent")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let pid = child.0.id().to_string();
+    let comm = fs::read_to_string(format!("/proc/{pid}/comm")).unwrap();
+    let output = success(
+        applet(&scratch.0, "pstree")
+            .args(["-a", "-l", &pid])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        output.lines().next(),
+        Some(format!("{} --noprofile --no-config -c read REPLY", comm.trim()).as_str())
+    );
+}

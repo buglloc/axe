@@ -1894,6 +1894,7 @@ fn read_tree_processes() -> BTreeMap<u32, TreeProcess> {
             .map(|bytes| {
                 bytes
                     .split(|byte| *byte == 0)
+                    .skip(1)
                     .filter(|part| !part.is_empty())
                     .collect::<Vec<_>>()
                     .join(&b' ')
