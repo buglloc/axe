@@ -18,6 +18,9 @@ upstream packaging provenance, not a local AXE edit.
   valid spans and advance empty matches by characters.
 - With `-o`, classify only emitted matches for encoding errors: unmatched
   invalid bytes do not suppress valid UTF-8 spans or fabricate a binary notice.
+- Treat NUL as a record boundary in binary mode for anchors, inversion and
+  counts in both streaming and literal-search paths. `-a` retains NUL as data;
+  `-z` keeps NUL as its ordinary delimiter without a binary notice.
 - Keep a standalone manifest without upstream CI, fuzzing, pre-commit, and
   development-only package files; AXE owns dependency resolution.
 

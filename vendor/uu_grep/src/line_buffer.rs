@@ -3,7 +3,7 @@
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
 
-use memchr::{memchr, memrchr};
+use memchr::{memchr, memchr2, memrchr};
 use std::fs::File;
 use std::io::{self, Read as _};
 
@@ -24,10 +24,11 @@ pub struct LineBuffer {
     eof: bool,
     /// The line terminator is typically NUL or LF.
     line_terminator: u8,
+    binary_terminator: bool,
 }
 
 impl LineBuffer {
-    pub fn new(line_terminator: u8) -> Self {
+    pub fn new(line_terminator: u8, binary_terminator: bool) -> Self {
         Self {
             buffer: vec![0; 128 * 1024],
 
@@ -38,6 +39,7 @@ impl LineBuffer {
             next_line_start: 0,
             eof: false,
             line_terminator,
+            binary_terminator,
         }
     }
 
@@ -52,24 +54,31 @@ impl LineBuffer {
 
     /// Read the next line from the given reader.
     /// Returns `Ok(None)` if the end of the reader is reached.
-    /// Otherwise, returns `Ok(Some((line, line_start)))`, where `line` is the line read (without the
-    /// `line_terminator`), and `line_start` is the absolute byte offset of the start of the line.
-    pub fn read_line(&mut self, file: &mut File) -> io::Result<Option<(&[u8], u64)>> {
+    /// Returns the record bytes without their terminator, the absolute byte
+    /// offset, and whether the consumed terminator marks binary input.
+    pub fn read_line(&mut self, file: &mut File) -> io::Result<Option<(&[u8], u64, bool)>> {
         if self.eof {
             return Ok(None);
         }
 
         loop {
             // Look for a line terminator and if found, yield that line.
-            if let Some(off) = memchr(self.line_terminator, &self.buffer[self.scan..self.end]) {
+            let remaining = &self.buffer[self.scan..self.end];
+            let terminator = if self.binary_terminator {
+                memchr2(self.line_terminator, 0, remaining)
+            } else {
+                memchr(self.line_terminator, remaining)
+            };
+            if let Some(off) = terminator {
                 let line_start = self.next_line_start;
                 let beg = self.beg;
                 let end = self.scan + off;
+                let binary = self.binary_terminator && self.buffer[end] == 0;
                 let line = &self.buffer[beg..end];
                 self.beg = end + 1;
                 self.scan = self.beg;
                 self.next_line_start += (self.beg - beg) as u64;
-                return Ok(Some((line, line_start)));
+                return Ok(Some((line, line_start, binary)));
             }
 
             // `buffer[pos..end]` has no terminator. Remember that for the next scan.
@@ -105,7 +114,7 @@ impl LineBuffer {
                     let line = &self.buffer[self.beg..self.end];
                     let line_start = self.next_line_start;
                     self.eof = true; // shortcut the next call to read_line()
-                    Ok(Some((line, line_start)))
+                    Ok(Some((line, line_start, false)))
                 };
             }
             self.end += n;
@@ -217,7 +226,7 @@ mod tests {
 
     /// Drain `read_chunk` into a list of (owned bytes, start offset) pairs.
     fn chunks(term: u8, content: &[u8]) -> Vec<(Vec<u8>, u64)> {
-        let mut lb = LineBuffer::new(term);
+        let mut lb = LineBuffer::new(term, false);
         let mut input = temp_input(content);
         let mut out = Vec::new();
         while let Some((chunk, start)) = lb.read_chunk(&mut input.file).unwrap() {

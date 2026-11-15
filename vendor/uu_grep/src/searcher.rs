@@ -316,11 +316,8 @@ impl<'a> Searcher<'a> {
         }
     }
 
-    /// Fast path for modes that only need to know *whether* / *how many* lines
-    /// match: `-c`, `-l`, `-L`, `-q`. No per-line rendering, so no line numbers,
-    /// byte offsets, or binary bookkeeping are required (the count of matching
-    /// lines is unaffected by binary detection, and `-l`/`-L`/`-q` list files
-    /// regardless).
+    /// Fast path for modes that only need to know whether/how many records
+    /// match: `-c`, `-l`, `-L`, `-q`. In binary mode NUL also ends a record.
     fn fast_locate(
         &mut self,
         lb: &mut LineBuffer,
@@ -347,7 +344,7 @@ impl<'a> Searcher<'a> {
                 if max.is_some_and(|mx| count >= mx) {
                     break 'outer;
                 }
-                let (_, line_end) = line_bounds(chunk, p + rel);
+                let (_, line_end) = line_bounds(chunk, p + rel, self.config.binary_mode == BinaryMode::Binary);
                 count += 1;
                 matched = true;
                 // Each line counts once: resume past this line's terminator.
@@ -416,12 +413,13 @@ impl<'a> Searcher<'a> {
                 if max.is_some_and(|mx| count >= mx) {
                     break 'outer;
                 }
-                let (line_beg, line_end) = line_bounds(chunk, p + rel);
+                let (line_beg, line_end) = line_bounds(chunk, p + rel, detect_binary);
 
                 // A NUL anywhere up to this line marks the file binary, as does
                 // an invalid matching line in a UTF-8 locale.
                 if detect_binary && !binary {
-                    if memchr(0, &chunk[nul_scanned..line_end]).is_some() {
+                    let scanned_end = (line_end + 1).min(chunk.len());
+                    if memchr(0, &chunk[nul_scanned..scanned_end]).is_some() {
                         binary = true;
                     }
                     nul_scanned = line_end;
@@ -507,7 +505,7 @@ impl<'a> Searcher<'a> {
 
         let mut line_number: u64 = 0;
 
-        while let Some((line, line_start)) = lb.read_line(reader)? {
+        while let Some((line, line_start, binary)) = lb.read_line(reader)? {
             line_number += 1;
             // Offset of the next line. A final line without a terminator makes
             // this one byte past the input, which reads the same as its end.
@@ -523,7 +521,7 @@ impl<'a> Searcher<'a> {
                 };
 
             // Any null byte flips us into binary mode.
-            if !self.session_mark_binary_if(|| memchr(0, line).is_some()) {
+            if !self.session_mark_binary_if(|| binary || memchr(0, line).is_some()) {
                 return Ok(false);
             }
 
@@ -760,8 +758,16 @@ fn count_terminators(bytes: &[u8]) -> u64 {
 /// Byte range `[start, end)` of the line containing `pos` in `buf`, excluding
 /// the trailing terminator. `start` follows the previous terminator (or 0);
 /// `end` is the next terminator (or end of buffer).
-fn line_bounds(buf: &[u8], pos: usize) -> (usize, usize) {
-    let start = memrchr(b'\n', &buf[..pos]).map_or(0, |i| i + 1);
-    let end = memchr(b'\n', &buf[pos..]).map_or(buf.len(), |i| pos + i);
+fn line_bounds(buf: &[u8], pos: usize, binary: bool) -> (usize, usize) {
+    let start = if binary {
+        memchr::memrchr2(b'\n', 0, &buf[..pos])
+    } else {
+        memrchr(b'\n', &buf[..pos])
+    }.map_or(0, |i| i + 1);
+    let end = if binary {
+        memchr::memchr2(b'\n', 0, &buf[pos..])
+    } else {
+        memchr(b'\n', &buf[pos..])
+    }.map_or(buf.len(), |i| pos + i);
     (start, end)
 }

@@ -454,7 +454,10 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
     let writer = OutputWriter::new(&config);
     let mut searcher = Searcher::new(&config, matcher, writer);
-    let mut lb = LineBuffer::new(if config.null_data { b'\0' } else { b'\n' });
+    let mut lb = LineBuffer::new(
+        if config.null_data { b'\0' } else { b'\n' },
+        !config.null_data && config.binary_mode != BinaryMode::Text,
+    );
 
     if file_args.is_empty() {
         if directory_mode != DirectoryMode::Recurse {

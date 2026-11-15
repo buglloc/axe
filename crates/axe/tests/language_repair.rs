@@ -227,3 +227,18 @@ fn grep_only_matching_does_not_emit_unmatched_invalid_bytes() {
         );
     }
 }
+
+#[test]
+fn grep_binary_nul_boundaries_affect_counts_and_anchors() {
+    for locale in ["C", "C.UTF-8"] {
+        assert_output(run("grep", &["-c", ""], b"a\0b\0\0a", locale), 0, b"4\n");
+        assert_output(run("grep", &["-c", "a"], b"a\0b\0\0a", locale), 0, b"2\n");
+        assert_output(run("grep", &["-c", "a$"], b"a\0b\na\xffb\n", locale), 0, b"1\n");
+        assert_output(run("grep", &["-a", "-c", ""], b"a\0b\0\0a", locale), 0, b"1\n");
+        assert_output(run("grep", &["-z", "-c", ""], b"a\0b\0\0a", locale), 0, b"4\n");
+        let inverted = run("grep", &["-v", "."], b"a\0b\0\0a", locale);
+        assert_eq!(inverted.status.code(), Some(0), "{inverted:?}");
+        assert!(inverted.stdout.is_empty(), "{inverted:?}");
+        assert!(!inverted.stderr.is_empty(), "{inverted:?}");
+    }
+}
