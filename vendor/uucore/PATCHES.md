@@ -8,5 +8,7 @@ The standalone manifest resolves upstream workspace dependencies. `locale-source
   expansion and keeps the unresolved component, allowing later `..` traversal.
   Normal and existing-only modes still reject cycles. This also preserves
   the correct relative target for `ln -sr` pointing at a cyclic symlink.
+- Unicode escape output follows `LC_CTYPE`: UTF-8 stays UTF-8, C/POSIX
+  escapes unrepresentable code points, and other codesets use conversion.
 
 `just vendor-test` skips upstream test targets that require the non-member package's dev-dependency graph. AXE integration regressions exercise the bundled consumer.

@@ -155,3 +155,26 @@ fn grep_c_locale_does_not_treat_high_bytes_as_binary() {
     assert!(output.stdout.is_empty(), "{output:?}");
     assert!(!output.stderr.is_empty(), "{output:?}");
 }
+
+#[test]
+fn printf_unicode_escapes_use_the_output_codeset() {
+    assert_output(
+        run("printf", &["%b", r"\u732b\U0001f600\u0061"], b"", "C"),
+        0,
+        b"\\u732B\\U0001F600a",
+    );
+    assert_output(
+        run("printf", &[r"\u732b\U0001f600\u0061"], b"", "C"),
+        0,
+        b"\\u732B\\U0001F600a",
+    );
+    assert_output(
+        run("printf", &["%b", r"\u732b\U0001f600\u0061"], b"", "C.UTF-8"),
+        0,
+        "猫😀a".as_bytes(),
+    );
+    let invalid = run("printf", &["%b", r"\uD800"], b"", "C");
+    assert_eq!(invalid.status.code(), Some(1), "{invalid:?}");
+    assert!(invalid.stdout.is_empty(), "{invalid:?}");
+    assert!(!invalid.stderr.is_empty(), "{invalid:?}");
+}

@@ -17,6 +17,9 @@ Source: the `uu_printf` 0.12.0 crate from crates.io, upstream revision
   and link `libm` only where the target needs it. Run compiler probes in Cargo's
   `OUT_DIR`: cargo-zigbuild's Darwin `--version` probe writes an empty `a.o`
   in its working directory.
+- Emit Unicode escapes in the active `LC_CTYPE` codeset through uucore's
+  shared format writer, including `%b`; unrepresentable characters use
+  uppercase `\\uHHHH`/`\\UHHHHHHHH` fallback notation.
 - Keep a standalone manifest without upstream workspace lint/benchmark wiring;
   AXE owns dependency resolution. The checked-in `tests/` cover the AXE native
   bridge.
@@ -25,4 +28,5 @@ Upstreamability: the numeric behavior is intended for upstream; the C bridge is
 an AXE portability implementation because the upstream Rust formatter narrows
 long doubles. No upstream issue or commit is recorded in AXE.
 
-AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs`.
+AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs` and
+`crates/axe/tests/language_repair.rs`.

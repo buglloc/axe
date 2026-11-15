@@ -36,6 +36,8 @@ mod argument;
 mod escape;
 pub mod human;
 pub mod num_format;
+#[cfg(unix)]
+mod unicode;
 mod spec;
 
 pub use self::escape::{EscapeSet, EscapedChar, OctalParsing};
@@ -227,6 +229,9 @@ impl FormatChar for EscapedChar {
                 writer.write_all(&[*c])?;
             }
             Self::Char(c) => {
+                #[cfg(unix)]
+                unicode::write(*c, &mut writer)?;
+                #[cfg(not(unix))]
                 write!(writer, "{c}")?;
             }
             Self::Backslash(c) => {
