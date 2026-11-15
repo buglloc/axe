@@ -571,6 +571,26 @@ pub fn remove(files: &[&OsStr], options: &Options) -> bool {
             continue;
         }
 
+        #[cfg(unix)]
+        {
+            let bytes = file.as_os_str().as_bytes();
+            let mut end = bytes.len();
+            while end > 1 && bytes[end - 1] == b'/' {
+                end -= 1;
+            }
+            if end != bytes.len()
+                && Path::new(OsStr::from_bytes(&bytes[..end])).is_symlink()
+            {
+                if !options.force {
+                    had_err |= show_removal_error(
+                        io::Error::from_raw_os_error(libc::ENOTDIR),
+                        file,
+                    );
+                }
+                continue;
+            }
+        }
+
         had_err = match file.symlink_metadata() {
             Ok(metadata) => {
                 // Create progress bar on first successful file metadata read

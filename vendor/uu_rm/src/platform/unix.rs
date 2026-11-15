@@ -327,14 +327,6 @@ pub fn safe_remove_dir_recursive(
     let dir_fd = match DirFd::open(path, SymlinkBehavior::NoFollow) {
         Ok(fd) => fd,
         Err(e) => {
-            if options.force
-                && matches!(
-                    e.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                )
-            {
-                return false;
-            }
             // If we can't open the directory for safe traversal,
             // handle the error appropriately and try to remove if possible
             if e.kind() == std::io::ErrorKind::PermissionDenied {
