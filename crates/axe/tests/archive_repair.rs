@@ -223,3 +223,32 @@ fn zstd_forced_stdout_copies_plaintext_after_complete_frames() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"first\0\xff\nsecond\ntail");
 }
+
+fn gzip_member(payload: &[u8]) -> Vec<u8> {
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(payload).unwrap();
+    encoder.finish().unwrap()
+}
+
+#[test]
+fn gzip_concatenated_listing_ratio_includes_member_framing() {
+    let scratch = Scratch::new("gzip-list-ratio");
+    let mut compressed = gzip_member(b"first member\0\xff\n");
+    let single_size = compressed.len();
+    fs::write(scratch.path().join("single.gz"), &compressed).unwrap();
+    compressed.extend_from_slice(&gzip_member(b"second member\n"));
+    fs::write(scratch.path().join("concat.gz"), &compressed).unwrap();
+    for (file, compressed_size, plain_size, overhead) in [
+        ("single.gz", single_size, 15, 18),
+        ("concat.gz", compressed.len(), 29, 0),
+    ] {
+        let output = run(scratch.path(), "gzip", &["-l", file], b"");
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        let fields: Vec<_> = text.lines().nth(1).unwrap().split_whitespace().collect();
+        assert_eq!(fields[0], compressed_size.to_string());
+        assert_eq!(fields[1], plain_size.to_string());
+        let ratio = 100.0 - (compressed_size - overhead) as f64 * 100.0 / plain_size as f64;
+        assert_eq!(fields[2], format!("{ratio:.1}%"));
+    }
+}

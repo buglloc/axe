@@ -1454,7 +1454,12 @@ fn decode_gzip(input: impl Read, mut output: impl Write, passthrough: bool) -> i
                 inner: prefix.chain(&mut input),
                 bytes: 0,
             });
-            decoded.overhead += member.get_ref().bytes + 8;
+            // Concatenated listings use the whole-file ratio, including member framing.
+            decoded.overhead = if members == 0 {
+                member.get_ref().bytes + 8
+            } else {
+                0
+            };
             decoded.bytes += io::copy(&mut member, &mut output)?;
             members += 1;
         } else if passthrough {
