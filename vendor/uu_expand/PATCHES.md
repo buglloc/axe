@@ -14,6 +14,8 @@ Source: the `uu_expand` 0.12.0 crate from crates.io, upstream revision
   and file operands; only a newline begins a new logical line.
 - Validate ascending order only for absolute tab stops; a trailing `+N` or `/N`
   specifies an interval and may be smaller than the last absolute stop.
+- Use byte columns in single-byte locales and Unicode display widths in UTF-8
+  locales; `--no-utf8` keeps byte columns regardless of the locale.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
 

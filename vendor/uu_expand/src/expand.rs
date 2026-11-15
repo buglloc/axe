@@ -16,6 +16,7 @@ use thiserror::Error;
 use uucore::char_width::char_width_at;
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UError, UResult, set_exit_code};
+use uucore::i18n::charmap::{Encoding, locale_encoding};
 use uucore::{format_usage, show, translate};
 
 pub mod options {
@@ -169,7 +170,7 @@ impl Options {
         };
 
         let iflag = matches.get_flag(options::INITIAL);
-        let utf8 = !matches.get_flag(options::NO_UTF8);
+        let utf8 = !matches.get_flag(options::NO_UTF8) && locale_encoding() == Encoding::Utf8;
         #[allow(clippy::unwrap_used, reason = "clap provides '-' by default")]
         let files = matches
             .get_many::<OsString>(options::FILES)

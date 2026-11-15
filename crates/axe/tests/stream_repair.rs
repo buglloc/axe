@@ -397,3 +397,29 @@ fn wc_character_counts_match_on_fifo_and_descriptor_inputs() {
         );
     }
 }
+
+#[test]
+fn expand_column_widths_follow_the_locale_encoding() {
+    let scratch = Scratch::new();
+    let input = "界é\tA\n".as_bytes();
+    for (args, bytes, unicode) in [
+        (&[][..], &b"   "[..], &b"     "[..]),
+        (&["-t3"][..], &b" "[..], &b"   "[..]),
+        (&["-t4,8,12"][..], &b"   "[..], &b" "[..]),
+        (&["-t4,+3"][..], &b"  "[..], &b" "[..]),
+    ] {
+        for (locale, spaces) in [("C", bytes), ("C.UTF-8", unicode)] {
+            let mut expected = "界é".as_bytes().to_vec();
+            expected.extend_from_slice(spaces);
+            expected.extend_from_slice(b"A\n");
+            assert_success(
+                run_locale(scratch.path(), "expand", args, input, locale),
+                &expected,
+            );
+        }
+    }
+    assert_success(
+        run_locale(scratch.path(), "expand", &["--no-utf8"], input, "C.UTF-8"),
+        "界é   A\n".as_bytes(),
+    );
+}
