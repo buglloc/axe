@@ -114,10 +114,7 @@ fn stream_inputs_share_the_filter_cursor_and_update_input_filename() {
         b"[null,[[0],1],\"a\",[[0]],\"a\",[[0],2],\"b\"]\n",
     );
     expect(
-        scratch.run(
-            &["--stream", "-c", "[.,input,inputs]"],
-            b"[1,2] true",
-        ),
+        scratch.run(&["--stream", "-c", "[.,input,inputs]"], b"[1,2] true"),
         0,
         b"[[[0],1],[[1],2],[[1]],[[],true]]\n",
     );
@@ -162,16 +159,44 @@ fn stream_errors_include_jq_messages_paths_and_line_recovery() {
         b"[[0],1]\n[\"Invalid numeric literal at line 1, column 5\",[1]]\n[[],4]\n",
     );
     for (input, expected) in [
-        (b"[1,]".as_slice(), b"[[0],1]\n[\"Expected another array element at line 1, column 4\",[1]]\n".as_slice()),
-        (b"{\"a\":}", b"[\"Missing value in key:value pair at line 1, column 6\",[\"a\"]]\n"),
-        (b"{\"a\":1,\"b\":", b"[[\"a\"],1]\n[\"Unfinished JSON term at EOF at line 1, column 11\",[\"b\"]]\n"),
-        (b"[1", b"[\"Unfinished JSON term at EOF at line 1, column 2\",[0]]\n"),
-        (b"\"a\\q\"\n1", b"[\"Invalid escape at line 1, column 5\",[]]\n[[],1]\n"),
-        (b"\"\\u0\"", b"[\"Invalid \\\\uXXXX escape at line 1, column 5\",[]]\n"),
-        (b"[1 2]", b"[\"Expected separator between values at line 1, column 5\",[0]]\n"),
-        (b"{\"a\"}", b"[\"Objects must consist of key:value pairs at line 1, column 5\",[null]]\n"),
+        (
+            b"[1,]".as_slice(),
+            b"[[0],1]\n[\"Expected another array element at line 1, column 4\",[1]]\n".as_slice(),
+        ),
+        (
+            b"{\"a\":}",
+            b"[\"Missing value in key:value pair at line 1, column 6\",[\"a\"]]\n",
+        ),
+        (
+            b"{\"a\":1,\"b\":",
+            b"[[\"a\"],1]\n[\"Unfinished JSON term at EOF at line 1, column 11\",[\"b\"]]\n",
+        ),
+        (
+            b"[1",
+            b"[\"Unfinished JSON term at EOF at line 1, column 2\",[0]]\n",
+        ),
+        (
+            b"\"a\\q\"\n1",
+            b"[\"Invalid escape at line 1, column 5\",[]]\n[[],1]\n",
+        ),
+        (
+            b"\"\\u0\"",
+            b"[\"Invalid \\\\uXXXX escape at line 1, column 5\",[]]\n",
+        ),
+        (
+            b"[1 2]",
+            b"[\"Expected separator between values at line 1, column 5\",[0]]\n",
+        ),
+        (
+            b"{\"a\"}",
+            b"[\"Objects must consist of key:value pairs at line 1, column 5\",[null]]\n",
+        ),
     ] {
-        expect(scratch.run(&["--stream-errors", "-c", "."], input), 0, expected);
+        expect(
+            scratch.run(&["--stream-errors", "-c", "."], input),
+            0,
+            expected,
+        );
     }
     expect(
         scratch.run(&["--stream-errors", "-sc", "."], b"[1,x]\n2\n"),
@@ -200,10 +225,7 @@ fn stream_sequence_mode_keeps_record_framing_and_recovers_after_truncation() {
         0,
         b"\x1e[\"Truncated value at line 1, column 11\",[0]]\n\x1e[[0],2]\n\x1e[[0]]\n\x1e[[],3]\n",
     );
-    let output = scratch.run(
-        &["--seq", "--stream", "-c", "."],
-        b"\x1e[1,x]\n\x1e[2]\n",
-    );
+    let output = scratch.run(&["--seq", "--stream", "-c", "."], b"\x1e[1,x]\n\x1e[2]\n");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(output.stdout, b"\x1e[[0],1]\n\x1e[[0],2]\n\x1e[[0]]\n");
     assert_eq!(
@@ -216,18 +238,40 @@ fn stream_sequence_mode_keeps_record_framing_and_recovers_after_truncation() {
 fn stream_exit_status_and_null_input_follow_filter_outputs() {
     let scratch = Scratch::new();
     expect(scratch.run(&["--stream", "-ec", "."], b""), 4, b"");
-    expect(scratch.run(&["--stream", "-ec", "."], b"false"), 0, b"[[],false]\n");
-    expect(scratch.run(&["--stream", "-ec", ".[1]"], b"false"), 1, b"false\n");
-    expect(scratch.run(&["--stream-errors", "-ec", "."], b"["), 0,
-        b"[\"Unfinished JSON term at EOF at line 1, column 1\",[0]]\n");
-    expect(scratch.run(&["--stream", "-nc", "."], b"invalid"), 0, b"null\n");
-    expect(scratch.run(&["--stream", "-nc", "try input catch ."], b""), 0, b"\"break\"\n");
+    expect(
+        scratch.run(&["--stream", "-ec", "."], b"false"),
+        0,
+        b"[[],false]\n",
+    );
+    expect(
+        scratch.run(&["--stream", "-ec", ".[1]"], b"false"),
+        1,
+        b"false\n",
+    );
+    expect(
+        scratch.run(&["--stream-errors", "-ec", "."], b"["),
+        0,
+        b"[\"Unfinished JSON term at EOF at line 1, column 1\",[0]]\n",
+    );
+    expect(
+        scratch.run(&["--stream", "-nc", "."], b"invalid"),
+        0,
+        b"null\n",
+    );
+    expect(
+        scratch.run(&["--stream", "-nc", "try input catch ."], b""),
+        0,
+        b"\"break\"\n",
+    );
 }
 
 #[test]
 fn streaming_produces_a_valid_prefix_before_stdin_is_closed() {
     let scratch = Scratch::new();
-    let mut child = scratch.command(&["--stream", "--unbuffered", "-c", "."]).spawn().unwrap();
+    let mut child = scratch
+        .command(&["--stream", "--unbuffered", "-c", "."])
+        .spawn()
+        .unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let (tx, rx) = mpsc::channel();
@@ -272,7 +316,12 @@ fn large_arrays_can_be_reduced_without_collecting_values_or_events() {
     file.flush().unwrap();
     expect(
         scratch.run(
-            &["--stream", "-nc", "reduce inputs as $event (0; .+1)", "large.json"],
+            &[
+                "--stream",
+                "-nc",
+                "reduce inputs as $event (0; .+1)",
+                "large.json",
+            ],
             b"",
         ),
         0,
@@ -319,13 +368,18 @@ fn stream_string_tokens_and_paths_survive_reader_buffer_boundaries() {
     let output = scratch.run(&["--stream", "-c", "."], &input);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
-    let events = output.stdout.split(|byte| *byte == b'\n')
+    let events = output
+        .stdout
+        .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
         .map(|line| serde_json::from_slice::<serde_json::Value>(line).unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(events, [
-        serde_json::json!([[&key, 0], &value]),
-        serde_json::json!([[&key, 0]]),
-        serde_json::json!([[&key]]),
-    ]);
+    assert_eq!(
+        events,
+        [
+            serde_json::json!([[&key, 0], &value]),
+            serde_json::json!([[&key, 0]]),
+            serde_json::json!([[&key]]),
+        ]
+    );
 }

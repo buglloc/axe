@@ -857,7 +857,10 @@ fn append_portable<W: Write>(
             && !kind.is_character_special()
             && !kind.is_block_special()
         {
-            return Err(invalid(format!("{}: unsupported file type", source.display())));
+            return Err(invalid(format!(
+                "{}: unsupported file type",
+                source.display()
+            )));
         }
     }
 
@@ -927,7 +930,8 @@ fn append_portable<W: Write>(
         }) {
             extensions.insert(0, ("hdrcharset", Cow::Borrowed(b"BINARY")));
         }
-        archive.append_pax_extensions(extensions.iter().map(|(key, value)| (*key, value.as_ref())))?;
+        archive
+            .append_pax_extensions(extensions.iter().map(|(key, value)| (*key, value.as_ref())))?;
     }
     header.set_cksum();
     if metadata.is_file() && hard_link.is_none() {

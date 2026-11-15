@@ -509,12 +509,7 @@ fn ignore_matching_lines_supports_gnu_basic_backreferences() {
     scratch.write("a", b"aa\n");
     scratch.write("b", b"ab\n");
     assert_output(
-        run(
-            &scratch.0,
-            "diff",
-            &["-I", r"^\(.\)\1$", "a", "b"],
-            b"",
-        ),
+        run(&scratch.0, "diff", &["-I", r"^\(.\)\1$", "a", "b"], b""),
         1,
         b"1c1\n< aa\n---\n> ab\n",
     );

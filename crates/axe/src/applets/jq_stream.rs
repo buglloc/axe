@@ -156,18 +156,18 @@ impl<R: Source> Stream<R> {
     }
 
     fn string(&mut self) -> Result<(), &'static str> {
-        let value = json::read::parse_single_jq(&self.token)
-            .map_err(|_| string_error(&self.token))?;
+        let value =
+            json::read::parse_single_jq(&self.token).map_err(|_| string_error(&self.token))?;
         let value = normalize_input(value).map_err(|_| string_error(&self.token))?;
         self.token.clear();
         self.value(value)
     }
 
     fn top_value(&mut self) {
-        if self.path.is_empty() {
-            if let Some(value) = self.next.take() {
-                self.output = Some(self.leaf(value));
-            }
+        if self.path.is_empty()
+            && let Some(value) = self.next.take()
+        {
+            self.output = Some(self.leaf(value));
         }
     }
 
@@ -184,9 +184,7 @@ impl<R: Source> Stream<R> {
                         "Expected string key after '{', not '{'"
                     });
                 }
-                if self.last == Last::Comma
-                    && !matches!(self.path.last(), Some(Val::Num(_)))
-                {
+                if self.last == Last::Comma && !matches!(self.path.last(), Some(Val::Num(_))) {
                     return Err(if byte == b'[' {
                         "Expected string key after ',' in object, not '['"
                     } else {
@@ -198,7 +196,11 @@ impl<R: Source> Stream<R> {
                 } else {
                     Val::Null
                 });
-                self.last = if byte == b'[' { Last::Array } else { Last::Object };
+                self.last = if byte == b'[' {
+                    Last::Array
+                } else {
+                    Last::Object
+                };
             }
             b':' => {
                 if matches!(self.path.last(), None | Some(Val::Num(_))) {
@@ -286,7 +288,11 @@ impl<R: Source> Stream<R> {
                     };
                     self.output = Some(self.leaf(value));
                 }
-                self.last = if self.path.is_empty() { Last::None } else { Last::Value };
+                self.last = if self.path.is_empty() {
+                    Last::None
+                } else {
+                    Last::Value
+                };
             }
             _ => unreachable!(),
         }
@@ -320,7 +326,10 @@ impl<R: Source> Stream<R> {
             }
             return Ok(());
         }
-        if matches!(byte, b' ' | b'\t' | b'\r' | b'\n' | b'"' | b'[' | b']' | b'{' | b'}' | b',' | b':') {
+        if matches!(
+            byte,
+            b' ' | b'\t' | b'\r' | b'\n' | b'"' | b'[' | b']' | b'{' | b'}' | b',' | b':'
+        ) {
             self.literal()?;
             self.top_value();
             match byte {

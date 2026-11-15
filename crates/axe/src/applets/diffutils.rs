@@ -878,7 +878,10 @@ fn comparison_key(line: &[u8], options: &DiffOptions, locale: SideLocale) -> Vec
         for chunk in content.utf8_chunks() {
             for character in chunk.valid().chars() {
                 let mut buffer = [0; 4];
-                for &byte in lowercase_character(character).encode_utf8(&mut buffer).as_bytes() {
+                for &byte in lowercase_character(character)
+                    .encode_utf8(&mut buffer)
+                    .as_bytes()
+                {
                     append(byte);
                 }
             }
