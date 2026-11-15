@@ -107,16 +107,13 @@ fn byte_width(bytes: &[u8]) -> usize {
     width
 }
 
-/// GNU fmt has a more restrictive definition of whitespace than Unicode.
-/// It only considers ASCII whitespace characters (space, tab, newline, etc.)
-/// and excludes many Unicode whitespace characters like non-breaking spaces.
+/// GNU fmt separates words at spaces, tabs, and record boundaries.
 fn is_fmt_whitespace(c: char) -> bool {
-    // Only ASCII whitespace characters are considered whitespace in GNU fmt
-    matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C')
+    matches!(c, ' ' | '\t' | '\n')
 }
 
 fn is_fmt_whitespace_byte(b: u8) -> bool {
-    matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C)
+    matches!(b, b' ' | b'\t' | b'\n')
 }
 
 // lines with PSKIP, lacking PREFIX, or which are entirely blank are
@@ -258,9 +255,6 @@ impl Iterator for FileLines<'_> {
             .filter(|n| *n > 0)?;
         if buf.ends_with(b"\n") {
             buf.pop();
-            if buf.ends_with(b"\r") {
-                buf.pop();
-            }
         }
         let n = buf;
 

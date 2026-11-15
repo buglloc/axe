@@ -11,8 +11,11 @@ Source: the `uu_fmt` 0.12.0 crate from crates.io, upstream revision
   width does not force a one-word final line, matching GNU fmt wrapping.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
+- Treat carriage returns and other nonblank control bytes as text instead of
+  stripping CRLF or consuming them as word separators.
 
 Upstreamability: width and line-break changes target GNU fmt and are
 upstreamable; no upstream issue or commit is recorded in AXE.
 
-AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs`.
+AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs` and
+`crates/axe/tests/layout_repair.rs`.

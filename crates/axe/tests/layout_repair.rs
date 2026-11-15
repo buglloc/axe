@@ -83,3 +83,12 @@ fn sort_general_numeric_orders_signed_infinities() {
         b"-nan\nNaN\n-inf\n-0\n0\n1.01\n10\n1e2\n+inf\n",
     );
 }
+
+#[test]
+fn fmt_preserves_carriage_returns_in_formatted_words() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(scratch.path(), "fmt", &[], b"a\r\nb\r\nlast\r"),
+        b"a\r b\r last\r\n",
+    );
+}
