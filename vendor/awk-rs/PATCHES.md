@@ -18,6 +18,8 @@ Source: the `awk-rs` 0.2.0 crate from crates.io, upstream revision
   policy and is documented in the consumer tests.
 - Honor `OFMT`/`CONVFMT`, numeric-string comparison, printf width/precision and
   `%c` behavior, and byte-preserving case/length operations.
+- Parse exponentiation above unary signs and below increment operators, with
+  right-associative powers and signed exponents.
 - Keep a standalone library manifest without the upstream binary, integration
   tests, benchmarks, benchmark dependencies, and release profile; AXE invokes
   the library through its own applet wrapper.
@@ -26,4 +28,5 @@ Upstreamability: the byte, lifecycle, regex, and formatting fixes are intended
 for upstream; the finite field bound needs upstream policy agreement. No
 upstream issue or commit is recorded in AXE.
 
-AXE consumer regressions are in `crates/axe/tests/awk_compat.rs`.
+AXE consumer regressions are in `crates/axe/tests/awk_compat.rs` and
+`crates/axe/tests/language_repair.rs`.

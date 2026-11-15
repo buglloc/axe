@@ -918,7 +918,7 @@ impl Parser {
     }
 
     fn parse_multiplicative(&mut self) -> Result<Expr> {
-        let mut expr = self.parse_power()?;
+        let mut expr = self.parse_unary()?;
 
         loop {
             let location = self.current_location();
@@ -932,7 +932,7 @@ impl Parser {
                 break;
             };
 
-            let right = self.parse_power()?;
+            let right = self.parse_unary()?;
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op,
@@ -945,12 +945,12 @@ impl Parser {
     }
 
     fn parse_power(&mut self) -> Result<Expr> {
-        let expr = self.parse_unary()?;
+        let expr = self.parse_increment()?;
 
         // Exponentiation is right-associative
         if self.match_token(&TokenKind::Caret) {
             let location = self.current_location();
-            let right = self.parse_power()?;
+            let right = self.parse_unary()?;
             return Ok(Expr::Binary {
                 left: Box::new(expr),
                 op: BinaryOp::Pow,
@@ -992,13 +992,18 @@ impl Parser {
             });
         }
 
+        self.parse_power()
+    }
+
+    fn parse_increment(&mut self) -> Result<Expr> {
+        let location = self.current_location();
         if self.match_token(&TokenKind::Increment) {
-            let operand = self.parse_unary()?;
+            let operand = self.parse_increment()?;
             return Ok(Expr::PreIncrement(Box::new(operand), location));
         }
 
         if self.match_token(&TokenKind::Decrement) {
-            let operand = self.parse_unary()?;
+            let operand = self.parse_increment()?;
             return Ok(Expr::PreDecrement(Box::new(operand), location));
         }
 
