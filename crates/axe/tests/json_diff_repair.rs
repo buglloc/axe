@@ -201,3 +201,34 @@ fn jq_regex_multiline_flag_changes_dot_not_anchors() {
         b"[false,true,false,true,false]\n",
     );
 }
+
+#[test]
+fn jq_sequence_input_requires_initial_framing_and_complete_numbers() {
+    let scratch = Scratch::new();
+    expect_output(
+        scratch.run("jq", &["-ce", "--seq", "."], b"false\ntrue\n"),
+        4,
+        b"",
+    );
+    expect_output(
+        scratch.run("jq", &["-c", "--seq", "."], b"ignored\n\x1e1\n\x1e2"),
+        0,
+        b"\x1e1\n",
+    );
+    expect_output(
+        scratch.run("jq", &["-c", "--seq", "."], b"\x1e1\x1e2\n"),
+        0,
+        b"\x1e2\n",
+    );
+    expect_output(
+        scratch.run("jq", &["-c", "--seq", "."], b"\x1e1 \x1e2\n"),
+        0,
+        b"\x1e1\n\x1e2\n",
+    );
+    expect_output(
+        scratch.run("jq", &["-c", "--seq", "."], b"\x1e[1]\n\x1e\"ok\""),
+        0,
+        b"\x1e[1]\n\x1e\"ok\"\n",
+    );
+    expect_output(scratch.run("jq", &["-c", "."], b"2"), 0, b"2\n");
+}

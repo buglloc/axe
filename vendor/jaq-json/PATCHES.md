@@ -7,6 +7,9 @@ Source: the `jaq-json` 2.0.3 crate from crates.io, upstream revision
   NUL framing while retaining jaq's value builder.
 - Add JSON-sequence framing and resynchronization at record separators, so a
   malformed record does not consume the following sequence record.
+- Ignore sequence input before the first RS. Reject top-level sequence
+  numbers without a terminator before EOF or the next RS, as potentially
+  truncated records.
 - Keep the original jaq reader for jaq callers; the jq mode is opt-in and
   rejects comments rather than inheriting jaq's comment-tolerant input mode.
 - Preserve invalid bytes and jq-compatible number values through the reader

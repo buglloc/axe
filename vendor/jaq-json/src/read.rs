@@ -124,9 +124,27 @@ fn read_many_jq_mode<'a>(
 ) -> impl Iterator<Item = io::Result<Val>> + 'a {
     let invalid_data = |e| io::Error::new(io::ErrorKind::InvalidData, e);
     let mut lexer = hifijson::IterLexer::new(read.bytes());
+    let mut awaiting_rs = seq;
     core::iter::from_fn(move || {
-        let v = ws_tk_jq(&mut lexer, seq)
-            .map(|next| parse_with(next, &mut lexer, true).map_err(invalid_data));
+        if awaiting_rs {
+            while lexer.peek_next().is_some_and(|byte| byte != b'\x1e') {
+                lexer.take_next();
+            }
+            awaiting_rs = lexer.take_next().is_none();
+        }
+        let v = ws_tk_jq(&mut lexer, seq).map(|next| {
+            let value = parse_with(next, &mut lexer, true).map_err(invalid_data)?;
+            if seq
+                && matches!(value, Val::Num(_))
+                && matches!(lexer.peek_next(), None | Some(b'\x1e'))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "potentially truncated top-level numeric value",
+                ));
+            }
+            Ok(value)
+        });
         if seq && v.as_ref().is_some_and(Result::is_err) {
             while lexer.peek_next().is_some_and(|byte| byte != b'\x1e') {
                 lexer.take_next();
