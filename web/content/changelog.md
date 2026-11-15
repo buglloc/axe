@@ -2,6 +2,12 @@
 title = "Changelog"
 +++
 
+## [v0.18.1](https://github.com/buglloc/axe/releases/tag/v0.18.1) — 2026-11-15
+
+### Changes
+
+- Vendored `uucore` uptime code now represents boot timestamps as `i64` Unix seconds on all platforms, replacing deprecated `time_t` usage ([655b812](https://github.com/buglloc/axe/commit/655b812d3a0298d2cfab710ea539212a3998d587)).
+
 ## [v0.18.0](https://github.com/buglloc/axe/releases/tag/v0.18.0) — 2026-11-15
 
 ### Highlights
