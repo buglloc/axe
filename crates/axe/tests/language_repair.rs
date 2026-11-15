@@ -192,3 +192,27 @@ fn sed_empty_matches_preserve_utf8_character_boundaries() {
         b"X\xc3X\xa9X\n",
     );
 }
+
+#[test]
+fn grep_utf8_regexes_do_not_consume_invalid_characters() {
+    assert_output(
+        run("grep", &["-a", "-o", "."], b"\xffa\xfe\n", "C.UTF-8"),
+        0,
+        b"a\n",
+    );
+    assert_output(
+        run("grep", &["-a", "-o", "[^a]"], b"\xffa\xfe\n", "C.UTF-8"),
+        1,
+        b"",
+    );
+    assert_output(
+        run("grep", &["-a", "-o", r"^a\|a$\|\`a\|a\'"], b"\xffa\xfe\n", "C.UTF-8"),
+        1,
+        b"",
+    );
+    assert_output(
+        run("grep", &["-a", "-w", "-o", "a"], b"\xffa\xfe\n", "C.UTF-8"),
+        0,
+        b"a\n",
+    );
+}

@@ -13,6 +13,9 @@ upstream packaging provenance, not a local AXE edit.
 - Resolve the active locale codeset before matching. C/POSIX uses byte regexes,
   ASCII POSIX classes and word boundaries, and only NUL marks binary data;
   UTF-8 locales retain Unicode matching and invalid-encoding binary detection.
+- Treat invalid UTF-8 bytes as unmatchable in UTF-8 locales rather than letting
+  regex wildcards consume them; retain original line and buffer anchors across
+  valid spans and advance empty matches by characters.
 - Keep a standalone manifest without upstream CI, fuzzing, pre-commit, and
   development-only package files; AXE owns dependency resolution.
 

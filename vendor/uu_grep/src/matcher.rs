@@ -10,6 +10,7 @@ use onig_sys::{
     ONIGERR_EMPTY_RANGE_IN_CHAR_CLASS, OnigEncCtype_ONIGENC_CTYPE_WORD, OnigEncodingASCII,
     OnigEncodingUTF8,
 };
+use std::ops::Range;
 use std::ptr::{null, null_mut};
 use std::sync::Mutex;
 use uucore::error::{UResult, USimpleError};
@@ -122,30 +123,22 @@ impl<'a> Matcher<'a> {
             return (start == 0 || !word(line[start - 1]))
                 && (end == line.len() || !word(line[end]));
         }
-        // SAFETY: This code uses OnigEncodingType such that it can support other types of encodings in the future.
-        unsafe {
-            let mbc_to_code = OnigEncodingUTF8.mbc_to_code.unwrap_unchecked();
-            let is_code_ctype = OnigEncodingUTF8.is_code_ctype.unwrap_unchecked();
-            let line_end = line.as_ptr().add(line.len());
-
-            if end < line.len() {
-                let cp = mbc_to_code(line.as_ptr().add(end), line_end);
-                if is_code_ctype(cp, OnigEncCtype_ONIGENC_CTYPE_WORD) != 0 {
-                    return false;
-                }
+        let word = |character: char| {
+            // SAFETY: the UTF-8 encoding has a ctype callback accepting Unicode scalars.
+            unsafe {
+                OnigEncodingUTF8.is_code_ctype.expect("UTF-8 ctype callback")(
+                    character as u32,
+                    OnigEncCtype_ONIGENC_CTYPE_WORD,
+                ) != 0
             }
-
-            if start > 0 {
-                let left_adjust = OnigEncodingUTF8.left_adjust_char_head.unwrap_unchecked();
-                let head = left_adjust(line.as_ptr(), line.as_ptr().add(start - 1));
-                let cp = mbc_to_code(head, line_end);
-                if is_code_ctype(cp, OnigEncCtype_ONIGENC_CTYPE_WORD) != 0 {
-                    return false;
-                }
-            }
-
-            true
-        }
+        };
+        let before = (start.saturating_sub(4)..start).find_map(|at| {
+            std::str::from_utf8(&line[at..start]).ok()?.chars().next_back()
+        });
+        let after = (end + 1..=line.len().min(end + 4)).find_map(|at| {
+            std::str::from_utf8(&line[end..at]).ok()?.chars().next()
+        });
+        !before.is_some_and(word) && !after.is_some_and(word)
     }
 }
 
@@ -165,6 +158,8 @@ impl<'a> MatchIter<'a> {
                     let mut c = Cursor {
                         pattern,
                         line,
+                        spans: ValidSpans::new(line, pattern.utf8),
+                        span: None,
                         offset: 0,
                         pending: None,
                     };
@@ -210,6 +205,8 @@ impl<'a> Iterator for MatchIter<'a> {
 struct Cursor<'a> {
     pattern: &'a CompiledPattern,
     line: &'a [u8],
+    spans: ValidSpans<'a>,
+    span: Option<Range<usize>>,
     /// Where the next `search_leftmost` call should start.
     offset: usize,
     /// Pre-fetched next match for this pattern.
@@ -219,24 +216,87 @@ struct Cursor<'a> {
 
 impl Cursor<'_> {
     fn refill(&mut self) {
-        if self.offset > self.line.len() {
-            self.pending = None;
+        self.pending = None;
+        loop {
+            if self.span.as_ref().is_none_or(|span| self.offset > span.end) {
+                self.span = self.spans.next();
+            }
+            let Some(span) = &self.span else {
+                return;
+            };
+            let options = span_options(span, self.line.len());
+            let offset = self.offset.max(span.start) - span.start;
+            let text = &self.line[span.clone()];
+            let Some((start, leftmost_end)) =
+                self.pattern.search_leftmost(text, offset, options)
+            else {
+                self.span = None;
+                continue;
+            };
+            let end = self.pattern.longest_end_at(text, start, options).unwrap_or(leftmost_end);
+            let start = span.start + start;
+            let end = span.start + end;
+            self.offset = if start == end {
+                let mut next = start + 1;
+                if self.pattern.utf8 {
+                    while next < span.end && self.line[next] & 0xc0 == 0x80 {
+                        next += 1;
+                    }
+                }
+                next
+            } else {
+                end
+            };
+            self.pending = Some((start, end));
             return;
         }
-        let Some((start, leftmost_end)) = self.pattern.search_leftmost(self.line, self.offset)
-        else {
-            self.pending = None;
-            return;
-        };
-        let end = self
-            .pattern
-            .longest_end_at(self.line, start)
-            .unwrap_or(leftmost_end);
-        // Advance the next search past the match we just found.
-        // Zero-length matches need a +1 nudge to avoid spinning forever.
-        self.offset = end.max(start + 1);
-        self.pending = Some((start, end));
     }
+}
+
+struct ValidSpans<'a> {
+    line: &'a [u8],
+    at: usize,
+    utf8: bool,
+    done: bool,
+}
+
+impl<'a> ValidSpans<'a> {
+    fn new(line: &'a [u8], utf8: bool) -> Self {
+        Self { line, at: 0, utf8, done: false }
+    }
+}
+
+impl Iterator for ValidSpans<'_> {
+    type Item = Range<usize>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let start = self.at;
+        if self.utf8 {
+            if let Err(error) = std::str::from_utf8(&self.line[start..]) {
+                let end = start + error.valid_up_to();
+                self.at = end + 1;
+                return Some(start..end);
+            }
+        }
+        self.done = true;
+        Some(start..self.line.len())
+    }
+}
+
+fn span_options(span: &Range<usize>, length: usize) -> u32 {
+    let mut options = SearchOptions::SEARCH_OPTION_NONE.bits();
+    if span.start != 0 {
+        options |= SearchOptions::SEARCH_OPTION_NOTBOL.bits()
+            | onig_sys::ONIG_OPTION_NOT_BEGIN_STRING;
+    }
+    if span.end != length {
+        options |= SearchOptions::SEARCH_OPTION_NOTEOL.bits()
+            | onig_sys::ONIG_OPTION_NOT_END_STRING;
+    }
+    options
 }
 
 /// Return the literal bytes of `pattern` when a raw byte-for-byte substring
@@ -265,6 +325,7 @@ struct CompiledPattern {
     /// entire haystack to find the longest. This makes it unsuitable for searching,
     /// but it's perfect for a second, anchored match pass for POSIX semantics.
     longest_anchored: OnigRegex,
+    utf8: bool,
 }
 
 impl CompiledPattern {
@@ -355,28 +416,31 @@ impl CompiledPattern {
         Ok(Self {
             leftmost,
             longest_anchored,
+            utf8: config.utf8,
         })
     }
 
     /// Find the leftmost match starting at or after `offset`.
-    fn search_leftmost(&self, line: &[u8], offset: usize) -> Option<(usize, usize)> {
+    fn search_leftmost(&self, line: &[u8], offset: usize, options: u32) -> Option<(usize, usize)> {
         let mut region = Region::new();
-        self.leftmost.search(line, offset, Some(&mut region))?;
+        self.leftmost.search(line, offset, options, Some(&mut region))?;
         region.pos(0)
     }
 
     /// Given a known leftmost start `start`, return the longest extent
     /// of a match anchored exactly there = POSIX leftmost-longest end.
-    fn longest_end_at(&self, line: &[u8], start: usize) -> Option<usize> {
+    fn longest_end_at(&self, line: &[u8], start: usize, options: u32) -> Option<usize> {
         let mut region = Region::new();
         self.longest_anchored
-            .match_at(line, start, Some(&mut region));
+            .match_at(line, start, options, Some(&mut region));
         region.pos(0).map(|(_, end)| end)
     }
 
     /// True if any match exists in `line` (including zero-length).
     fn is_match(&self, line: &[u8]) -> bool {
-        self.leftmost.search(line, 0, None).is_some()
+        ValidSpans::new(line, self.utf8).any(|span| {
+            self.leftmost.search(&line[span.clone()], 0, span_options(&span, line.len()), None).is_some()
+        })
     }
 }
 
@@ -445,7 +509,7 @@ impl OnigRegex {
         }
     }
 
-    fn search(&self, line: &[u8], offset: usize, region: Option<&mut Region>) -> Option<usize> {
+    fn search(&self, line: &[u8], offset: usize, options: u32, region: Option<&mut Region>) -> Option<usize> {
         debug_assert!(offset <= line.len());
         // SAFETY: `offset` is bounded by `line.len()`, all byte pointers are
         // derived from `line`, and `region_ptr` preserves `onig::Region`'s
@@ -460,13 +524,13 @@ impl OnigRegex {
                 start,
                 end,
                 region_ptr(region),
-                SearchOptions::SEARCH_OPTION_NONE.bits(),
+                options,
             )
         };
         onig_match_result(result)
     }
 
-    fn match_at(&self, line: &[u8], offset: usize, region: Option<&mut Region>) -> Option<usize> {
+    fn match_at(&self, line: &[u8], offset: usize, options: u32, region: Option<&mut Region>) -> Option<usize> {
         debug_assert!(offset <= line.len());
         // SAFETY: `offset` is bounded by `line.len()`, all byte pointers are
         // derived from `line`, and `region_ptr` preserves `onig::Region`'s
@@ -479,7 +543,7 @@ impl OnigRegex {
                 line.as_ptr().add(line.len()),
                 at,
                 region_ptr(region),
-                SearchOptions::SEARCH_OPTION_NONE.bits(),
+                options,
             )
         };
         onig_match_result(result)
