@@ -25,6 +25,7 @@ use crate::protocol::{
 
 const QUIC_SERVER_NAME: &str = "axe-relay";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const STABLE_REGISTRATION: Duration = Duration::from_secs(30);
 
 /// Relay trust and client identity for mutually authenticated QUIC.
 pub struct QuicIdentity {
@@ -109,7 +110,7 @@ pub struct Client {
 enum Exit {
     Shutdown,
     /// The relay dropped an established registration.
-    Disconnected(io::Error),
+    Disconnected(io::Error, Duration),
 }
 
 enum Control {
@@ -146,8 +147,12 @@ impl Client {
         loop {
             match self.attempt(&mut shutdown).await {
                 Ok(Exit::Shutdown) => return,
-                Ok(Exit::Disconnected(error)) => {
-                    failures = 0;
+                Ok(Exit::Disconnected(error, connected_for)) => {
+                    failures = if connected_for >= STABLE_REGISTRATION {
+                        0
+                    } else {
+                        failures.saturating_add(1).min(6)
+                    };
                     eprintln!("relay: {transport}: {error}; reconnecting");
                 }
                 Err(error) => {
@@ -184,14 +189,15 @@ impl Client {
         );
 
         let mut session = control.into_session();
+        let connected_at = tokio::time::Instant::now();
         let target = Arc::<str>::from(self.target.as_str());
         let mut tunnels = JoinSet::new();
-        loop {
+        let exit = loop {
             tokio::select! {
                 tunnel = session.next_tunnel(&self.relay) => {
                     let tunnel = match tunnel {
                         Ok(tunnel) => tunnel,
-                        Err(error) => return Ok(Exit::Disconnected(error)),
+                        Err(error) => break Exit::Disconnected(error, connected_at.elapsed()),
                     };
                     let target = Arc::clone(&target);
                     tunnels.spawn(async move {
@@ -210,11 +216,13 @@ impl Client {
                     }
                 }
                 _ = &mut *shutdown => {
-                    session.close().await;
-                    return Ok(Exit::Shutdown);
+                    break Exit::Shutdown;
                 }
             }
-        }
+        };
+        tunnels.shutdown().await;
+        session.close().await;
+        Ok(exit)
     }
 
     async fn connect(&self) -> io::Result<Control> {

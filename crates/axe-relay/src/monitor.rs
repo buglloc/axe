@@ -287,4 +287,28 @@ mod tests {
         assert_eq!(retained.events.first().unwrap().seq, 3);
         assert_eq!(retained.events.last().unwrap().seq, 130);
     }
+
+    #[test]
+    fn duplicate_client_ids_keep_independent_registration_lifetimes() {
+        let monitor = Monitor::new();
+        let first = monitor.register("tcp", "duplicate", "127.0.0.1", "localhost:3000".to_owned());
+        let second = monitor.register("tcp", "duplicate", "127.0.0.1", "localhost:3001".to_owned());
+        let initial = monitor.events(None).unwrap();
+        assert_eq!(initial.clients.len(), 2);
+        let first_id = initial.clients[0].id;
+        let second_id = initial.clients[1].id;
+        assert_ne!(first_id, second_id);
+        drop(first);
+        let current = monitor.events(None).unwrap();
+        assert_eq!(current.clients.len(), 1);
+        assert_eq!(current.clients[0].id, second_id);
+        drop(second);
+        let history = monitor
+            .events(Some((initial.epoch, initial.cursor)))
+            .unwrap();
+        assert_eq!(history.events.len(), 2);
+        assert_eq!(history.events[0].client.id, first_id);
+        assert_eq!(history.events[1].client.id, second_id);
+        assert!(monitor.events(None).unwrap().clients.is_empty());
+    }
 }

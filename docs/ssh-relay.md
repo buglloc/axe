@@ -36,6 +36,13 @@ TCP is the default transport. It uses a bearer token of at least 32 bytes, suppl
 
 The relay daemon requires a TCP token and QUIC server credentials even when targets use only one transport. Generate credentials and configure endpoints as described in [`BOOTSTRAP.md`](../BOOTSTRAP.md#relay-endpoints-and-identities).
 
+Each registration admits at most 128 active tunnels. Additional public connections wait in the listener backlog instead of overflowing the TCP stream multiplexer. Registration, including waiting for a public port, has a 10-second deadline; opening a tunnel also has a 10-second deadline.
+
+Clients reconnect with jittered exponential backoff capped at 30 seconds. The backoff resets after a registration remains established for 30 seconds, not after a briefly accepted connection. QUIC sends keepalives every 5 seconds and uses a 30-second idle timeout. TCP enables OS keepalive with 15-second idle and 5-second probe intervals; the retry count and total failure-detection time remain OS-dependent.
+
+Reconnection does not resume existing tunnels. Applications must reconnect, and the replacement registration may receive a different public port: query `wait` or the API again. Duplicate client IDs can coexist as independent registrations; use unique IDs to avoid ambiguous lookup. TCP tunnels share one TCP connection and therefore share transport head-of-line blocking.
+
+
 Assign a unique `--relay-id` to distinguish targets; the default ID can collide across hosts or containers. For a QUIC target, supply the certificate files unless the edition embeds them:
 
 ```bash

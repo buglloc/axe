@@ -27,7 +27,8 @@ pub const TUNNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
 pub const QUIC_ALPN: &[u8] = b"axe-relay-quic/1";
 
 const MAX_CONTROL_MESSAGE: usize = 4096;
-const MAX_MUX_STREAMS: usize = 128;
+/// Bounds active forwarding tasks per registration on both transports.
+pub const MAX_TUNNELS: usize = 128;
 const MAX_MUX_RECEIVE_WINDOW: usize = 32 * 1024 * 1024;
 const QUIC_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 const QUIC_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -160,7 +161,7 @@ pub fn configure_control_socket(stream: &TcpStream) -> io::Result<()> {
 
 pub fn mux_config() -> yamux::Config {
     let mut config = yamux::Config::default();
-    config.set_max_num_streams(MAX_MUX_STREAMS);
+    config.set_max_num_streams(MAX_TUNNELS);
     config.set_max_connection_receive_window(Some(MAX_MUX_RECEIVE_WINDOW));
     config
 }
@@ -209,4 +210,46 @@ pub fn pem_private_key(pem: &[u8], name: &str) -> io::Result<PrivateKeyDer<'stat
 
 pub fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fragmented_registration_frames_round_trip() {
+        let (mut sender, mut receiver) = tokio::io::duplex(1);
+        let request = RegistrationRequest {
+            version: PROTOCOL_VERSION,
+            token: Some("0123456789abcdef0123456789abcdef".into()),
+            client_id: "fragmented".into(),
+        };
+        let (sent, received) = tokio::join!(
+            write_cbor_frame(&mut sender, &request),
+            read_cbor_frame::<RegistrationRequest>(&mut receiver)
+        );
+        sent.unwrap();
+        let received = received.unwrap();
+        assert_eq!(received.version, request.version);
+        assert_eq!(received.token, request.token);
+        assert_eq!(received.client_id, request.client_id);
+    }
+
+    #[tokio::test]
+    async fn truncated_or_oversized_registration_frames_fail() {
+        for bytes in [
+            vec![0, 0],
+            vec![0, 0, 0, 2, 0],
+            ((MAX_CONTROL_MESSAGE + 1) as u32).to_be_bytes().to_vec(),
+        ] {
+            let error = match read_cbor_frame::<RegistrationRequest>(&mut bytes.as_slice()).await {
+                Ok(_) => panic!("invalid registration frame was accepted"),
+                Err(error) => error,
+            };
+            assert!(matches!(
+                error.kind(),
+                io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData
+            ));
+        }
+    }
 }

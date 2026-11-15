@@ -3,11 +3,12 @@ use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
 
 use axe_relay::Transport;
 use axe_relay::protocol::{
-    PROTOCOL_VERSION, REGISTRATION_TIMEOUT, RegistrationRequest, RegistrationResponse,
+    MAX_TUNNELS, PROTOCOL_VERSION, REGISTRATION_TIMEOUT, RegistrationRequest, RegistrationResponse,
     STREAM_KIND_TCP, TUNNEL_OPEN_TIMEOUT, configure_control_socket, mux_config, read_cbor_frame,
     write_cbor_frame,
 };
@@ -287,11 +288,12 @@ impl Relay {
         let request = match tokio::time::timeout_at(deadline, control.read_request()).await {
             Ok(Ok(request)) => request,
             Ok(Err(error)) => {
-                let _ = self.reject(&mut control, "invalid registration").await;
+                let _ = self
+                    .reject(&mut control, "invalid registration", deadline)
+                    .await;
                 return Err(error);
             }
             Err(_) => {
-                let _ = self.reject(&mut control, "registration timed out").await;
                 return Err(registration_timed_out());
             }
         };
@@ -301,7 +303,7 @@ impl Relay {
             Control::Quic { .. } => None,
         };
         match registration_error(&request, expected_token) {
-            Some(message) => self.reject(&mut control, message).await,
+            Some(message) => self.reject(&mut control, message, deadline).await,
             None => {
                 self.serve_registration(control, &request.client_id, deadline)
                     .await
@@ -309,9 +311,14 @@ impl Relay {
         }
     }
 
-    async fn reject(&self, control: &mut Control, message: &str) -> io::Result<()> {
+    async fn reject(
+        &self,
+        control: &mut Control,
+        message: &str,
+        deadline: Instant,
+    ) -> io::Result<()> {
         let response = RegistrationResponse::rejected(message);
-        let _ = tokio::time::timeout(self.registration_timeout, control.respond(&response)).await;
+        let _ = tokio::time::timeout_at(deadline, control.respond(&response)).await;
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             message.to_owned(),
@@ -324,7 +331,11 @@ impl Relay {
         client_id: &str,
         deadline: Instant,
     ) -> io::Result<()> {
-        let public = self.ports.lock().await.bind(self.public_bind).await?;
+        let public = tokio::time::timeout_at(deadline, async {
+            self.ports.lock().await.bind(self.public_bind).await
+        })
+        .await
+        .map_err(|_| registration_timed_out())??;
         let public_address = advertised_address(&self.public_host, public.local_addr()?.port());
 
         tokio::time::timeout_at(
@@ -342,21 +353,27 @@ impl Relay {
         let mut session = control.into_session();
         let mut tunnels = JoinSet::new();
 
-        loop {
+        let result = loop {
             tokio::select! {
-                accepted = public.accept() => {
-                    let (incoming, peer) = accepted?;
+                accepted = public.accept(), if tunnels.len() < MAX_TUNNELS => {
+                    let (incoming, peer) = match accepted {
+                        Ok(accepted) => accepted,
+                        Err(error) => break Err(error),
+                    };
                     if let Err(error) = incoming.set_nodelay(true) {
                         eprintln!("relay: public connection from {peer}: {error}");
                         continue;
                     }
-                    let tunnel = session.open_tunnel().await?;
+                    let tunnel = match session.open_tunnel().await {
+                        Ok(tunnel) => tunnel,
+                        Err(error) => break Err(error),
+                    };
                     tunnels.spawn(async move {
                         let result = tunnel.relay(incoming).await;
                         (peer, result)
                     });
                 }
-                result = session.closed() => return result,
+                result = session.closed() => break result,
                 completed = tunnels.join_next(), if !tunnels.is_empty() => {
                     match completed {
                         Some(Ok((_, Ok(())))) => {}
@@ -366,7 +383,11 @@ impl Relay {
                     }
                 }
             }
-        }
+        };
+        tunnels.shutdown().await;
+        session.close();
+        drop(public);
+        result
     }
 }
 
@@ -444,7 +465,21 @@ impl Session {
         match self {
             Self::Tcp(mux) => tokio::time::timeout(
                 TUNNEL_OPEN_TIMEOUT,
-                poll_fn(|context| mux.poll_new_outbound(context)),
+                poll_fn(|context| {
+                    // Yamux only drives frames and removes dropped streams while
+                    // polling inbound; outbound polling alone cannot free capacity.
+                    loop {
+                        match mux.poll_next_inbound(context) {
+                            Poll::Ready(Some(Ok(stream))) => drop(stream),
+                            Poll::Ready(Some(Err(error))) => return Poll::Ready(Err(error)),
+                            Poll::Ready(None) => {
+                                return Poll::Ready(Err(yamux::ConnectionError::Closed));
+                            }
+                            Poll::Pending => break,
+                        }
+                    }
+                    mux.poll_new_outbound(context)
+                }),
             )
             .await
             .map_err(|_| tunnel_open_timed_out())?
@@ -483,6 +518,12 @@ impl Session {
                 quinn::ConnectionError::LocallyClosed => Ok(()),
                 error => Err(io::Error::other(format!("QUIC connection closed: {error}"))),
             },
+        }
+    }
+
+    fn close(self) {
+        if let Self::Quic(connection) = self {
+            connection.close(quinn::VarInt::from_u32(0), b"registration ended");
         }
     }
 }
@@ -564,6 +605,287 @@ mod tests {
 
     use super::*;
     use crate::test_support::quic_identity;
+    use tokio::io::AsyncReadExt;
+
+    struct ForwardingHarness {
+        relay: Arc<Relay>,
+        client: Option<axe_relay::client::Client>,
+        tasks: JoinSet<()>,
+        public_reservation: Option<TcpListener>,
+        _keys: tempfile::TempDir,
+    }
+
+    impl ForwardingHarness {
+        async fn new(transport: Transport) -> Self {
+            let keys = tempfile::tempdir().expect("create test keys");
+            let (server_certificate, server_private_key) =
+                quic_identity("axe-relay", rcgen::ExtendedKeyUsagePurpose::ServerAuth);
+            let (client_certificate, client_private_key) =
+                quic_identity("axe-sshd", rcgen::ExtendedKeyUsagePurpose::ClientAuth);
+            for (name, contents) in [
+                ("server.key", server_private_key.as_bytes()),
+                ("server.pem", server_certificate.as_bytes()),
+                ("client.pem", client_certificate.as_bytes()),
+            ] {
+                std::fs::write(keys.path().join(name), contents).expect("write test keys");
+            }
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let tcp_address = listener.local_addr().unwrap();
+            let endpoint = quic::server_endpoint(
+                "127.0.0.1:0",
+                &keys.path().join("server.key"),
+                &keys.path().join("server.pem"),
+                &keys.path().join("client.pem"),
+            )
+            .await
+            .unwrap();
+            let quic_address = endpoint.local_addr().unwrap();
+            let public = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let public_port = public.local_addr().unwrap().port();
+            let token = "0123456789abcdef0123456789abcdef";
+            let relay = Arc::new(Relay {
+                token: token.to_owned(),
+                public_bind: IpAddr::from([127, 0, 0, 1]),
+                public_host: "127.0.0.1".to_owned(),
+                ports: Mutex::new(PortAllocator::new(public_port, public_port)),
+                resolver: None,
+                monitor: Arc::new(Monitor::new()),
+                registration_timeout: REGISTRATION_TIMEOUT,
+            });
+            relay.monitor.set_addresses(tcp_address, quic_address);
+            let credentials = match transport {
+                Transport::Tcp => Credentials::Token(token.to_owned()),
+                Transport::Quic => Credentials::quic(
+                    QuicIdentity::from_pem(
+                        server_certificate.as_bytes(),
+                        client_certificate.as_bytes(),
+                        client_private_key.as_bytes(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            };
+            let client = axe_relay::client::Client {
+                relay: match transport {
+                    Transport::Tcp => tcp_address,
+                    Transport::Quic => quic_address,
+                }
+                .to_string(),
+                target: String::new(),
+                client_id: "forwarding-test".to_owned(),
+                credentials,
+            };
+            let mut tasks = JoinSet::new();
+            let server_relay = Arc::clone(&relay);
+            tasks.spawn(async move {
+                serve(listener, endpoint, server_relay, 8, std::future::pending())
+                    .await
+                    .unwrap();
+            });
+            Self {
+                relay,
+                client: Some(client),
+                tasks,
+                public_reservation: Some(public),
+                _keys: keys,
+            }
+        }
+
+        async fn start_client(&mut self) -> tokio::sync::oneshot::Sender<()> {
+            let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut client = self.client.take().unwrap();
+            client.target = target.local_addr().unwrap().to_string();
+            drop(self.public_reservation.take());
+            self.tasks.spawn(async move {
+                let mut connections = JoinSet::new();
+                loop {
+                    tokio::select! {
+                        accepted = target.accept() => {
+                            let (mut stream, _) = accepted.unwrap();
+                            connections.spawn(async move {
+                                stream.write_all(b"ready").await?;
+                                let (mut read, mut write) = stream.split();
+                                tokio::io::copy(&mut read, &mut write).await?;
+                                write.shutdown().await
+                            });
+                        }
+                        _ = connections.join_next(), if !connections.is_empty() => {}
+                    }
+                }
+            });
+            let (stop, stopped) = tokio::sync::oneshot::channel();
+            self.tasks.spawn(async move { client.run(stopped).await });
+            stop
+        }
+
+        async fn clients(&self, count: usize) -> Vec<crate::monitor::Client> {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let clients = self.relay.monitor.snapshot().unwrap().clients;
+                    if clients.len() == count {
+                        return clients;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("registration state did not converge")
+        }
+    }
+
+    #[tokio::test]
+    async fn tcp_capacity_preserves_registration_and_recovers_after_half_close() {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            let mut harness = ForwardingHarness::new(Transport::Tcp).await;
+            let stop = harness.start_client().await;
+            let initial = harness.clients(1).await.remove(0);
+            let mut peers = Vec::new();
+            for _ in 0..MAX_TUNNELS {
+                let mut peer = TcpStream::connect(&initial.public_address).await.unwrap();
+                let mut ready = [0; 5];
+                peer.read_exact(&mut ready).await.unwrap();
+                assert_eq!(&ready, b"ready");
+                peers.push(peer);
+            }
+            let mut overflow = TcpStream::connect(&initial.public_address).await.unwrap();
+            let mut ready = [0; 5];
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), overflow.read_exact(&mut ready))
+                    .await
+                    .is_err(),
+                "excess traffic must wait, not tear down the registration"
+            );
+            let mut first = peers.remove(0);
+            first.write_all(b"half-close-response").await.unwrap();
+            first.shutdown().await.unwrap();
+            let mut echoed = Vec::new();
+            first.read_to_end(&mut echoed).await.unwrap();
+            assert_eq!(echoed, b"half-close-response");
+            overflow.read_exact(&mut ready).await.unwrap();
+            assert_eq!(&ready, b"ready");
+            assert_eq!(harness.clients(1).await[0].id, initial.id);
+            stop.send(()).unwrap();
+            harness.clients(0).await;
+            let mut closed = [0];
+            assert_eq!(overflow.read(&mut closed).await.unwrap(), 0);
+            let rebound = TcpListener::bind(&initial.public_address).await;
+            assert!(rebound.is_ok(), "public port leaked after client shutdown");
+            harness.tasks.shutdown().await;
+        })
+        .await
+        .expect("capacity/half-close scenario stalled");
+    }
+
+    #[tokio::test]
+    async fn quic_concurrent_tunnels_preserve_half_close_and_release_port() {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            let mut harness = ForwardingHarness::new(Transport::Quic).await;
+            let stop = harness.start_client().await;
+            let initial = harness.clients(1).await.remove(0);
+            let mut traffic = JoinSet::new();
+            for sequence in 0..16_u8 {
+                let address = initial.public_address.clone();
+                traffic.spawn(async move {
+                    let mut peer = TcpStream::connect(address).await.unwrap();
+                    let mut ready = [0; 5];
+                    peer.read_exact(&mut ready).await.unwrap();
+                    assert_eq!(&ready, b"ready");
+                    let payload = vec![sequence; 128 * 1024];
+                    let (mut read, mut write) = peer.split();
+                    let (_, received) = tokio::join!(
+                        async {
+                            write.write_all(&payload).await.unwrap();
+                            write.shutdown().await.unwrap();
+                        },
+                        async {
+                            let mut echoed = Vec::new();
+                            read.read_to_end(&mut echoed).await.unwrap();
+                            echoed
+                        }
+                    );
+                    assert_eq!(received, payload);
+                });
+            }
+            while let Some(result) = traffic.join_next().await {
+                result.unwrap();
+            }
+            assert_eq!(harness.clients(1).await[0].id, initial.id);
+            stop.send(()).unwrap();
+            harness.clients(0).await;
+            assert!(
+                TcpListener::bind(&initial.public_address).await.is_ok(),
+                "QUIC public port leaked after shutdown"
+            );
+            harness.tasks.shutdown().await;
+        })
+        .await
+        .expect("QUIC concurrent half-close scenario stalled");
+    }
+
+    #[tokio::test]
+    async fn registration_deadline_includes_waiting_for_allocator() {
+        tokio::time::timeout(REGISTRATION_TIMEOUT + Duration::from_secs(5), async {
+            let mut harness = ForwardingHarness::new(Transport::Tcp).await;
+            let allocator = harness.relay.ports.lock().await;
+            let mut control = TcpStream::connect(&harness.client.as_ref().unwrap().relay)
+                .await
+                .unwrap();
+            write_cbor_frame(
+                &mut control,
+                &RegistrationRequest {
+                    version: PROTOCOL_VERSION,
+                    token: Some("0123456789abcdef0123456789abcdef".into()),
+                    client_id: "allocator-blocked".into(),
+                },
+            )
+            .await
+            .unwrap();
+            let response = read_cbor_frame::<RegistrationResponse>(&mut control).await;
+            match response {
+                Ok(_) => panic!("registration outlived its allocator deadline"),
+                Err(error) => assert!(matches!(
+                    error.kind(),
+                    io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset
+                )),
+            }
+            drop(allocator);
+            let stop = harness.start_client().await;
+            harness.clients(1).await;
+            stop.send(()).unwrap();
+            harness.clients(0).await;
+            harness.tasks.shutdown().await;
+        })
+        .await
+        .expect("allocator contention bypassed registration deadline");
+    }
+
+    #[tokio::test]
+    async fn exhausted_single_port_range_recovers_after_listener_drop() {
+        let reservation = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = reservation.local_addr().unwrap();
+        let mut allocator = PortAllocator::new(address.port(), address.port());
+        assert_eq!(
+            allocator.bind(address.ip()).await.unwrap_err().kind(),
+            io::ErrorKind::AddrInUse
+        );
+        drop(reservation);
+        let allocated = allocator.bind(address.ip()).await.unwrap();
+        assert_eq!(allocated.local_addr().unwrap(), address);
+        assert_eq!(
+            allocator.bind(address.ip()).await.unwrap_err().kind(),
+            io::ErrorKind::AddrInUse
+        );
+        drop(allocated);
+        assert_eq!(
+            allocator
+                .bind(address.ip())
+                .await
+                .unwrap()
+                .local_addr()
+                .unwrap(),
+            address
+        );
+    }
 
     #[tokio::test]
     async fn silent_quic_registration_releases_control_capacity() {
