@@ -62,7 +62,7 @@ version = "0.17.0"
 
 [dependencies.uucore]
 version = "0.12.0"
-features = ["parser"]
+features = ["i18n-charmap", "parser"]
 
 [dev-dependencies.divan]
 version = "5.0.0"

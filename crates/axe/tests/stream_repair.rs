@@ -245,3 +245,35 @@ fn join_whitespace_fields_do_not_invent_empty_output_columns() {
         b"k::\n",
     );
 }
+
+#[test]
+fn uniq_field_skipping_uses_horizontal_blanks_only() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(
+            scratch.path(),
+            "uniq",
+            &["-f", "1"],
+            b"a\x08b\rc\x0b\x0cd\n\0e\n",
+        ),
+        b"a\x08b\rc\x0b\x0cd\n",
+    );
+    assert_success(
+        run(
+            scratch.path(),
+            "uniq",
+            &["-f", "1"],
+            b" a\rb\tkey\n b\vc\tkey\n c\fd\tother\n",
+        ),
+        b" a\rb\tkey\n c\fd\tother\n",
+    );
+    assert_success(
+        run(
+            scratch.path(),
+            "uniq",
+            &["-z", "-f", "1"],
+            b"a\nb\0x\ny\0",
+        ),
+        b"a\nb\0",
+    );
+}

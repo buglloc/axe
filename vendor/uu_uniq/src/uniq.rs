@@ -16,6 +16,7 @@ use std::num::IntErrorKind;
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UError, UResult, USimpleError};
 use uucore::format_usage;
+use uucore::i18n::charmap::locale_encoding;
 use uucore::parser::shortcut_value_parser::ShortcutValueParser;
 use uucore::posix::{OBSOLETE, posix_version};
 use uucore::translate;
@@ -177,16 +178,20 @@ impl Uniq {
 
     fn skip_fields_offset(&self, line: &[u8]) -> usize {
         if let Some(skip_fields) = self.skip_fields {
+            let encoding = locale_encoding();
             let mut idx = 0;
             for _ in 0..skip_fields {
-                while idx < line.len() && line[idx].is_ascii_whitespace() {
-                    idx += 1;
+                while idx < line.len() {
+                    let Some(len) = encoding.blank_len(&line[idx..]) else {
+                        break;
+                    };
+                    idx += len;
                 }
                 if idx >= line.len() {
                     return line.len();
                 }
-                while idx < line.len() && !line[idx].is_ascii_whitespace() {
-                    idx += 1;
+                while idx < line.len() && encoding.blank_len(&line[idx..]).is_none() {
+                    idx += encoding.char_len(&line[idx..]);
                 }
                 if idx >= line.len() {
                     return line.len();
