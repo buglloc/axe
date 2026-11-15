@@ -6,3 +6,6 @@ Source: the `uu_mv` 0.12.0 crate from crates.io, commit `dc1efd89948a9ca4c78c3a4
 
 Destination existence checks use symlink metadata so no-clobber preserves dangling
 and cyclic symlinks and backups retain those directory entries.
+
+No-clobber skips same-inode destinations successfully, including directory aliases,
+before same-file rejection.

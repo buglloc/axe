@@ -532,6 +532,10 @@ fn assert_not_same_file(
             || are_hardlinks_to_same_file(source, target)
             || are_hardlinks_or_one_way_symlink_to_same_file(source, target));
 
+    if same_file && opts.overwrite == OverwriteMode::NoClobber {
+        return Ok(());
+    }
+
     // get the expected target path to show in errors
     // this is based on the argument and not canonicalized
     // only computed when an error is actually reported

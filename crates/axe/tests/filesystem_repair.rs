@@ -124,3 +124,17 @@ fn install_backs_up_dangling_and_cyclic_symlink_entries() {
         assert_eq!(fs::read_link(scratch.path().join("destination~")).unwrap(), Path::new(target));
     }
 }
+
+#[test]
+fn mv_no_clobber_accepts_same_inode_and_directory_aliases() {
+    let scratch = Scratch::new("mv-no-clobber-self");
+    fs::create_dir(scratch.path().join("source")).unwrap();
+    fs::write(scratch.path().join("source/file"), b"original").unwrap();
+    fs::hard_link(scratch.path().join("source/file"), scratch.path().join("hard")).unwrap();
+    symlink("source", scratch.path().join("alias")).unwrap();
+    for destination in ["source/file", "hard", "alias", "alias/"] {
+        success(&run(scratch.path(), "mv", &["-n", "source/file", destination]));
+        assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
+        assert_eq!(fs::metadata(scratch.path().join("source/file")).unwrap().ino(), fs::metadata(scratch.path().join("hard")).unwrap().ino());
+    }
+}
