@@ -257,13 +257,13 @@ fn ptx_word_regexp_whitespace_does_not_invert_context_ranges() {
             "-w10",
             "[ab] *",
             &b"a b\n"[..],
-            &b"        a b\n    /   b\n"[..],
+            &b"        a b\n     /   b\n"[..],
         ),
         (
             "-w16",
             "[ab]+ *",
             &b"aaaa    b\n"[..],
-            &b"           aaaa/\n       /   b\n"[..],
+            &b"           aaaa/\n           /   b\n"[..],
         ),
     ] {
         assert_success(
