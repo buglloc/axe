@@ -773,7 +773,7 @@ fn fat_root_label_overrides_boot_label_and_export_uses_shell_escaping() {
 }
 
 #[test]
-fn blkid_mountpoint_and_hexdump_preserve_non_utf8_operands() {
+fn blkid_and_mountpoint_preserve_non_utf8_operands() {
     use std::os::unix::ffi::OsStringExt;
     use std::os::unix::fs::MetadataExt;
     let scratch = Scratch::new("raw-paths");
@@ -822,18 +822,6 @@ fn blkid_mountpoint_and_hexdump_preserve_non_utf8_operands() {
     let output = run("mountpoint", &["-x"], &[Path::new("/dev/null")]);
     assert_eq!(output.status.code(), Some(32));
     assert!(output.stdout.is_empty());
-
-    let input = scratch
-        .0
-        .join(std::ffi::OsString::from_vec(b"bytes-\xfd".to_vec()));
-    fs::write(&input, [0x61, 0xff]).expect("write byte input");
-    for (applet, args) in [("hexdump", &["-C"][..]), ("hd", &[][..])] {
-        let output = run(applet, args, &[&input]);
-        assert_eq!(
-            success(&output),
-            "00000000  61 ff                                             |a.|\n00000002\n"
-        );
-    }
 }
 
 #[test]

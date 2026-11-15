@@ -38,9 +38,12 @@ macro_rules! register {
 pub fn commands() -> HashMap<String, AppletFn> {
     let mut commands = HashMap::new();
 
+    #[cfg(target_os = "linux")]
     register!(commands, "dmesg", uu_dmesg);
     register!(commands, "hexdump", uu_hexdump);
+    #[cfg(target_os = "linux")]
     register!(commands, "last", uu_last);
+    #[cfg(target_os = "linux")]
     register!(commands, "mountpoint", uu_mountpoint);
     commands
 }

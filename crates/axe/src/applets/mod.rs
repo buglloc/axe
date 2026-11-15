@@ -37,7 +37,6 @@ mod sshd;
 mod strings;
 mod tar;
 mod tree;
-#[cfg(target_os = "linux")]
 pub(crate) mod util_linux;
 mod which;
 
@@ -84,10 +83,7 @@ pub fn vzik(args: Vec<std::ffi::OsString>) -> i32 {
 /// with this flag. Each uucore version keeps a separate flag.
 pub(crate) fn mark_applet_as_second_arg() {
     uucore::set_utility_is_second_arg();
-    #[cfg(target_os = "linux")]
-    {
-        util_linux_uucore::set_utility_is_second_arg();
-    }
+    util_linux_uucore::set_utility_is_second_arg();
 }
 
 pub(crate) fn in_process_io_status(result: std::io::Result<()>, error_status: i32) -> i32 {

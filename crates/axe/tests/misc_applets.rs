@@ -70,6 +70,40 @@ fn gzip_member(payload: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn hexdump_and_hd_preserve_non_utf8_operands() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let scratch = Scratch::new("hexdump");
+    let input = scratch
+        .path()
+        .join(std::ffi::OsString::from_vec(b"bytes-\xfd".to_vec()));
+    fs::write(&input, [0x61, 0xff]).expect("write byte input");
+    for (args, operand) in [
+        (&["hexdump", "-C"][..], Some(&input)),
+        (&["hd"][..], Some(&input)),
+        (&["-c", "hd"][..], None),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_axe"))
+            .args(args)
+            .args(operand)
+            .stdin(fs::File::open(&input).expect("open byte input"))
+            .current_dir(scratch.path())
+            .env_clear()
+            .env("HOME", scratch.path())
+            .env("LC_ALL", "C")
+            .env("PATH", "/nonexistent")
+            .env("AXE_STORE_MODE", "off")
+            .output()
+            .expect("run hexdump");
+        success(&output);
+        assert_eq!(
+            output.stdout,
+            b"00000000  61 ff                                             |a.|\n00000002\n"
+        );
+    }
+}
+
+#[test]
 fn gzip_plain_passthrough_requires_force_and_stdout_but_never_list() {
     let scratch = Scratch::new("gzip-plain");
     let plain = b"hello\n";
@@ -544,11 +578,13 @@ fn positional_invocation_names_the_applet_in_diagnostics() {
             .expect("run positional applet")
     };
 
-    let mut cases = vec![("cat", vec!["missing"], "cat: missing:")];
+    let mut cases = vec![
+        ("cat", vec!["missing"], "cat: missing:"),
+        ("hexdump", vec!["missing"], "hexdump: cannot open 'missing'"),
+    ];
     if cfg!(target_os = "linux") {
         cases.extend([
             ("mountpoint", vec!["missing"], "mountpoint: missing:"),
-            ("hexdump", vec!["missing"], "hexdump: cannot open 'missing'"),
             ("dmesg", vec!["--version"], "dmesg "),
             ("pidwait", vec!["--version"], "pidwait "),
         ]);

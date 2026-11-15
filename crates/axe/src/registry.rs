@@ -660,7 +660,6 @@ pub fn build(
         ("w".into(), crate::applets::w as BundledFn),
         ("watch".into(), crate::applets::watch as BundledFn),
     ]);
-    #[cfg(target_os = "linux")]
     commands.extend_bundled(crate::applets::util_linux::commands());
     commands.insert_bundled("tree", None, crate::applets::tree as BundledFn);
     commands.insert_bundled("which", None, crate::applets::which as BundledFn);

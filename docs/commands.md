@@ -204,7 +204,8 @@ directory are never traversed. `-f` suppresses the final ENOTDIR for `link/`.
 sticky, set-user-ID and set-group-ID bits. With `-p`, only newly created
 ancestors use the parent policy; the final directory receives the requested
 mode.
-`hexdump`/`hd` do not implement the custom format languages of `-e` and `-f`.
+`hexdump` and its `hd` alias (`hexdump -C`) are bundled on Linux and Darwin.
+They do not implement the custom format languages of `-e` and `-f`.
 
 `file` uses bounded content heuristics, not the complete libmagic database. It
 samples at most 64 KiB from a regular file; stdin JSON detection consumes the

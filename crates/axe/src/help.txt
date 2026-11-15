@@ -33,6 +33,7 @@ Commands:
   axe APPLET -- --help             print applet-specific help
   zstd [-cdfklt] [FILE ...]         Zstandard compression; keeps input files by default
   diff [OPTIONS] FILE1 FILE2      compare files line by line
+  hexdump [OPTIONS] [FILE ...]    display bytes; hd selects canonical hex/ASCII
   sdiff [OPTIONS] FILE1 FILE2     side-by-side comparison or interactive merge
   namei [OPTIONS] PATH...          resolve pathname components and symbolic links
   fuser [OPTIONS] RESOURCE...      identify processes using files or sockets
