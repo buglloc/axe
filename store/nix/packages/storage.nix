@@ -171,10 +171,41 @@ in {
     synopsis = "Synchronize files efficiently between local and remote paths";
     systems = portableSystems;
     rewriteBuildConfigurationPaths = true;
-    packageFor = target: targetPkgs:
-      if target == "aarch64-darwin"
-      then rsyncDarwin (staticSetFor target targetPkgs)
-      else (packageSetFor target targetPkgs).rsync;
+    packageFor = target: targetPkgs: let
+      packageSet = staticSetFor target targetPkgs;
+    in
+      (
+        if target == "aarch64-darwin"
+        then rsyncDarwin packageSet
+        else packageSet.rsync
+      ).overrideAttrs (old: {
+        version = "3.5.2";
+        src = buildPkgs.fetchurl {
+          url = "https://download.samba.org/pub/rsync/src/rsync-3.5.2.tar.gz";
+          hash = "sha256-oQ1ZGCUlHgcPdMmN89qtGV3vTtgbSi3hYWkCauoz9sg=";
+        };
+        buildInputs = (old.buildInputs or []) ++ [packageSet.libidn2];
+        nativeBuildInputs = (old.nativeBuildInputs or []) ++ [packageSet.buildPackages.pkg-config];
+        nativeCheckInputs =
+          (old.nativeCheckInputs or [])
+          ++ buildPkgs.lib.optional (target != "aarch64-darwin") buildPkgs.glibc.bin;
+        preBuild =
+          (old.preBuild or "")
+          + buildPkgs.lib.optionalString (target != "aarch64-darwin") ''
+            substituteInPlace testsuite/rrsync-receiver-file-arg_test.py \
+              --replace-fail '#!/usr/bin/env python3' '#!${buildPkgs.python3}/bin/python3' \
+              --replace-fail '#!/bin/sh' '#!${buildPkgs.stdenv.shell}'
+            substituteInPlace testsuite/rsync-ssl-type-option_test.py \
+              --replace-fail '#!/usr/bin/env bash' '#!${buildPkgs.stdenv.shell}'
+            substituteInPlace testsuite/hardlinks-emlink-recovery_test.py \
+              --replace-fail "['cc', '-shared'" "[os.environ.get('CC', 'cc'), '-shared'"
+          '';
+        preConfigure =
+          (old.preConfigure or "")
+          + ''
+            export LIBS="$("$PKG_CONFIG" --static --libs libidn2) ''${LIBS:-}"
+          '';
+      });
     darwinSystemLibraries = [
       "libiconv.2.dylib"
       "libz.dylib"
