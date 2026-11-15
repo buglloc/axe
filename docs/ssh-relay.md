@@ -26,6 +26,8 @@ If `PATH` is unset or empty when `sshd` starts, AXE uses:
 
 The AXE applet bridge remains at the front of `PATH` when it is available. A non-empty inherited `PATH` is preserved.
 
+After accepted client variables override the daemon's inherited environment, shell and exec sessions set `LANG=C.UTF-8` if `LC_ALL`, `LC_CTYPE`, and `LANG` are all unset or empty. Any non-empty value in those three variables, including `C`, suppresses the fallback. AXE does not set `LC_ALL` or change `TERM` to select UTF-8.
+
 SFTP resolves relative paths from `workdir` and `~` from the session home. The `expand-path@openssh.com` extension keeps `scp`'s default SFTP mode and `scp -O`'s legacy remote-shell mode consistent.
 
 ### Forwarding and session requests

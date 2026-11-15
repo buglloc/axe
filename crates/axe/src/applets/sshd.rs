@@ -1587,6 +1587,15 @@ impl SshServer {
             for (name, value) in &state.environment {
                 process.env(name, value);
             }
+            let has_locale = ["LC_ALL", "LC_CTYPE", "LANG"].into_iter().any(|name| {
+                match state.environment.get(name) {
+                    Some(value) => !value.is_empty(),
+                    None => std::env::var_os(name).is_some_and(|value| !value.is_empty()),
+                }
+            });
+            if !has_locale {
+                process.env("LANG", "C.UTF-8");
+            }
             #[cfg(unix)]
             if let Some(agent) = &state.agent {
                 process.env("SSH_AUTH_SOCK", agent.socket());
@@ -2450,6 +2459,78 @@ mod tests {
         );
         close_test_connection(client, server).await;
         std::fs::remove_dir_all(directory).expect("remove SSH filesystem test directory");
+    }
+
+    #[tokio::test]
+    async fn session_locale_defaults_to_utf8_and_preserves_client_values() {
+        let directory =
+            std::env::temp_dir().join(format!("axe-sshd-locale-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("create locale fixture directory");
+        let axe = std::env::current_exe()
+            .expect("locate test executable")
+            .parent()
+            .and_then(Path::parent)
+            .expect("locate target directory")
+            .join("axe")
+            .canonicalize()
+            .expect("locate AXE binary");
+        let (client, _, server) = test_connection_with_store_mode(
+            directory.clone(),
+            None,
+            Some(axe),
+            crate::registry::StoreMode::Off,
+        )
+        .await;
+
+        for (values, expected_lang) in [
+            (["", "", ""], "C.UTF-8"),
+            (["C", "", ""], "C"),
+            (["", "C", ""], ""),
+            (["", "", "C"], ""),
+            (["ru_RU.UTF-8", "", ""], "ru_RU.UTF-8"),
+            (["C.UTF-8", "", "C"], "C.UTF-8"),
+        ] {
+            let mut channel = client
+                .channel_open_session()
+                .await
+                .expect("open locale session");
+            for (name, value) in ["LANG", "LC_CTYPE", "LC_ALL"].into_iter().zip(values) {
+                channel
+                    .set_env(false, name, value)
+                    .await
+                    .expect("send client locale");
+            }
+            channel
+                .exec(
+                    true,
+                    b"printf '<%s><%s><%s>' \"$LANG\" \"$LC_CTYPE\" \"$LC_ALL\"".as_slice(),
+                )
+                .await
+                .expect("print session locale");
+            let mut output = Vec::new();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    match channel.wait().await {
+                        Some(russh::ChannelMsg::Data { data }) => output.extend_from_slice(&data),
+                        Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                            assert_eq!(exit_status, 0);
+                            break;
+                        }
+                        Some(_) => {}
+                        None => panic!("locale session closed without exit status"),
+                    }
+                }
+            })
+            .await
+            .expect("locale session timeout");
+            assert_eq!(
+                output,
+                format!("<{expected_lang}><{}><{}>", values[1], values[2]).as_bytes(),
+                "client locale: {values:?}"
+            );
+        }
+        close_test_connection(client, server).await;
+        std::fs::remove_dir_all(directory).expect("remove locale fixture directory");
     }
 
     #[cfg(unix)]
