@@ -2,6 +2,16 @@
 title = "Changelog"
 +++
 
+## [v0.18.2](https://github.com/buglloc/axe/releases/tag/v0.18.2) — 2026-11-15
+
+### Changes
+
+- Reworked the runtime survivability, Vzik, and SSH/relay guides around user-visible behavior; moved Vzik protocol and monitor schema details to skill references ([82e1c09](https://github.com/buglloc/axe/commit/82e1c0937b177bb21a03881528aba0288444e427)).
+
+### Fixes
+
+- Fixed Darwin builds missing the bundled `hexdump` command and its `hd` alias for canonical hex/ASCII output ([a29448d](https://github.com/buglloc/axe/commit/a29448dc323dafcdd4192518498d794a58377e45)).
+
 ## [v0.18.1](https://github.com/buglloc/axe/releases/tag/v0.18.1) — 2026-11-15
 
 ### Changes
