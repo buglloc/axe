@@ -16,7 +16,7 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     fs::{self, File},
-    io::{self, Write, stderr},
+    io::{self, BufRead, Write, stderr},
     iter,
     path::{Path, PathBuf},
     sync::LazyLock,
@@ -573,6 +573,50 @@ fn word_count_from_reader<T: WordCountable>(
     (total, error)
 }
 
+fn process_byte_chunk<
+    const SHOW_LINES: bool,
+    const SHOW_MAX_LINE_LENGTH: bool,
+    const SHOW_WORDS: bool,
+>(
+    total: &mut WordCount,
+    bytes: &[u8],
+    current_len: &mut usize,
+    in_word: &mut bool,
+    is_posixly_correct: bool,
+) {
+    for &byte in bytes {
+        if SHOW_WORDS {
+            // GNU's C-locale byte conversion maps 0xA0 to U+00A0.
+            let is_space = matches!(byte, b'\t'..=b'\r' | b' ')
+                || (!is_posixly_correct && byte == 0xa0);
+            if is_space {
+                *in_word = false;
+            } else if !*in_word {
+                *in_word = true;
+                total.words += 1;
+            }
+        }
+        if SHOW_MAX_LINE_LENGTH {
+            match byte {
+                b'\n' | b'\r' | b'\x0c' => {
+                    total.max_line_length = max(*current_len, total.max_line_length);
+                    *current_len = 0;
+                }
+                b'\t' => {
+                    *current_len += 8 - *current_len % 8;
+                }
+                b' '..=b'~' => *current_len += 1,
+                _ => {}
+            }
+        }
+        if SHOW_LINES && byte == b'\n' {
+            total.lines += 1;
+        }
+    }
+    total.bytes += bytes.len();
+    total.max_line_length = max(*current_len, total.max_line_length);
+}
+
 fn process_chunk<
     const SHOW_CHARS: bool,
     const SHOW_LINES: bool,
@@ -584,7 +628,6 @@ fn process_chunk<
     current_len: &mut usize,
     in_word: &mut bool,
     is_posixly_correct: bool,
-    single_byte: bool,
 ) {
     if !SHOW_WORDS && !SHOW_MAX_LINE_LENGTH {
         if SHOW_CHARS {
@@ -598,10 +641,9 @@ fn process_chunk<
     }
     for ch in text.chars() {
         if SHOW_WORDS {
-            let is_space = if is_posixly_correct || single_byte {
-                matches!(ch, '\t'..='\r' | ' ')
-            } else {
-                ch.is_whitespace()
+            let is_space = match ch {
+                '\u{a0}' | '\u{2007}' | '\u{202f}' | '\u{2060}' => !is_posixly_correct,
+                _ => ch.is_whitespace(),
             };
 
             if is_space {
@@ -623,9 +665,7 @@ fn process_chunk<
                     *current_len += 8;
                 }
                 _ => {
-                    if !single_byte || ch.is_ascii() {
-                        *current_len += ch.width().unwrap_or(0);
-                    }
+                    *current_len += ch.width().unwrap_or(0);
                 }
             }
         }
@@ -669,11 +709,30 @@ fn word_count_from_reader_specialized<
     reader: T,
 ) -> (WordCount, Option<io::Error>) {
     let mut total = WordCount::default();
-    let mut reader = BufReadDecoder::new(reader.buffered());
+    let mut reader = reader.buffered();
     let mut in_word = false;
     let mut current_len = 0;
     let is_posixly_correct = *IS_POSIXLY_CORRECT;
-    let single_byte = locale_encoding() == Encoding::SingleByte;
+    if locale_encoding() == Encoding::SingleByte {
+        loop {
+            let bytes = match reader.fill_buf() {
+                Ok([]) => return (total, None),
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return (total, Some(error)),
+            };
+            let len = bytes.len();
+            process_byte_chunk::<SHOW_LINES, SHOW_MAX_LINE_LENGTH, SHOW_WORDS>(
+                &mut total,
+                bytes,
+                &mut current_len,
+                &mut in_word,
+                is_posixly_correct,
+            );
+            reader.consume(len);
+        }
+    }
+    let mut reader = BufReadDecoder::new(reader);
     while let Some(chunk) = reader.next_strict() {
         match chunk {
             Ok(text) => {
@@ -683,7 +742,6 @@ fn word_count_from_reader_specialized<
                     &mut current_len,
                     &mut in_word,
                     is_posixly_correct,
-                    single_byte,
                 );
             }
             Err(e) => {

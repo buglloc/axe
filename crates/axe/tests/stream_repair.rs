@@ -423,3 +423,52 @@ fn expand_column_widths_follow_the_locale_encoding() {
         "界é   A\n".as_bytes(),
     );
 }
+
+#[test]
+fn wc_word_separators_follow_locale_and_gnu_nonbreaking_rules() {
+    let scratch = Scratch::new();
+    let input = "\u{a0}a\u{2003}b\u{202f}c\u{2060}d\n".as_bytes();
+    for (locale, words, chars, width) in [("C", 3, 16, 4), ("C.UTF-8", 4, 9, 7)] {
+        assert_success(
+            run_locale(scratch.path(), "wc", &["-w"], input, locale),
+            format!("{words}\n").as_bytes(),
+        );
+        let output = run_locale(scratch.path(), "wc", &["-lwmcL"], input, locale);
+        assert_eq!(output.status.code(), Some(0));
+        assert!(output.stderr.is_empty());
+        let counts: Vec<usize> = std::str::from_utf8(&output.stdout)
+            .unwrap()
+            .split_whitespace()
+            .map(|count| count.parse().unwrap())
+            .collect();
+        assert_eq!(counts, [1, words, chars, 16, width]);
+    }
+    assert_success(
+        run_locale(
+            scratch.path(),
+            "wc",
+            &["-w"],
+            "a\u{a0}b\u{2007}c\u{202f}d\u{2060}e".as_bytes(),
+            "C.UTF-8",
+        ),
+        b"5\n",
+    );
+    for (locale, expected) in [("C", &b"1\n"[..]), ("C.UTF-8", &b"2\n"[..])] {
+        let mut child = command(scratch.path(), "wc", &["-w"], locale)
+            .env("POSIXLY_CORRECT", "1")
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        assert_success(finish(child), expected);
+    }
+    let mut boundary = vec![b'x'; 8191];
+    boundary.extend_from_slice(b"\xa0b");
+    fs::write(scratch.path().join("input"), &boundary).unwrap();
+    for (locale, expected) in [("C", &b"2 input\n"[..]), ("C.UTF-8", &b"1 input\n"[..])] {
+        assert_success(
+            run_locale(scratch.path(), "wc", &["-w", "input"], b"", locale),
+            expected,
+        );
+    }
+}
