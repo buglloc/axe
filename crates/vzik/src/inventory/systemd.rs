@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
-use zbus::blocking::{Connection, Proxy};
-use zbus::zvariant::{OwnedObjectPath, OwnedValue};
+use zbus::{Connection, OwnedObjectPath, OwnedVariant, Proxy};
 
 use super::{
     emit_provider, finish, output_limit, path_value, read_bounded, systemd_unit_type, text,
@@ -61,7 +60,7 @@ pub fn run<W: Write>(
                 all_users,
                 unit_selection,
             },
-        ) => list(
+        ) => zbus::block_on(list(
             sink,
             deadline,
             *max_items,
@@ -69,9 +68,15 @@ pub fn run<W: Write>(
             user.as_deref(),
             *all_users,
             *unit_selection,
-        ),
+        )),
         (CapabilityId::SystemctlInspect, Request::SystemctlInspect { unit, socket, user }) => {
-            inspect(sink, deadline, unit, socket.as_deref(), user.as_deref())
+            zbus::block_on(inspect(
+                sink,
+                deadline,
+                unit,
+                socket.as_deref(),
+                user.as_deref(),
+            ))
         }
         _ => Err(ProtocolError::Internal(
             "systemctl capability request mismatch".into(),
@@ -79,7 +84,7 @@ pub fn run<W: Write>(
     }
 }
 
-fn list<W: Write>(
+async fn list<W: Write>(
     sink: &mut RecordSink<'_, W>,
     deadline: ExecutionContext<'_>,
     max_items: usize,
@@ -120,7 +125,7 @@ fn list<W: Write>(
 
     for target in targets {
         check_deadline(deadline)?;
-        let connection = match connect(&target.socket, deadline) {
+        let connection = match connect(&target.socket, deadline).await {
             Ok(connection) => connection,
             Err(error) => {
                 partial = true;
@@ -128,7 +133,7 @@ fn list<W: Write>(
                 continue;
             }
         };
-        let mut units = match list_units(&connection) {
+        let mut units = match list_units(&connection).await {
             Ok(units) => units,
             Err(error) => {
                 partial = true;
@@ -153,7 +158,10 @@ fn list<W: Write>(
             }
 
             let mut data = listed_unit_data(&target, &unit);
-            if enrich_unit(&connection, &unit.0, &unit.6, &mut data).is_err() {
+            if enrich_unit(&connection, &unit.0, &unit.6, &mut data)
+                .await
+                .is_err()
+            {
                 partial = true;
                 property_errors += 1;
                 coverage.skipped += 1;
@@ -182,7 +190,7 @@ fn list<W: Write>(
     Ok(finish(coverage, partial, None))
 }
 
-fn inspect<W: Write>(
+async fn inspect<W: Write>(
     sink: &mut RecordSink<'_, W>,
     deadline: ExecutionContext<'_>,
     unit: &str,
@@ -207,14 +215,14 @@ fn inspect<W: Write>(
 
     check_deadline(deadline)?;
 
-    let connection = match connect(&target.socket, deadline) {
+    let connection = match connect(&target.socket, deadline).await {
         Ok(connection) => connection,
         Err(error) => {
             provider_failure(sink, capability, &target.socket, &error, &mut coverage)?;
             return Ok(CapabilityReport::unavailable(coverage));
         }
     };
-    let object_path = match get_unit(&connection, unit) {
+    let object_path = match get_unit(&connection, unit).await {
         Ok(path) => path,
         Err(error) => {
             unit_failure(
@@ -229,7 +237,7 @@ fn inspect<W: Write>(
         }
     };
 
-    let unit_properties = match get_all(&connection, &object_path, UNIT_INTERFACE) {
+    let unit_properties = match get_all(&connection, &object_path, UNIT_INTERFACE).await {
         Ok(properties) => properties,
         Err(error) => {
             provider_failure(sink, capability, &target.socket, &error, &mut coverage)?;
@@ -252,7 +260,9 @@ fn inspect<W: Write>(
     );
     let mut data = listed_unit_data(&target, &listed);
     insert_unit_properties(&unit_properties, &mut data);
-    let partial = enrich_type_properties(&connection, &listed.0, &listed.6, &mut data).is_err();
+    let partial = enrich_type_properties(&connection, &listed.0, &listed.6, &mut data)
+        .await
+        .is_err();
     if partial {
         coverage.skipped += 1;
         property_diagnostic(sink, capability, &target.socket, 1)?;
@@ -413,7 +423,10 @@ fn passwd_entries() -> io::Result<Vec<(Vec<u8>, u32)>> {
     Ok(users)
 }
 
-pub(super) fn connect(socket: &Path, deadline: ExecutionContext<'_>) -> Result<Connection, String> {
+pub(super) async fn connect(
+    socket: &Path,
+    deadline: ExecutionContext<'_>,
+) -> Result<Connection, String> {
     let address = format!(
         "unix:path={}",
         dbus_address_path(socket.as_os_str().as_bytes())
@@ -423,10 +436,10 @@ pub(super) fn connect(socket: &Path, deadline: ExecutionContext<'_>) -> Result<C
         .map_err(|error| error.to_string())?
         .min(METHOD_TIMEOUT);
 
-    zbus::blocking::connection::Builder::address(address.as_str())
-        .map_err(|error| error.to_string())?
+    zbus::connection::Builder::address(address.as_str())
         .method_timeout(timeout)
         .build()
+        .await
         .map_err(|error| error.to_string())
 }
 
@@ -443,41 +456,48 @@ fn dbus_address_path(path: &[u8]) -> String {
     encoded
 }
 
-fn manager_proxy(connection: &Connection) -> Result<Proxy<'_>, String> {
+async fn manager_proxy(connection: &Connection) -> Result<Proxy<'_>, String> {
     Proxy::new(
         connection,
         SYSTEMD_DESTINATION,
         MANAGER_PATH,
         MANAGER_INTERFACE,
     )
+    .await
     .map_err(|error| error.to_string())
 }
 
-fn list_units(connection: &Connection) -> Result<Vec<ListedUnit>, String> {
-    manager_proxy(connection)?
+async fn list_units(connection: &Connection) -> Result<Vec<ListedUnit>, String> {
+    manager_proxy(connection)
+        .await?
         .call("ListUnits", &())
+        .await
         .map_err(|error| error.to_string())
 }
 
-fn get_unit(connection: &Connection, unit: &str) -> Result<OwnedObjectPath, String> {
-    manager_proxy(connection)?
+async fn get_unit(connection: &Connection, unit: &str) -> Result<OwnedObjectPath, String> {
+    manager_proxy(connection)
+        .await?
         .call("GetUnit", &(unit,))
+        .await
         .map_err(|error| error.to_string())
 }
 
-fn get_all(
+async fn get_all(
     connection: &Connection,
     object_path: &OwnedObjectPath,
     interface: &str,
-) -> Result<HashMap<String, OwnedValue>, String> {
+) -> Result<HashMap<String, OwnedVariant>, String> {
     Proxy::new(
         connection,
         SYSTEMD_DESTINATION,
         object_path,
         PROPERTIES_INTERFACE,
     )
+    .await
     .map_err(|error| error.to_string())?
     .call("GetAll", &(interface,))
+    .await
     .map_err(|error| error.to_string())
 }
 
@@ -507,18 +527,21 @@ fn listed_unit_data(target: &ManagerTarget, unit: &ListedUnit) -> Map<String, Va
     data
 }
 
-fn enrich_unit(
+async fn enrich_unit(
     connection: &Connection,
     name: &str,
     object_path: &OwnedObjectPath,
     data: &mut Map<String, Value>,
 ) -> Result<(), String> {
-    let properties = get_all(connection, object_path, UNIT_INTERFACE)?;
+    let properties = get_all(connection, object_path, UNIT_INTERFACE).await?;
     insert_unit_properties(&properties, data);
-    enrich_type_properties(connection, name, object_path, data)
+    enrich_type_properties(connection, name, object_path, data).await
 }
 
-fn insert_unit_properties(properties: &HashMap<String, OwnedValue>, data: &mut Map<String, Value>) {
+fn insert_unit_properties(
+    properties: &HashMap<String, OwnedVariant>,
+    data: &mut Map<String, Value>,
+) {
     insert_string(properties, "UnitFileState", "unit_file_state", data);
     insert_u64(
         properties,
@@ -534,7 +557,7 @@ fn insert_unit_properties(properties: &HashMap<String, OwnedValue>, data: &mut M
     );
 }
 
-fn enrich_type_properties(
+async fn enrich_type_properties(
     connection: &Connection,
     name: &str,
     object_path: &OwnedObjectPath,
@@ -543,7 +566,7 @@ fn enrich_type_properties(
     let Some(interface) = type_interface(name) else {
         return Ok(());
     };
-    let properties = get_all(connection, object_path, interface)?;
+    let properties = get_all(connection, object_path, interface).await?;
 
     match unit_type(name) {
         "service" => {
@@ -582,24 +605,26 @@ fn enrich_type_properties(
     Ok(())
 }
 
-fn property_string(properties: &HashMap<String, OwnedValue>, name: &str) -> Option<String> {
-    properties.get(name)?.try_clone().ok()?.try_into().ok()
+fn property_string(properties: &HashMap<String, OwnedVariant>, name: &str) -> Option<String> {
+    <&str>::try_from(properties.get(name)?)
+        .ok()
+        .map(str::to_owned)
 }
 
-fn property_u32(properties: &HashMap<String, OwnedValue>, name: &str) -> Option<u32> {
-    properties.get(name)?.try_clone().ok()?.try_into().ok()
+fn property_u32(properties: &HashMap<String, OwnedVariant>, name: &str) -> Option<u32> {
+    properties.get(name)?.try_into().ok()
 }
 
-fn property_i32(properties: &HashMap<String, OwnedValue>, name: &str) -> Option<i32> {
-    properties.get(name)?.try_clone().ok()?.try_into().ok()
+fn property_i32(properties: &HashMap<String, OwnedVariant>, name: &str) -> Option<i32> {
+    properties.get(name)?.try_into().ok()
 }
 
-fn property_u64(properties: &HashMap<String, OwnedValue>, name: &str) -> Option<u64> {
-    properties.get(name)?.try_clone().ok()?.try_into().ok()
+fn property_u64(properties: &HashMap<String, OwnedVariant>, name: &str) -> Option<u64> {
+    properties.get(name)?.try_into().ok()
 }
 
 fn insert_string(
-    properties: &HashMap<String, OwnedValue>,
+    properties: &HashMap<String, OwnedVariant>,
     property: &str,
     field: &str,
     data: &mut Map<String, Value>,
@@ -610,7 +635,7 @@ fn insert_string(
 }
 
 fn insert_u32(
-    properties: &HashMap<String, OwnedValue>,
+    properties: &HashMap<String, OwnedVariant>,
     property: &str,
     field: &str,
     data: &mut Map<String, Value>,
@@ -621,7 +646,7 @@ fn insert_u32(
 }
 
 fn insert_i32(
-    properties: &HashMap<String, OwnedValue>,
+    properties: &HashMap<String, OwnedVariant>,
     property: &str,
     field: &str,
     data: &mut Map<String, Value>,
@@ -632,7 +657,7 @@ fn insert_i32(
 }
 
 fn insert_u64(
-    properties: &HashMap<String, OwnedValue>,
+    properties: &HashMap<String, OwnedVariant>,
     property: &str,
     field: &str,
     data: &mut Map<String, Value>,

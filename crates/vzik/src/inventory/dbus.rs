@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::Path;
 
 use serde_json::{Map, Value, json};
-use zbus::blocking::fdo::DBusProxy;
+use zbus::fdo::DBusProxy;
 use zbus::names::BusName;
 
 use super::systemd::{ManagerTarget, connect, manager_targets};
@@ -27,24 +27,24 @@ pub fn run<W: Write>(
                 user,
                 all_users,
             },
-        ) => list(
+        ) => zbus::block_on(list(
             sink,
             deadline,
             *max_items,
             socket.as_deref(),
             user.as_deref(),
             *all_users,
+        )),
+        (CapabilityId::DbusInspect, Request::DbusInspect { name, socket, user }) => zbus::block_on(
+            inspect(sink, deadline, name, socket.as_deref(), user.as_deref()),
         ),
-        (CapabilityId::DbusInspect, Request::DbusInspect { name, socket, user }) => {
-            inspect(sink, deadline, name, socket.as_deref(), user.as_deref())
-        }
         _ => Err(ProtocolError::Internal(
             "dbus capability request mismatch".into(),
         )),
     }
 }
 
-fn list<W: Write>(
+async fn list<W: Write>(
     sink: &mut RecordSink<'_, W>,
     deadline: ExecutionContext<'_>,
     max_items: usize,
@@ -84,7 +84,7 @@ fn list<W: Write>(
 
     for target in targets {
         check_deadline(deadline)?;
-        let connection = match connect(&target.socket, deadline) {
+        let connection = match connect(&target.socket, deadline).await {
             Ok(connection) => connection,
             Err(error) => {
                 partial = true;
@@ -93,7 +93,7 @@ fn list<W: Write>(
             }
         };
 
-        let proxy = match DBusProxy::new(&connection) {
+        let proxy = match DBusProxy::new(&connection).await {
             Ok(proxy) => proxy,
             Err(error) => {
                 partial = true;
@@ -107,7 +107,7 @@ fn list<W: Write>(
                 continue;
             }
         };
-        let owned = match proxy.list_names() {
+        let owned = match proxy.list_names().await {
             Ok(names) => names,
             Err(error) => {
                 partial = true;
@@ -122,7 +122,7 @@ fn list<W: Write>(
             }
         };
 
-        let activatable = match proxy.list_activatable_names() {
+        let activatable = match proxy.list_activatable_names().await {
             Ok(names) => names,
             Err(error) => {
                 partial = true;
@@ -157,7 +157,7 @@ fn list<W: Write>(
         if coverage.observed as usize >= max_items {
             return Ok(finish(coverage, true, Some("max_items")));
         }
-        let (summary, summary_errors) = bus_summary(&proxy, &target);
+        let (summary, summary_errors) = bus_summary(&proxy, &target).await;
         if summary_errors != 0 {
             partial = true;
             coverage.skipped = coverage.skipped.saturating_add(summary_errors);
@@ -198,13 +198,13 @@ fn list<W: Write>(
             data.insert("activatable".into(), json!(is_activatable));
 
             if is_owned {
-                match owner_name(&proxy, &name) {
+                match owner_name(&proxy, &name).await {
                     Ok(owner) => {
                         data.insert("owner".into(), json!(owner));
                         if let Some(cached) = credentials.get(&owner) {
                             data.extend(cached.clone());
                         } else {
-                            match connection_credentials(&proxy, &owner) {
+                            match connection_credentials(&proxy, &owner).await {
                                 Ok(values) => {
                                     data.extend(values.clone());
                                     credentials.insert(owner, values);
@@ -249,7 +249,7 @@ fn list<W: Write>(
     Ok(finish(coverage, partial, None))
 }
 
-fn inspect<W: Write>(
+async fn inspect<W: Write>(
     sink: &mut RecordSink<'_, W>,
     deadline: ExecutionContext<'_>,
     name: &str,
@@ -274,14 +274,14 @@ fn inspect<W: Write>(
 
     check_deadline(deadline)?;
 
-    let connection = match connect(&target.socket, deadline) {
+    let connection = match connect(&target.socket, deadline).await {
         Ok(connection) => connection,
         Err(error) => {
             provider_failure(sink, capability, &target.socket, &error, &mut coverage)?;
             return Ok(CapabilityReport::unavailable(coverage));
         }
     };
-    let proxy = match DBusProxy::new(&connection) {
+    let proxy = match DBusProxy::new(&connection).await {
         Ok(proxy) => proxy,
         Err(error) => {
             provider_failure(
@@ -309,7 +309,7 @@ fn inspect<W: Write>(
         }
     };
 
-    let owned = match proxy.name_has_owner(bus_name.clone()) {
+    let owned = match proxy.name_has_owner(bus_name.clone()).await {
         Ok(owned) => owned,
         Err(error) => {
             provider_failure(
@@ -323,7 +323,7 @@ fn inspect<W: Write>(
         }
     };
 
-    let (activatable, activatable_error) = match proxy.list_activatable_names() {
+    let (activatable, activatable_error) = match proxy.list_activatable_names().await {
         Ok(names) => (
             names.iter().any(|candidate| candidate.as_str() == name),
             None,
@@ -351,10 +351,10 @@ fn inspect<W: Write>(
         )?;
     }
     if owned {
-        match owner_name(&proxy, name) {
+        match owner_name(&proxy, name).await {
             Ok(owner) => {
                 data.insert("owner".into(), json!(owner));
-                match connection_credentials(&proxy, &owner) {
+                match connection_credentials(&proxy, &owner).await {
                     Ok(values) => data.extend(values),
                     Err(error) => {
                         partial = true;
@@ -385,22 +385,22 @@ fn inspect<W: Write>(
     Ok(finish(coverage, partial, None))
 }
 
-fn bus_summary(proxy: &DBusProxy<'_>, target: &ManagerTarget) -> (Map<String, Value>, u64) {
+async fn bus_summary(proxy: &DBusProxy<'_>, target: &ManagerTarget) -> (Map<String, Value>, u64) {
     let mut data = manager_data(target, "bus");
     let mut errors = 0_u64;
-    match proxy.get_id() {
+    match proxy.get_id().await {
         Ok(id) => {
             data.insert("bus_id".into(), json!(id.as_str()));
         }
         Err(_) => errors += 1,
     }
-    match proxy.features() {
+    match proxy.features().await {
         Ok(features) => {
             data.insert("features".into(), json!(features));
         }
         Err(_) => errors += 1,
     }
-    match proxy.interfaces() {
+    match proxy.interfaces().await {
         Ok(interfaces) => {
             data.insert(
                 "interfaces".into(),
@@ -431,24 +431,26 @@ fn manager_data(target: &ManagerTarget, record_type: &'static str) -> Map<String
     data
 }
 
-fn owner_name(proxy: &DBusProxy<'_>, name: &str) -> Result<String, String> {
+async fn owner_name(proxy: &DBusProxy<'_>, name: &str) -> Result<String, String> {
     if name.starts_with(':') {
         return Ok(name.to_owned());
     }
     let name = BusName::try_from(name).map_err(|error| error.to_string())?;
     proxy
         .get_name_owner(name)
+        .await
         .map(|owner| owner.as_str().to_owned())
         .map_err(|error| error.to_string())
 }
 
-fn connection_credentials(
+async fn connection_credentials(
     proxy: &DBusProxy<'_>,
     owner: &str,
 ) -> Result<Map<String, Value>, String> {
     let owner = BusName::try_from(owner).map_err(|error| error.to_string())?;
     let credentials = proxy
         .get_connection_credentials(owner)
+        .await
         .map_err(|error| error.to_string())?;
     let mut data = Map::new();
     if let Some(uid) = credentials.unix_user_id() {

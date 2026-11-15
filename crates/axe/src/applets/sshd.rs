@@ -1005,7 +1005,7 @@ impl server::Handler for SshServer {
     async fn auth_publickey(
         &mut self,
         _: &str,
-        _: &ssh_key::PublicKey,
+        _: server::VerifiedPublicKey<'_>,
     ) -> Result<Auth, Self::Error> {
         Ok(Auth::reject())
     }

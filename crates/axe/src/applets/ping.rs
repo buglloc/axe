@@ -742,7 +742,8 @@ impl ProbeSocket {
         };
         socket_address_call(&fd, SocketAddr::new(destination, port), true)?;
         Ok(Self {
-            fd: AsyncFd::new(fd)?,
+            // SAFETY: AsyncFd owns this socket; no code closes or replaces its descriptor.
+            fd: unsafe { AsyncFd::register(fd)? },
             destination,
             icmp,
             raw,
@@ -782,7 +783,8 @@ impl ProbeSocket {
         };
         set_socket_int(&fd, level, error, 1)?;
         set_socket_int(&fd, level, ttl, 1)?;
-        self.fd = AsyncFd::new(fd)?;
+        // SAFETY: the new socket's OwnedFd stays unchanged until AsyncFd drops it.
+        self.fd = unsafe { AsyncFd::register(fd)? };
         Ok(())
     }
 

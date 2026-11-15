@@ -58,13 +58,13 @@ uu_timeout = { version = "=0.12.0" }
 uu_test = { version = "=0.12.0" }
 uu_tty = { version = "=0.12.0" }
 uu_grep = { version = "0.2.0" }
-russh = { version = "0.63.2", default-features = false, features = ["ring"] }
-russh-sftp = { version = "=2.4.0" }
+russh = { version = "0.65.1", default-features = false, features = ["ring"] }
+russh-sftp = { version = "=3.0.1" }
 rustls.workspace = true
 rustls-pemfile.workspace = true
 rust_tree = { version = "=1.3.0" }
 sha2.workspace = true
-tokio = { version = "1.52", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.54", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 which.workspace = true
 ureq.workspace = true
 url.workspace = true
@@ -76,7 +76,7 @@ xxhash-rust = { version = "0.8", features = ["xxh64"] }
 zstd = { workspace = true, features = ["zstdmt"] }
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", features = ["fs", "term"] }
+nix = { version = "0.32", features = ["fs", "signal", "term"] }
 signal-hook.workspace = true
 libc.workspace = true
 uu_chroot = { version = "=0.12.0" }

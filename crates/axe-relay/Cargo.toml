@@ -33,12 +33,12 @@ rustls-pemfile.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
 socket2 = "0.6"
-tokio = { version = "1.52", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7.19", features = ["compat"] }
+tokio = { version = "1.54.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7.20", features = ["compat"] }
 ureq = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
-uuid = { version = "1.26", features = ["serde", "v4"], optional = true }
-yamux = "0.14.0"
+uuid = { version = "1.29.2", features = ["serde", "v4"], optional = true }
+yamux = "0.14.1"
 
 [dev-dependencies]
 rcgen.workspace = true

@@ -104,7 +104,7 @@ edition = "2024"
 
 [dependencies]
 axe-artifact = { path = "$root/crates/axe-artifact" }
-ed25519-dalek = "2.2"
+ed25519-dalek = "3.0"
 EOF
 cat >"$tmp/inspect/src/main.rs" <<'EOF'
 use std::{env, fs};

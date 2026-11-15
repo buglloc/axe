@@ -837,6 +837,7 @@ impl Drop for CaptureScratch {
 
 fn verify_bundle(directory: &std::path::Path, output: &[u8], outcome: &str) -> Value {
     use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
     use std::os::unix::fs::PermissionsExt as _;
 
     assert_eq!(
@@ -865,10 +866,11 @@ fn verify_bundle(directory: &std::path::Path, output: &[u8], outcome: &str) -> V
         );
         let bytes = fs::read(&path).expect("artifact");
         assert_eq!(receipt[section]["bytes"], bytes.len() as u64);
-        assert_eq!(
-            receipt[section]["sha256"],
-            format!("{:x}", Sha256::digest(&bytes))
-        );
+        let mut expected_sha256 = String::with_capacity(64);
+        for byte in Sha256::digest(&bytes) {
+            write!(expected_sha256, "{byte:02x}").expect("write SHA-256");
+        }
+        assert_eq!(receipt[section]["sha256"], expected_sha256);
     }
     assert_eq!(
         fs::metadata(directory.join("receipt.json"))
