@@ -17,14 +17,14 @@ exclude = ["vendor"]
 # patched crates are vendored under `paths`, the unmodified crates are pinned
 # to the same revision through [patch.crates-io].
 repository = "https://github.com/reubeno/brush"
-revision = "e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b"
+revision = "6a688f192455f65ece4cfd7dd26300d06804d5ae"
 brush-shell-version = "0.4.0"
 brush-core-version = "0.5.0"
 brush-builtins-version = "0.2.0"
 brush-parser-version = "0.4.0"
 brush-interactive-version = "0.4.0"
 brush-coreutils-builtins-version = "0.1.0"
-brush-clap-adapter-version = "0.1.0"
+brush-winnow-args-adapter-version = "0.1.0"
 paths = ["vendor/brush-shell", "vendor/brush-core", "vendor/brush-builtins"]
 
 [workspace.package]
@@ -88,10 +88,10 @@ jaq-json = { path = "vendor/jaq-json" }
 brush-shell = { path = "vendor/brush-shell" }
 brush-core = { path = "vendor/brush-core" }
 brush-builtins = { path = "vendor/brush-builtins" }
-brush-parser = { git = "https://github.com/reubeno/brush", rev = "e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b" }
-brush-interactive = { git = "https://github.com/reubeno/brush", rev = "e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b" }
-brush-coreutils-builtins = { git = "https://github.com/reubeno/brush", rev = "e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b" }
-brush-clap-adapter = { git = "https://github.com/reubeno/brush", rev = "e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b" }
+brush-parser = { git = "https://github.com/reubeno/brush", rev = "6a688f192455f65ece4cfd7dd26300d06804d5ae" }
+brush-interactive = { git = "https://github.com/reubeno/brush", rev = "6a688f192455f65ece4cfd7dd26300d06804d5ae" }
+brush-coreutils-builtins = { git = "https://github.com/reubeno/brush", rev = "6a688f192455f65ece4cfd7dd26300d06804d5ae" }
+brush-winnow-args-adapter = { git = "https://github.com/reubeno/brush", rev = "6a688f192455f65ece4cfd7dd26300d06804d5ae" }
 awk-rs = { path = "vendor/awk-rs" }
 diffutils = { path = "vendor/diffutils" }
 findutils = { path = "vendor/findutils" }

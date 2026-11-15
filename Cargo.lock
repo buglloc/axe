@@ -144,7 +144,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -155,7 +155,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1028,13 +1028,12 @@ dependencies = [
 name = "brush-builtins"
 version = "0.2.0"
 dependencies = [
- "brush-clap-adapter",
  "brush-core",
  "brush-parser",
+ "brush-winnow-args-adapter",
  "cfg-if",
  "chrono",
- "clap",
- "fancy-regex 0.19.2",
+ "fancy-regex 0.20.2",
  "itertools 0.15.0",
  "nix 0.31.3",
  "procfs",
@@ -1045,15 +1044,7 @@ dependencies = [
  "tracing",
  "utf8-chars",
  "uucore 0.12.0",
-]
-
-[[package]]
-name = "brush-clap-adapter"
-version = "0.1.0"
-source = "git+https://github.com/reubeno/brush?rev=e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b#e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b"
-dependencies = [
- "brush-core",
- "clap",
+ "winnow-args",
 ]
 
 [[package]]
@@ -1070,7 +1061,7 @@ dependencies = [
  "chrono",
  "color-print",
  "command-fds",
- "fancy-regex 0.19.2",
+ "fancy-regex 0.20.2",
  "futures",
  "getrandom 0.4.3",
  "hostname",
@@ -1096,7 +1087,7 @@ dependencies = [
 [[package]]
 name = "brush-coreutils-builtins"
 version = "0.1.0"
-source = "git+https://github.com/reubeno/brush?rev=e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b#e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b"
+source = "git+https://github.com/reubeno/brush?rev=6a688f192455f65ece4cfd7dd26300d06804d5ae#6a688f192455f65ece4cfd7dd26300d06804d5ae"
 dependencies = [
  "uu_arch",
  "uu_b2sum",
@@ -1186,7 +1177,7 @@ dependencies = [
 [[package]]
 name = "brush-interactive"
 version = "0.4.0"
-source = "git+https://github.com/reubeno/brush?rev=e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b#e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b"
+source = "git+https://github.com/reubeno/brush?rev=6a688f192455f65ece4cfd7dd26300d06804d5ae#6a688f192455f65ece4cfd7dd26300d06804d5ae"
 dependencies = [
  "bon",
  "brush-core",
@@ -1203,7 +1194,7 @@ dependencies = [
 [[package]]
 name = "brush-parser"
 version = "0.4.0"
-source = "git+https://github.com/reubeno/brush?rev=e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b#e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b"
+source = "git+https://github.com/reubeno/brush?rev=6a688f192455f65ece4cfd7dd26300d06804d5ae#6a688f192455f65ece4cfd7dd26300d06804d5ae"
 dependencies = [
  "bon",
  "cached",
@@ -1221,10 +1212,9 @@ name = "brush-shell"
 version = "0.4.0"
 dependencies = [
  "brush-builtins",
- "brush-clap-adapter",
  "brush-core",
  "brush-interactive",
- "clap",
+ "brush-winnow-args-adapter",
  "color-print",
  "const_format",
  "crossterm",
@@ -1239,6 +1229,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "winnow-args",
+]
+
+[[package]]
+name = "brush-winnow-args-adapter"
+version = "0.1.0"
+source = "git+https://github.com/reubeno/brush?rev=6a688f192455f65ece4cfd7dd26300d06804d5ae#6a688f192455f65ece4cfd7dd26300d06804d5ae"
+dependencies = [
+ "brush-core",
+ "winnow-args",
 ]
 
 [[package]]
@@ -1552,7 +1552,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2133,7 +2133,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2352,7 +2352,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "socket2",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2546,7 +2546,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2614,6 +2614,17 @@ name = "fancy-regex"
 version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d301f5bf187b3c295fce6468d3875037a0bccc5f6b151c63cac2f85babf21912"
+dependencies = [
+ "bit-set 0.8.0",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "fancy-regex"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a2e16b9a584b602f1e0e5e22c30ca0906786088c27500653e432d086def8b53"
 dependencies = [
  "bit-set 0.8.0",
  "regex-automata",
@@ -3968,7 +3979,7 @@ version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82cb6a9f675da968c63b6208c641b9dca58fc0133ae53375736b1767b0cab8bd"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4720,7 +4731,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5922,7 +5933,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6485,7 +6496,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7049,7 +7060,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7332,10 +7343,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7348,7 +7359,7 @@ dependencies = [
  "parking_lot",
  "rustix",
  "signal-hook",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7358,7 +7369,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7862,7 +7873,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -10046,7 +10057,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -10357,6 +10368,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winnow-args"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5136a764f451e3698db4ac6334e8fcafb05736d68eea72402ed198211275527"
+dependencies = [
+ "terminal_size",
+ "winnow 1.0.4",
+ "winnow-args-derive",
+]
+
+[[package]]
+name = "winnow-args-derive"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6025afd3c1d6274071b70e97e29546d49d6f10cb1653689ad987ab654c589ea9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

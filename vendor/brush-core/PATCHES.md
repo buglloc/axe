@@ -1,7 +1,7 @@
 # brush-core patches
 
 Source: the `brush-core` 0.5.0 package from the `reubeno/brush` git
-repository, revision `e37b3c91b7f3d2cc5a67cdc38381f480044d7a7b` (path
+repository, revision `6a688f192455f65ece4cfd7dd26300d06804d5ae` (path
 `brush-core`; the same fork revision is recorded in the root
 `[workspace.metadata.brush-fork]`). Everything not listed below is upstream
 source at that revision.

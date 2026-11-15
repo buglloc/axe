@@ -108,7 +108,7 @@ version = "0.4.44"
 version = "0.3.7"
 
 [dependencies.fancy-regex]
-version = "0.19.0"
+version = "0.20.0"
 
 [dependencies.futures]
 version = "0.3.32"
@@ -230,6 +230,7 @@ bool_to_int_with_if = "allow"
 cognitive_complexity = "allow"
 collapsible_else_if = "allow"
 collapsible_if = "allow"
+empty_enums = "allow"
 expect_used = "deny"
 format_push_string = "deny"
 if_not_else = "allow"

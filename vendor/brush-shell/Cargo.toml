@@ -110,6 +110,10 @@ name = "brush-version-tests"
 path = "tests/version_tests.rs"
 
 [[test]]
+name = "pty_help_tests"
+path = "tests/pty_help_tests.rs"
+
+[[test]]
 name = "pty_startup_tests"
 path = "tests/pty_startup_tests.rs"
 
@@ -129,7 +133,7 @@ harness = false
 [dependencies.brush-builtins]
 version = "^0.2.0"
 
-[dependencies.brush-clap-adapter]
+[dependencies.brush-winnow-args-adapter]
 version = "^0.1.0"
 
 [dependencies.brush-core]
@@ -145,13 +149,6 @@ optional = true
 
 [dependencies.brush-interactive]
 version = "^0.4.0"
-
-[dependencies.clap]
-version = "4.6.0"
-features = [
-    "derive",
-    "env",
-]
 
 [dependencies.color-print]
 version = "0.3.7"
@@ -192,6 +189,11 @@ version = "0.1.44"
 [dependencies.tracing-subscriber]
 version = "0.3.23"
 
+[dependencies.winnow-args]
+version = "0.6.0"
+default-features = false
+features = ["derive", "help-text"]
+
 [dev-dependencies.anyhow]
 version = "1.0.102"
 
@@ -204,14 +206,9 @@ version = "1.1.3"
 [dev-dependencies.brush-parser]
 version = "^0.4.0"
 
-[dev-dependencies.clap-markdown]
-version = "0.1.5"
-
-[dev-dependencies.clap_complete]
-version = "4.6.4"
-
-[dev-dependencies.clap_mangen]
-version = "0.3.0"
+[dev-dependencies.clap]
+version = "4.6.0"
+features = ["derive", "env"]
 
 [dev-dependencies.colored]
 version = "3.1.1"
@@ -325,6 +322,7 @@ bool_to_int_with_if = "allow"
 cognitive_complexity = "allow"
 collapsible_else_if = "allow"
 collapsible_if = "allow"
+empty_enums = "allow"
 expect_used = "deny"
 format_push_string = "deny"
 if_not_else = "allow"

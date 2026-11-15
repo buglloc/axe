@@ -159,7 +159,15 @@ path = "tests/process_launcher_tests.rs"
 name = "registration_tests"
 path = "tests/registration_tests.rs"
 
-[dependencies.brush-clap-adapter]
+[[test]]
+name = "source_program_tests"
+path = "tests/source_program_tests.rs"
+
+[[test]]
+name = "task_spawner_tests"
+path = "tests/task_spawner_tests.rs"
+
+[dependencies.brush-winnow-args-adapter]
 version = "^0.1.0"
 
 [dependencies.brush-core]
@@ -174,15 +182,8 @@ version = "1.0.4"
 [dependencies.chrono]
 version = "0.4.44"
 
-[dependencies.clap]
-version = "4.6.0"
-features = [
-    "derive",
-    "wrap_help",
-]
-
 [dependencies.fancy-regex]
-version = "0.19.0"
+version = "0.20.0"
 
 [dependencies.itertools]
 version = "0.15.0"
@@ -198,6 +199,14 @@ version = "0.1.44"
 
 [dependencies.utf8-chars]
 version = "3.0.6"
+
+[dependencies.winnow-args]
+version = "0.6.0"
+features = [
+    "derive",
+    "help-text",
+]
+default-features = false
 
 [dev-dependencies.anyhow]
 version = "1.0.102"
