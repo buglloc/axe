@@ -1242,19 +1242,17 @@ fn run_lsof(args: Vec<OsString>) -> Result<bool, String> {
     let has_path_filters =
         !paths.is_empty() || !recursive_directories.is_empty() || !directories.is_empty();
     let has_file_filters = has_path_filters || !networks.is_empty();
-    let identities = paths
+    let mut identities = paths
         .iter()
         .filter_map(|path| fs::metadata(path).ok())
         .map(|metadata| (metadata.dev(), metadata.ino()))
         .collect::<BTreeSet<_>>();
-    let canonical_directories = |directories: Vec<String>| {
-        directories
-            .into_iter()
-            .filter_map(|path| fs::canonicalize(path).ok())
-            .collect::<Vec<_>>()
-    };
-    let recursive_directories = canonical_directories(recursive_directories);
-    let directories = canonical_directories(directories);
+    for directory in directories {
+        collect_directory_identities(Path::new(&directory), false, &mut identities);
+    }
+    for directory in recursive_directories {
+        collect_directory_identities(Path::new(&directory), true, &mut identities);
+    }
     let mut processes = fs::read_dir("/proc")
         .map_err(|error| error.to_string())?
         .flatten()
@@ -1300,8 +1298,6 @@ fn run_lsof(args: Vec<OsString>) -> Result<bool, String> {
             has_file_filters,
             has_path_filters,
             identities: &identities,
-            recursive_directories: &recursive_directories,
-            directories: &directories,
             networks: &networks,
             sockets: &sockets,
             names: &names,
@@ -1687,8 +1683,6 @@ struct OpenEmitter<'a> {
     has_file_filters: bool,
     has_path_filters: bool,
     identities: &'a BTreeSet<(u64, u64)>,
-    recursive_directories: &'a [PathBuf],
-    directories: &'a [PathBuf],
     networks: &'a [NetworkFilter],
     sockets: &'a HashMap<u64, SocketInfo>,
     names: &'a NameDatabase,
@@ -1859,15 +1853,7 @@ impl OpenEmitter<'_> {
         let socket = socket_inode.and_then(|inode| self.sockets.get(&inode));
         let path_match = early
             .as_ref()
-            .is_some_and(|file| self.identities.contains(&(file.device, file.inode)))
-            || self
-                .recursive_directories
-                .iter()
-                .any(|directory| path_is_below(target, directory, true))
-            || self
-                .directories
-                .iter()
-                .any(|directory| path_is_below(target, directory, false));
+            .is_some_and(|file| self.identities.contains(&(file.device, file.inode)));
         let network_match = socket.is_some_and(|socket| {
             self.networks
                 .iter()
@@ -2187,14 +2173,33 @@ fn socket_matches(socket: &SocketInfo, filter: &NetworkFilter) -> bool {
     })
 }
 
-fn path_is_below(target: &Path, directory: &Path, recursive: bool) -> bool {
-    if target == directory {
-        return true;
+fn collect_directory_identities(
+    directory: &Path,
+    recursive: bool,
+    identities: &mut BTreeSet<(u64, u64)>,
+) {
+    let Ok(metadata) = fs::metadata(directory) else {
+        return;
+    };
+    if !metadata.is_dir() {
+        return;
     }
-    if recursive {
-        target.starts_with(directory)
-    } else {
-        target.parent() == Some(directory)
+    let device = metadata.dev();
+    identities.insert((device, metadata.ino()));
+    let mut pending = vec![directory.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            identities.insert((metadata.dev(), metadata.ino()));
+            if recursive && metadata.is_dir() && metadata.dev() == device {
+                pending.push(entry.path());
+            }
+        }
     }
 }
 

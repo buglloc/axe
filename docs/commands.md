@@ -370,6 +370,9 @@ differ; unlike lsof, a mapped path keeps embedded whitespace.
 supports
 the `-F` field subset `p`, `c`, `f`, `n`, `t`, `u`, `L`, `i`, `D`, `s`, `P`,
 `a`, `o`, `r` and the NUL terminator selector `0`; other fields are rejected.
+`+d` and `+D` select the current directory entries by device and inode, so
+hardlink aliases match and unlinked files do not. `+D` descends into real
+subdirectories on the same filesystem without following directory symlinks.
 
 `iostat` uses uptime for the first interval and interval deltas thereafter.
 Extended `-x` output is limited to device, `await`, `aqu-sz` and `%util` fields;
