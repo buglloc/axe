@@ -1595,6 +1595,7 @@ fn write_columns(
         };
         output.spaces(options.offset_spaces)?;
         for (index, cell) in row.iter().take(cells).enumerate() {
+            let number = options.number.as_ref().filter(|_| !merge || index == 0);
             if index > 0 {
                 if let Some(width) = options.column_width {
                     let before_separator = options.offset_spaces
@@ -1604,10 +1605,10 @@ fn write_columns(
                     output.pad_to(before_separator)?;
                 }
                 output.bytes(options.col_sep_for_printing.as_bytes())?;
-                // Separator whitespace is committed before the next column's number.
-                output.flush_spaces()?;
+                if number.is_some() {
+                    output.flush_spaces()?;
+                }
             }
-            let number = options.number.as_ref().filter(|_| !merge || index == 0);
             if let Some(number) = number {
                 let line_number = if merge {
                     merge_line_number

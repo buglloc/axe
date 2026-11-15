@@ -206,3 +206,26 @@ fn pr_does_not_double_space_after_an_unterminated_record() {
     let scratch = Scratch::new();
     assert_success(run(scratch.path(), "pr", &["-t", "-d"], b"a\nb"), b"a\n\nb\n");
 }
+
+#[test]
+fn pr_empty_truncated_columns_do_not_shift_following_content() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(
+            scratch.path(),
+            "pr",
+            &["-t", "-a", "-3", "-w20"],
+            b"a\tb\tc\n\tX\nlast\t",
+        ),
+        b"a\t      last\n",
+    );
+    assert_success(
+        run(
+            scratch.path(),
+            "pr",
+            &["-t", "-a", "-3", "-w20"],
+            b"  alpha  beta\t gamma\n\t delta  epsilon\n",
+        ),
+        b"  alph\n",
+    );
+}

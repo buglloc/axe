@@ -18,6 +18,9 @@ Source: the `uu_pr` 0.12.0 crate from crates.io, upstream revision
 - Preserve input form-feed page boundaries with omitted headers, including
   empty pages, and keep record numbering continuous across those boundaries.
 - Do not double-space after an unterminated final record or a form-feed break.
+- Keep inter-column padding pending until a following number or content byte
+  needs it, so truncated empty columns neither shift later columns nor leak
+  trailing padding.
 
 Upstreamability: byte output, option parsing, and layout target GNU pr and are
 upstreamable; no upstream issue or commit is recorded in AXE.
