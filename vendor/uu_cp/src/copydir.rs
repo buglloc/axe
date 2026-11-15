@@ -259,6 +259,7 @@ fn copy_direntry(
     entry: &Entry,
     entry_is_symlink: bool,
     entry_is_dir_no_follow: bool,
+    source_in_command_line: bool,
     options: &Options,
     symlinked_files: &mut HashSet<FileInformation>,
     preserve_hard_links: bool,
@@ -267,7 +268,7 @@ fn copy_direntry(
     created_parent_dirs: &mut HashSet<PathBuf>,
 ) -> CopyResult<bool> {
     let source_is_symlink = entry_is_symlink;
-    let source_is_dir = if source_is_symlink && !options.dereference {
+    let source_is_dir = if source_is_symlink && !options.dereference(source_in_command_line) {
         false
     } else if source_is_symlink {
         entry.source_absolute.is_dir()
@@ -316,7 +317,7 @@ fn copy_direntry(
             copied_destinations,
             copied_files,
             created_parent_dirs,
-            false,
+            source_in_command_line,
         )
     {
         if preserve_hard_links {
@@ -466,11 +467,13 @@ pub(crate) fn copy_directory(
     for direntry_result in WalkDir::new(root)
         .same_file_system(options.one_file_system)
         .follow_links(options.dereference)
+        .follow_root_links(options.dereference(source_in_command_line))
     {
         match direntry_result {
             Ok(direntry) => {
                 let direntry_type = direntry.file_type();
                 let direntry_path = direntry.path();
+                let entry_in_command_line = source_in_command_line && direntry.depth() == 0;
                 let (entry_is_symlink, entry_is_dir_no_follow) =
                     match direntry_path.symlink_metadata() {
                         Ok(metadata) => {
@@ -486,6 +489,7 @@ pub(crate) fn copy_directory(
                     &entry,
                     entry_is_symlink,
                     entry_is_dir_no_follow,
+                    entry_in_command_line,
                     options,
                     symlinked_files,
                     preserve_hard_links,
@@ -505,8 +509,8 @@ pub(crate) fn copy_directory(
                 // (Note that there can be more than one! We might step out of
                 // `./a/b/c` into `./a/`, in which case we'll need to fix the
                 // permissions of both `./a/b/c` and `./a/b`, in that order.)
-                let is_dir_for_permissions =
-                    entry_is_dir_no_follow || (options.dereference && direntry_path.is_dir());
+                let is_dir_for_permissions = entry_is_dir_no_follow
+                    || (options.dereference(entry_in_command_line) && direntry_path.is_dir());
                 if is_dir_for_permissions {
                     // For --link mode, copy attributes immediately to avoid O(n) memory
                     if options.copy_mode == CopyMode::Link {

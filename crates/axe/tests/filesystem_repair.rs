@@ -149,3 +149,17 @@ fn install_refuses_overwriting_its_fresh_destination() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("just-created"));
     assert_eq!(fs::read(scratch.path().join("destination/source")).unwrap(), b"original");
 }
+
+#[test]
+fn cp_recursive_h_follows_only_the_command_line_symlink() {
+    let scratch = Scratch::new("cp-recursive-h");
+    fs::create_dir(scratch.path().join("source")).unwrap();
+    fs::write(scratch.path().join("source/file"), b"original").unwrap();
+    symlink("file", scratch.path().join("source/link")).unwrap();
+    symlink("source", scratch.path().join("alias")).unwrap();
+    success(&run(scratch.path(), "cp", &["-RH", "alias", "destination"]));
+    assert!(scratch.path().join("destination").is_dir());
+    assert_eq!(fs::metadata(scratch.path().join("destination")).unwrap().permissions().mode() & 0o777, fs::metadata(scratch.path().join("source")).unwrap().permissions().mode() & 0o777);
+    assert_eq!(fs::read(scratch.path().join("destination/file")).unwrap(), b"original");
+    assert_eq!(fs::read_link(scratch.path().join("destination/link")).unwrap(), Path::new("file"));
+}

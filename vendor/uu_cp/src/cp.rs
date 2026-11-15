@@ -1870,6 +1870,11 @@ pub(crate) fn copy_attributes(
     let context = &*format!("{} -> {}", source.quote(), dest.quote());
     let source_metadata =
         fs::symlink_metadata(source).map_err(|e| CpError::IoErrContext(e, context.to_owned()))?;
+    let source_metadata = if source_metadata.is_symlink() && dest.is_dir() {
+        fs::metadata(source).map_err(|e| CpError::IoErrContext(e, context.to_owned()))?
+    } else {
+        source_metadata
+    };
 
     let mode_explicitly_disabled = matches!(attributes.mode, Preserve::No { explicit: true });
 
