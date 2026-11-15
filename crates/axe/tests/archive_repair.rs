@@ -167,3 +167,18 @@ fn wide_strings_split_at_non_ascii_units_in_the_c_locale() {
         }
     }
 }
+
+#[test]
+fn strings_all_whitespace_includes_vertical_tabs() {
+    let scratch = Scratch::new("strings-whitespace");
+    let input = b"alpha\tbeta\nnext\rlast\x0bfinal\x0cEND\0done";
+    let output = run(scratch.path(), "strings", &["-n3", "-w"], input);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        output.stdout,
+        b"alpha\tbeta\nnext\rlast\x0bfinal\x0cEND\ndone\n"
+    );
+    let output = run(scratch.path(), "strings", &["-n3"], b"one\x0btwo");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"one\ntwo\n");
+}

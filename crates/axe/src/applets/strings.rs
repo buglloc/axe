@@ -930,7 +930,7 @@ fn is_display_byte(byte: u8, eight_bit: bool, include_all_whitespace: bool) -> b
     byte == b'\t'
         || (0x20..=0x7e).contains(&byte)
         || (eight_bit && byte >= 0x80)
-        || (include_all_whitespace && byte.is_ascii_whitespace())
+        || (include_all_whitespace && matches!(byte, b'\t'..=b'\r' | b' '))
 }
 
 fn is_display_char(character: char, include_all_whitespace: bool) -> bool {
