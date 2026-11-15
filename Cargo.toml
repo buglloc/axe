@@ -130,6 +130,7 @@ uu_pr = { path = "vendor/uu_pr" }
 uu_printf = { path = "vendor/uu_printf" }
 uu_printenv = { path = "vendor/uu_printenv" }
 uu_ptx = { path = "vendor/uu_ptx" }
+uu_rm = { path = "vendor/uu_rm" }
 uu_shred = { path = "vendor/uu_shred" }
 uu_sort = { path = "vendor/uu_sort" }
 uu_stat = { path = "vendor/uu_stat" }

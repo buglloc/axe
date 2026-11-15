@@ -163,3 +163,17 @@ fn xargs_default_mode_truncates_nul_fields_but_zero_mode_keeps_arguments() {
     assert_eq!(output.stdout, b"word\0other\0");
     assert!(output.stderr.is_empty());
 }
+
+#[test]
+fn forced_recursive_rm_ignores_a_trailing_slash_symlink_without_following_it() {
+    let scratch = Scratch::new();
+    fs::create_dir(scratch.0.join("target")).unwrap();
+    fs::write(scratch.0.join("target/keep"), b"keep").unwrap();
+    std::os::unix::fs::symlink("target", scratch.0.join("link")).unwrap();
+    let argv = args(&["-rf", "link/"]);
+    let output = run(&scratch.0, "rm", &refs(&argv), b"");
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert!(output.stderr.is_empty());
+    assert_eq!(fs::read_link(scratch.0.join("link")).unwrap(), Path::new("target"));
+    assert_eq!(fs::read(scratch.0.join("target/keep")).unwrap(), b"keep");
+}
