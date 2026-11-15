@@ -370,6 +370,7 @@ fn expand_buf(
     tabstops: &[usize],
     options: &Options,
     col: &mut usize,
+    init: &mut bool,
 ) -> std::io::Result<()> {
     use self::CharType::{Backspace, Other, Tab};
 
@@ -380,11 +381,11 @@ fn expand_buf(
     if !needs_processing && buf.last() == Some(&b'\n') {
         output.write_all(buf)?;
         *col = 0;
+        *init = true;
         return Ok(());
     }
 
     let mut byte = 0;
-    let mut init = true;
 
     while byte < buf.len() {
         let (ctype, cwidth, nbytes) = classify_char(buf, byte, options.utf8);
@@ -397,7 +398,7 @@ fn expand_buf(
                 *col += nts;
 
                 // now dump out either spaces if we're expanding, or a literal tab if we're not
-                if init || !options.iflag {
+                if *init || !options.iflag {
                     write_spaces(output, nts)?;
                 } else {
                     output.write_all(&buf[byte..byte + nbytes])?;
@@ -409,7 +410,7 @@ fn expand_buf(
                 // if we're writing anything other than a space, then we're
                 // done with the line's leading spaces
                 if buf[byte] != b' ' {
-                    init = false;
+                    *init = false;
                 }
 
                 output.write_all(&buf[byte..byte + nbytes])?;
@@ -420,12 +421,12 @@ fn expand_buf(
                 // if we're writing anything other than a space, then we're
                 // done with the line's leading spaces
                 if buf[byte] != b' ' {
-                    init = false;
+                    *init = false;
                 }
 
                 if buf[byte] == b'\n' {
                     *col = 0;
-                    init = true;
+                    *init = true;
                 }
 
                 output.write_all(&buf[byte..byte + nbytes])?;
@@ -442,16 +443,17 @@ fn expand_file(
     file: &OsString,
     output: &mut BufWriter<std::io::Stdout>,
     options: &Options,
+    col: &mut usize,
+    init: &mut bool,
 ) -> UResult<()> {
     let mut buf = [0u8; 4096];
     let mut input = open(file)?;
     let ts = options.tabstops.as_ref();
-    let mut col = 0;
     loop {
         match input.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                expand_buf(&buf[..n], output, ts, options, &mut col)
+                expand_buf(&buf[..n], output, ts, options, col, init)
                     .map_err_context(|| translate!("expand-error-failed-to-write-output"))?;
             }
             Err(e) => return Err(e.map_err_context(|| file.maybe_quote().to_string())),
@@ -462,9 +464,11 @@ fn expand_file(
 
 fn expand(options: &Options) -> UResult<()> {
     let mut output = BufWriter::new(stdout());
+    let mut col = 0;
+    let mut init = true;
 
     for file in &options.files {
-        if let Err(e) = expand_file(file, &mut output, options) {
+        if let Err(e) = expand_file(file, &mut output, options, &mut col, &mut init) {
             show!(e);
             set_exit_code(1);
         }

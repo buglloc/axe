@@ -10,6 +10,8 @@ Source: the `uu_expand` 0.12.0 crate from crates.io, upstream revision
   preserve the current column for a partial line instead of resetting it.
 - Preserve explicit `-` stdin operands when expanding obsolete numeric tab
   shortcuts; a bare dash is not a tab-size option.
+- Carry the current display column and initial-blank state across read chunks
+  and file operands; only a newline begins a new logical line.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
 

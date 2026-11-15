@@ -180,3 +180,27 @@ fn tab_converters_preserve_explicit_stdin_among_file_operands() {
         b"\ta\n\ti\n",
     );
 }
+
+#[test]
+fn expand_preserves_logical_line_state_across_files_and_chunks() {
+    let scratch = Scratch::new();
+    fs::write(scratch.path().join("a"), b"abc\tdef").unwrap();
+    fs::write(scratch.path().join("b"), b"GHI\tJKL\n").unwrap();
+    assert_success(
+        run(scratch.path(), "expand", &["a", "b"], b""),
+        b"abc     defGHI  JKL\n",
+    );
+    assert_success(
+        run(scratch.path(), "expand", &["-", "a", "-"], b"ab\tcd"),
+        b"ab      cdabc   def",
+    );
+    assert_success(
+        run(scratch.path(), "expand", &["-i", "a", "b"], b""),
+        b"abc\tdefGHI\tJKL\n",
+    );
+    let mut input = vec![b'x'; 4096];
+    input.extend_from_slice(b"\tend\n\tz");
+    let mut expected = vec![b'x'; 4096];
+    expected.extend_from_slice(b"\tend\n        z");
+    assert_success(run(scratch.path(), "expand", &["-i"], &input), &expected);
+}
