@@ -9,11 +9,9 @@ use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write, stderr, stdin};
-use std::path::Path;
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, USimpleError};
 use uucore::format_usage;
-use uucore::fs::{are_files_identical, paths_refer_to_same_file};
 use uucore::i18n::collator::{
     AlternateHandling, CollatorOptions, locale_cmp, should_use_locale_collation, try_init_collator,
 };
@@ -124,14 +122,14 @@ impl OrderChecker {
         }
     }
 
-    fn verify_order(&mut self, current_line: &[u8]) -> bool {
+    fn verify_order(&mut self, current_line: &[u8], enabled: bool) -> bool {
         if self.last_line.is_empty() {
             self.last_line = current_line.to_vec();
             return true;
         }
 
         let is_ordered = line_cmp(current_line, &self.last_line, self.use_locale) != Ordering::Less;
-        if !is_ordered && !self.has_error {
+        if enabled && !is_ordered && !self.has_error {
             let _ = writeln!(
                 stderr(),
                 "{}",
@@ -140,8 +138,9 @@ impl OrderChecker {
             self.has_error = true;
         }
 
-        self.last_line = current_line.to_vec();
-        is_ordered || !self.check_order
+        self.last_line.clear();
+        self.last_line.extend_from_slice(current_line);
+        !enabled || is_ordered || !self.check_order
     }
 }
 
@@ -187,16 +186,14 @@ fn comm(
     let check_order = opts.get_flag(options::CHECK_ORDER);
     let no_check_order = opts.get_flag(options::NO_CHECK_ORDER);
 
-    // Determine if we should perform order checking
-    let should_check_order = !no_check_order
-        && (check_order
-            || !(paths_refer_to_same_file(filename1.as_os_str(), filename2.as_os_str(), true)
-                || are_files_identical(Path::new(filename1), Path::new(filename2))
-                    .unwrap_or(false)));
+    let should_check_order = !no_check_order;
 
     let use_locale = should_use_locale_collation();
     let mut checker1 = OrderChecker::new(FileNumber::One, check_order, use_locale);
     let mut checker2 = OrderChecker::new(FileNumber::Two, check_order, use_locale);
+    checker1.verify_order(ra, false);
+    checker2.verify_order(rb, false);
+    let mut seen_unpaired = false;
     let mut input_error = false;
 
     while na != 0 || nb != 0 {
@@ -205,12 +202,10 @@ fn comm(
             (_, 0) => Ordering::Less,
             (_, _) => line_cmp(ra, rb, use_locale),
         };
+        seen_unpaired |= ord != Ordering::Equal;
 
         match ord {
             Ordering::Less => {
-                if should_check_order && !checker1.verify_order(ra) {
-                    break;
-                }
                 if !opts.get_flag(options::COLUMN_1) {
                     writer
                         .write_all(ra)
@@ -223,9 +218,6 @@ fn comm(
                 total_col_1 += 1;
             }
             Ordering::Greater => {
-                if should_check_order && !checker2.verify_order(rb) {
-                    break;
-                }
                 if !opts.get_flag(options::COLUMN_2) {
                     write_line_with_delimiter(&mut writer, delim_col_2.as_bytes(), rb)?;
                 }
@@ -236,10 +228,6 @@ fn comm(
                 total_col_2 += 1;
             }
             Ordering::Equal => {
-                if should_check_order && (!checker1.verify_order(ra) || !checker2.verify_order(rb))
-                {
-                    break;
-                }
                 if !opts.get_flag(options::COLUMN_3) {
                     write_line_with_delimiter(&mut writer, delim_col_3.as_bytes(), ra)?;
                 }
@@ -252,6 +240,14 @@ fn comm(
                     .read_line(rb)
                     .map_err_context(|| filename2.maybe_quote().to_string())?;
                 total_col_3 += 1;
+            }
+        }
+        if should_check_order {
+            let enabled = check_order || seen_unpaired;
+            if (ord != Ordering::Greater && na != 0 && !checker1.verify_order(ra, enabled))
+                || (ord != Ordering::Less && nb != 0 && !checker2.verify_order(rb, enabled))
+            {
+                break;
             }
         }
 

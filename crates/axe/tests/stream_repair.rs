@@ -133,3 +133,27 @@ fn comm_repeated_stdin_consumes_records_without_locking_itself() {
         b"a\0\tb\0",
     );
 }
+
+#[test]
+fn comm_default_order_check_depends_on_unpaired_records() {
+    let scratch = Scratch::new();
+    fs::write(scratch.path().join("a"), b"\xff\n\x80").unwrap();
+    assert_success(
+        run(scratch.path(), "comm", &["-", "a"], b"\xff\n\x80"),
+        b"\t\t\xff\n\t\t\x80\n",
+    );
+    let strict = run(
+        scratch.path(),
+        "comm",
+        &["--check-order", "-", "a"],
+        b"\xff\n\x80",
+    );
+    assert_eq!(strict.status.code(), Some(1));
+    assert!(!strict.stderr.is_empty());
+    fs::write(scratch.path().join("a"), b"b\na\n").unwrap();
+    fs::write(scratch.path().join("empty"), b"").unwrap();
+    let unpaired = run(scratch.path(), "comm", &["a", "empty"], b"");
+    assert_eq!(unpaired.status.code(), Some(1));
+    assert_eq!(unpaired.stdout, b"b\na\n");
+    assert!(!unpaired.stderr.is_empty());
+}
