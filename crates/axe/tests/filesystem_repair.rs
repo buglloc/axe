@@ -138,3 +138,14 @@ fn mv_no_clobber_accepts_same_inode_and_directory_aliases() {
         assert_eq!(fs::metadata(scratch.path().join("source/file")).unwrap().ino(), fs::metadata(scratch.path().join("hard")).unwrap().ino());
     }
 }
+
+#[test]
+fn install_refuses_overwriting_its_fresh_destination() {
+    let scratch = Scratch::new("install-duplicate");
+    fs::write(scratch.path().join("source"), b"original").unwrap();
+    fs::create_dir(scratch.path().join("destination")).unwrap();
+    let output = run(scratch.path(), "install", &["source", "source", "destination"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("just-created"));
+    assert_eq!(fs::read(scratch.path().join("destination/source")).unwrap(), b"original");
+}

@@ -11,6 +11,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use rustix::process::{getegid, geteuid};
 #[cfg(all(feature = "selinux", any(target_os = "linux", target_os = "android")))]
 use selinux::SecurityContext;
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fmt::Debug;
 use std::fs::{self, metadata};
@@ -876,6 +877,7 @@ fn copy_files_into_dir(files: &[PathBuf], target_dir: &Path, b: &Behavior) -> UR
     if !target_dir.is_dir() {
         return Err(InstallError::TargetDirIsntDir(target_dir.to_path_buf()).into());
     }
+    let mut installed = HashSet::with_capacity(files.len());
     for sourcepath in files {
         let source_metadata = match metadata_for_source(sourcepath) {
             Ok(metadata) => metadata,
@@ -895,7 +897,23 @@ fn copy_files_into_dir(files: &[PathBuf], target_dir: &Path, b: &Behavior) -> UR
         let filename = sourcepath.components().next_back().unwrap();
         targetpath.push(filename);
 
-        show_if_err!(copy(sourcepath, &targetpath, b));
+        if installed.contains(&targetpath) && b.backup_mode != BackupMode::Numbered {
+            show!(uucore::error::USimpleError::new(
+                1,
+                format!(
+                    "will not overwrite just-created {} with {}",
+                    targetpath.quote(),
+                    sourcepath.quote()
+                ),
+            ));
+            continue;
+        }
+        match copy(sourcepath, &targetpath, b) {
+            Ok(()) => {
+                installed.insert(targetpath);
+            }
+            Err(error) => show!(error),
+        }
     }
     // If the exit code was set, or show! has been called at least once
     // (which sets the exit code as well), function execution will end after
