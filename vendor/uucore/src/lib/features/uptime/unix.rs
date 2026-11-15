@@ -11,7 +11,6 @@
 
 use super::UptimeError;
 use crate::error::UResult;
-use libc::time_t;
 
 /// Safely get macOS boot time using sysctl command
 ///
@@ -21,9 +20,9 @@ use libc::time_t;
 ///
 /// # Returns
 ///
-/// Returns Some(time_t) if successful, None if the call fails.
+/// Returns the boot time in Unix seconds if successful, None if the call fails.
 #[cfg(target_vendor = "apple")]
-fn get_macos_boot_time_sysctl() -> Option<time_t> {
+fn get_macos_boot_time_sysctl() -> Option<i64> {
     use std::process::Command;
 
     // Execute sysctl command to get boot time
@@ -46,7 +45,7 @@ fn get_macos_boot_time_sysctl() -> Option<time_t> {
             if let Some(sec_end) = sec_part.find(',') {
                 let sec_str = &sec_part[..sec_end];
                 if let Ok(boot_time) = sec_str.trim().parse::<i64>() {
-                    return Some(boot_time as time_t);
+                    return Some(boot_time);
                 }
             }
         }
@@ -59,7 +58,7 @@ fn get_macos_boot_time_sysctl() -> Option<time_t> {
 ///
 /// # Arguments
 ///
-/// boot_time: Option<time_t> - Manually specify the boot time, or None to try to get it from the system.
+/// boot_time: Option<i64> - Boot time in Unix seconds, or None to try to get it from the system.
 ///
 /// # Returns
 ///
@@ -71,7 +70,7 @@ fn get_macos_boot_time_sysctl() -> Option<time_t> {
     target_os = "openbsd",
 ))]
 #[allow(clippy::unnecessary_wraps, reason = "needed on some platforms")]
-pub fn get_uptime(_boot_time: Option<time_t>) -> UResult<i64> {
+pub fn get_uptime(_boot_time: Option<i64>) -> UResult<i64> {
     use rustix::time::{ClockId, clock_gettime};
 
     let tp = clock_gettime(ClockId::Boottime);
@@ -83,7 +82,7 @@ pub fn get_uptime(_boot_time: Option<time_t>) -> UResult<i64> {
 ///
 /// # Arguments
 ///
-/// boot_time: Option<time_t> - Manually specify the boot time, or None to try to get it from the system.
+/// boot_time: Option<i64> - Boot time in Unix seconds, or None to try to get it from the system.
 ///
 /// # Returns
 ///
@@ -94,7 +93,7 @@ pub fn get_uptime(_boot_time: Option<time_t>) -> UResult<i64> {
     target_os = "fuchsia",
     target_os = "openbsd",
 )))]
-pub fn get_uptime(boot_time: Option<time_t>) -> UResult<i64> {
+pub fn get_uptime(boot_time: Option<i64>) -> UResult<i64> {
     use crate::utmpx::BOOT_TIME;
     use crate::utmpx::Utmpx;
     use jiff::Timestamp;
@@ -119,7 +118,6 @@ pub fn get_uptime(boot_time: Option<time_t>) -> UResult<i64> {
             .filter(|r| r.record_type() == BOOT_TIME)
             .map(|r| r.login_time().unix_timestamp())
             .find(|&ts| ts > 0)
-            .map(|ts| ts as time_t)
     });
 
     // macOS-specific fallback: use sysctl kern.boottime when utmpx did not provide BOOT_TIME
@@ -142,12 +140,8 @@ pub fn get_uptime(boot_time: Option<time_t>) -> UResult<i64> {
         t
     };
 
-    if let Some(t) = derived_boot_time {
+    if let Some(boottime) = derived_boot_time {
         let now = Timestamp::now().as_second();
-        #[cfg(target_pointer_width = "64")]
-        let boottime: i64 = t;
-        #[cfg(not(target_pointer_width = "64"))]
-        let boottime: i64 = t.into();
         if now < boottime {
             Err(UptimeError::BootTime)?;
         }
