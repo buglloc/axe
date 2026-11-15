@@ -135,3 +135,35 @@ fn base32_short_padded_quanta_do_not_emit_uncommitted_bytes() {
         assert_eq!(output.stdout, b"a");
     }
 }
+
+#[test]
+fn wide_strings_split_at_non_ascii_units_in_the_c_locale() {
+    let scratch = Scratch::new("strings-wide");
+    for (encoding, width, big_endian) in
+        [("b", 2, true), ("l", 2, false), ("B", 4, true), ("L", 4, false)]
+    {
+        for alignment in 0..width {
+            let mut input = vec![0; alignment];
+            for byte in b"hello\xe9world\0" {
+                let value = u32::from(*byte);
+                if big_endian {
+                    input.extend_from_slice(&value.to_be_bytes()[4 - width..]);
+                } else {
+                    input.extend_from_slice(&value.to_le_bytes()[..width]);
+                }
+            }
+            let output = run(
+                scratch.path(),
+                "strings",
+                &["-e", encoding, "-n3", "-td", "-s", "|"],
+                &input,
+            );
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(
+                output.stdout,
+                format!("{alignment:7} hello|{:7} world|", alignment + 6 * width).as_bytes(),
+                "{encoding} alignment {alignment}: {output:?}"
+            );
+        }
+    }
+}

@@ -774,7 +774,7 @@ fn scan_wide(
         };
         let display = u8::try_from(value)
             .ok()
-            .filter(|byte| is_display_byte(*byte, true, options.include_all_whitespace));
+            .filter(|byte| is_display_byte(*byte, false, options.include_all_whitespace));
 
         if let Some(byte) = display {
             if run.is_empty() {
