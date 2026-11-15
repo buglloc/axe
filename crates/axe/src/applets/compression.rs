@@ -3,10 +3,10 @@ use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::mem::MaybeUninit;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::atomic::AtomicBool;
@@ -46,7 +46,7 @@ impl Format {
             Self::Bzip2 => "[-cdfktqv] [-1..-9] [FILE ...]",
             Self::Xz => "[-cdfkltqvr] [-T THREADS] [-S SUF] [-1..-9] [FILE ...]",
             Self::Zstd => {
-                "[-cdfktqv] [-o FILE] [-T THREADS] [-1..-19] [--ultra -20..-22] [--fast[=N]] [--rm] [FILE ...]"
+                "[-cdfkltqv] [-o FILE] [-T THREADS] [-1..-19] [--ultra -20..-22] [--fast[=N]] [--rm] [FILE ...]"
             }
         }
     }
@@ -102,6 +102,7 @@ struct Options {
     list: bool,
     quiet: bool,
     verbose: bool,
+    zstd_display_level: i32,
     recursive: bool,
     level: i32,
     threads: u32,
@@ -133,6 +134,7 @@ impl Options {
             list: false,
             quiet: false,
             verbose: false,
+            zstd_display_level: 2,
             recursive: false,
             level: match format {
                 Format::Bzip2 => 9,
@@ -232,8 +234,8 @@ impl Options {
                 self.test = true;
                 self.decompress = true;
             }
-            "--quiet" => self.quiet = true,
-            "--verbose" => self.verbose = true,
+            "--quiet" => self.set_quiet(),
+            "--verbose" => self.set_verbose(),
             _ => return self.codec_option(text, args),
         }
         Ok(true)
@@ -261,6 +263,7 @@ impl Options {
         }
         if matches!(self.format, Format::Zstd) {
             match text {
+                "--list" => self.list = true,
                 "--rm" => self.keep = false,
                 "--ultra" => self.ultra = true,
                 "--fast" => self.level = -1,
@@ -364,9 +367,9 @@ impl Options {
             (Format::Bzip2 | Format::Xz | Format::Zstd, 'z') => self.decompress = false,
             (Format::Bzip2 | Format::Xz, 'q') => self.quiet = true,
             (Format::Bzip2 | Format::Xz, 'v') => self.verbose = true,
-            (Format::Zstd, 'q') => self.quiet = true,
-            (Format::Zstd, 'v') => self.verbose = true,
-            (Format::Xz, 'l') => self.list = true,
+            (Format::Zstd, 'q') => self.set_quiet(),
+            (Format::Zstd, 'v') => self.set_verbose(),
+            (Format::Xz | Format::Zstd, 'l') => self.list = true,
             (Format::Gzip | Format::Bzip2 | Format::Xz, '1'..='9') => {
                 self.level = flag.to_digit(10).expect("digit") as i32;
             }
@@ -374,6 +377,20 @@ impl Options {
         }
 
         Ok(())
+    }
+
+    fn set_quiet(&mut self) {
+        self.quiet = true;
+        if matches!(self.format, Format::Zstd) {
+            self.zstd_display_level = self.zstd_display_level.saturating_sub(1);
+        }
+    }
+
+    fn set_verbose(&mut self) {
+        self.verbose = true;
+        if matches!(self.format, Format::Zstd) {
+            self.zstd_display_level = self.zstd_display_level.saturating_add(1);
+        }
     }
 
     fn run(self) -> io::Result<i32> {
@@ -940,6 +957,9 @@ impl Options {
     }
 
     fn list_contents(&self) -> io::Result<i32> {
+        if matches!(self.format, Format::Zstd) {
+            return self.list_zstd_contents();
+        }
         let mut header_printed = false;
         let mut totals = ListingTotals::default();
         let mut status = 0;
@@ -1026,6 +1046,384 @@ impl Options {
         }
         totals.files += 1;
         Ok(0)
+    }
+
+    fn list_zstd_contents(&self) -> io::Result<i32> {
+        let level = self.zstd_display_level;
+        let mut output = io::stdout().lock();
+        let mut errors = io::stderr().lock();
+        if self.files.is_empty() || self.files.iter().any(|file| file == "-") {
+            if level >= 1 {
+                writeln!(
+                    errors,
+                    "zstd: --list does not support reading from standard input "
+                )?;
+                if self.files.is_empty() {
+                    writeln!(errors, "No files given ")?;
+                }
+            }
+            return Ok(1);
+        }
+        if level <= 2 {
+            writeln!(
+                output,
+                "Frames  Skips  Compressed  Uncompressed  Ratio  Check  Filename"
+            )?;
+        }
+        let mut total = ZstdListing {
+            uses_check: true,
+            ..ZstdListing::default()
+        };
+        let mut status = 0;
+        for name in &self.files {
+            let path = Path::new(name);
+            if !fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
+                if level >= 1 {
+                    write_zstd_name(&mut errors, "Error : ", name, " is not a file \n")?;
+                }
+                if level > 2 {
+                    writeln!(output)?;
+                }
+                status = 1;
+                continue;
+            }
+            let mut file = match File::open(path) {
+                Ok(file) => file,
+                Err(_) => {
+                    if level >= 1 {
+                        write_zstd_name(
+                            &mut errors,
+                            "Error: could not open source file ",
+                            name,
+                            " \n",
+                        )?;
+                    }
+                    status = 1;
+                    continue;
+                }
+            };
+            let mut listing = ZstdListing {
+                compressed: file.metadata()?.len(),
+                files: 1,
+                ..ZstdListing::default()
+            };
+            let scan = listing.scan(&mut file)?;
+            match scan {
+                ZstdScan::Complete => {}
+                ZstdScan::FrameError(message) => {
+                    if level >= 1 {
+                        writeln!(errors, "{message} ")?;
+                        write_zstd_name(&mut errors, "Error while parsing \"", name, "\" \n")?;
+                    }
+                    status = 1;
+                }
+                ZstdScan::NotZstd(incomplete) => {
+                    if incomplete && level >= 1 {
+                        writeln!(errors, "Error: reached end of file with incomplete frame ")?;
+                    }
+                    write_zstd_name(&mut output, "File \"", name, "\" not compressed by zstd \n")?;
+                    if level > 2 {
+                        writeln!(output)?;
+                    }
+                    status = 1;
+                    continue;
+                }
+                ZstdScan::Truncated(position) => {
+                    if level >= 1 {
+                        writeln!(
+                            errors,
+                            "Error: seeked to position {position}, which is beyond file size of {}\n ",
+                            listing.compressed
+                        )?;
+                    }
+                    write_zstd_name(&mut output, "File \"", name, "\" is truncated \n")?;
+                    if level > 2 {
+                        writeln!(output)?;
+                    }
+                    status = 1;
+                    continue;
+                }
+            }
+            if level > 2 {
+                listing.print_verbose(&mut output, name, level)?;
+            } else {
+                listing.print_row(&mut output, name, false)?;
+            }
+            total.add(&listing)?;
+        }
+        if self.files.len() > 1 && level <= 2 {
+            writeln!(output, "----------------------------------------------------------------- ")?;
+            total.print_row(
+                &mut output,
+                OsStr::new(&format!("{} files", total.files)),
+                true,
+            )?;
+        }
+        Ok(status)
+    }
+}
+
+#[derive(Default)]
+struct ZstdListing {
+    frames: u64,
+    skips: u64,
+    compressed: u64,
+    plain: u64,
+    unknown_size: bool,
+    uses_check: bool,
+    checksum: [u8; 4],
+    window: u64,
+    dict_id: u32,
+    files: u64,
+}
+
+enum ZstdScan {
+    Complete,
+    NotZstd(bool),
+    FrameError(&'static str),
+    Truncated(u64),
+}
+
+impl ZstdListing {
+    fn scan(&mut self, file: &mut File) -> io::Result<ZstdScan> {
+        loop {
+            let start = file.stream_position()?;
+            let mut header = [0_u8; 18];
+            let read = read_prefix(file, &mut header)?;
+            if read < 5 {
+                return Ok(if read == 0 && self.compressed > 0 {
+                    if start == self.compressed {
+                        ZstdScan::Complete
+                    } else {
+                        ZstdScan::Truncated(start)
+                    }
+                } else {
+                    ZstdScan::NotZstd(true)
+                });
+            }
+            let magic = u32::from_le_bytes(header[..4].try_into().expect("four-byte magic"));
+            if magic & 0xffff_fff0 == 0x184d_2a50 {
+                if read < 8 {
+                    return Ok(ZstdScan::FrameError(
+                        "Error: incomplete skippable frame header",
+                    ));
+                }
+                let size = u32::from_le_bytes(header[4..8].try_into().expect("four-byte size"));
+                file.seek(SeekFrom::Start(start + 8 + u64::from(size)))?;
+                self.skips += 1;
+                continue;
+            }
+            if magic != 0xfd2f_b528 {
+                return Ok(ZstdScan::NotZstd(false));
+            }
+            let content_size = zstd::zstd_safe::get_frame_content_size(&header[..read]);
+            match &content_size {
+                Ok(Some(size)) => {
+                    self.plain = self.plain.checked_add(*size).ok_or_else(|| {
+                        invalid("zstd decompressed size exceeds the supported range")
+                    })?;
+                }
+                _ => self.unknown_size = true,
+            }
+            if content_size.is_err() {
+                return Ok(ZstdScan::FrameError("Error: could not decode frame header"));
+            }
+            let descriptor = header[4];
+            let single_segment = descriptor & 0x20 != 0;
+            let dict_bytes = [0, 1, 2, 4][usize::from(descriptor & 3)];
+            let size_bytes = match descriptor >> 6 {
+                0 => usize::from(single_segment),
+                1 => 2,
+                2 => 4,
+                _ => 8,
+            };
+            let header_size = 5 + usize::from(!single_segment) + dict_bytes + size_bytes;
+            self.window = if single_segment {
+                content_size.ok().flatten().unwrap_or(0)
+            } else {
+                let base = 1_u64 << (10 + (header[5] >> 3));
+                base + (base >> 3) * u64::from(header[5] & 7)
+            };
+            let dict_id = zstd::zstd_safe::get_dict_id_from_frame(&header[..read])
+                .map_or(0, NonZeroU32::get);
+            self.dict_id = if self.dict_id != 0 && self.dict_id != dict_id {
+                0
+            } else {
+                dict_id
+            };
+            file.seek(SeekFrom::Start(start + header_size as u64))?;
+            // Listing inspects framing only: block payloads and checksums are not decoded.
+            loop {
+                let mut block = [0_u8; 3];
+                if read_prefix(file, &mut block)? != block.len() {
+                    return Ok(ZstdScan::FrameError("Error while reading block header"));
+                }
+                let block = u32::from_le_bytes([block[0], block[1], block[2], 0]);
+                let size = match (block >> 1) & 3 {
+                    1 => 1,
+                    3 => return Ok(ZstdScan::FrameError("Error: unsupported block type")),
+                    _ => block >> 3,
+                };
+                file.seek(SeekFrom::Current(i64::from(size)))?;
+                if block & 1 != 0 {
+                    break;
+                }
+            }
+            if descriptor & 4 != 0 {
+                self.uses_check = true;
+                if read_prefix(file, &mut self.checksum)? != self.checksum.len() {
+                    return Ok(ZstdScan::FrameError("Error: could not read checksum"));
+                }
+            }
+            self.frames += 1;
+        }
+    }
+
+    fn add(&mut self, other: &Self) -> io::Result<()> {
+        self.plain = self
+            .plain
+            .checked_add(other.plain)
+            .ok_or_else(|| invalid("zstd decompressed size exceeds the supported range"))?;
+        self.compressed = self
+            .compressed
+            .checked_add(other.compressed)
+            .ok_or_else(|| invalid("zstd compressed size exceeds the supported range"))?;
+        self.frames += other.frames;
+        self.skips += other.skips;
+        self.files += other.files;
+        self.unknown_size |= other.unknown_size;
+        self.uses_check &= other.uses_check;
+        Ok(())
+    }
+
+    fn ratio(&self) -> f64 {
+        if self.compressed == 0 {
+            0.0
+        } else {
+            self.plain as f64 / self.compressed as f64
+        }
+    }
+
+    fn print_row(&self, output: &mut impl Write, name: &OsStr, total: bool) -> io::Result<()> {
+        write!(
+            output,
+            "{:>6}  {:>5}  {:>10}",
+            self.frames + self.skips,
+            self.skips,
+            ZstdSize(self.compressed, 2, true)
+        )?;
+        if self.unknown_size {
+            write!(output, "                       ")?;
+        } else {
+            write!(
+                output,
+                "  {:>12}  {:>5.3}  ",
+                ZstdSize(self.plain, 2, true),
+                self.ratio()
+            )?;
+        }
+        let check = if self.uses_check {
+            "XXH64"
+        } else if total {
+            ""
+        } else {
+            "None"
+        };
+        write!(output, "{check:>5}  ")?;
+        write_zstd_name(output, "", name, "\n")
+    }
+
+    fn print_verbose(
+        &self,
+        output: &mut impl Write,
+        name: &OsStr,
+        level: i32,
+    ) -> io::Result<()> {
+        write_zstd_name(output, "", name, " \n")?;
+        writeln!(output, "# Zstandard Frames: {}", self.frames)?;
+        if self.skips != 0 {
+            writeln!(output, "# Skippable Frames: {}", self.skips)?;
+        }
+        writeln!(output, "DictID: {}", self.dict_id)?;
+        writeln!(
+            output,
+            "Window Size: {} ({} B)",
+            ZstdSize(self.window, level, false),
+            self.window
+        )?;
+        writeln!(
+            output,
+            "Compressed Size: {} ({} B)",
+            ZstdSize(self.compressed, level, false),
+            self.compressed
+        )?;
+        if !self.unknown_size {
+            writeln!(
+                output,
+                "Decompressed Size: {} ({} B)",
+                ZstdSize(self.plain, level, false),
+                self.plain
+            )?;
+            writeln!(output, "Ratio: {:.4}", self.ratio())?;
+        }
+        write!(
+            output,
+            "Check: {}",
+            if self.uses_check { "XXH64" } else { "None" }
+        )?;
+        if self.uses_check && self.frames == 1 {
+            write!(output, " {:08x}", u32::from_le_bytes(self.checksum))?;
+        }
+        writeln!(output, "\n")
+    }
+}
+
+fn write_zstd_name(
+    output: &mut impl Write,
+    prefix: &str,
+    name: &OsStr,
+    suffix: &str,
+) -> io::Result<()> {
+    output.write_all(prefix.as_bytes())?;
+    output.write_all(name.as_encoded_bytes())?;
+    output.write_all(suffix.as_bytes())
+}
+
+struct ZstdSize(u64, i32, bool);
+
+impl std::fmt::Display for ZstdSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (value, suffix, precision) = if self.1 > 3 {
+            if self.0 >= 1 << 53 {
+                (self.0 as f64 / (1_u64 << 20) as f64, " MiB", 2)
+            } else {
+                (self.0 as f64, " B", 0)
+            }
+        } else {
+            let unit = if self.0 == 0 {
+                0
+            } else {
+                ((63 - self.0.leading_zeros()) / 10).min(6)
+            };
+            let value = self.0 as f64 / (1_u64 << (unit * 10)) as f64;
+            let precision = if value >= 100.0 || unit == 0 {
+                0
+            } else if value >= 10.0 {
+                1
+            } else if value > 1.0 {
+                2
+            } else {
+                3
+            };
+            (
+                value,
+                [" B", " KiB", " MiB", " GiB", " TiB", " PiB", " EiB"][unit as usize],
+                precision,
+            )
+        };
+        let suffix_width = if self.2 { 4 } else { suffix.len() };
+        let width = f.width().unwrap_or(0).saturating_sub(suffix_width);
+        write!(f, "{value:>width$.precision$}{suffix:>suffix_width$}")
     }
 }
 
