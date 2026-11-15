@@ -265,3 +265,32 @@ fn jq_arithmetic_rounds_large_integer_operands_before_computing() {
         b"0\n",
     );
 }
+
+#[test]
+fn jq_unbounded_slice_is_a_slice_not_iteration() {
+    let scratch = Scratch::new();
+    expect_output(
+        scratch.run(
+            "jq",
+            &["-c", ".[:]"],
+            "[1,2]\n[]\n\"猫a\"\nnull\n".as_bytes(),
+        ),
+        0,
+        "[1,2]\n[]\n\"猫a\"\nnull\n".as_bytes(),
+    );
+    expect_output(
+        scratch.run("jq", &["-c", "[.[:], .[]]"], b"[1,2]\n"),
+        0,
+        b"[[1,2],1,2]\n",
+    );
+    expect_output(
+        scratch.run("jq", &["-c", ".[:] |= reverse"], b"[1,2]\n"),
+        0,
+        b"[2,1]\n",
+    );
+    expect_output(
+        scratch.run("jq", &["-c", "try .[:] catch \"bad\""], b"{}\n"),
+        0,
+        b"\"bad\"\n",
+    );
+}

@@ -82,6 +82,7 @@ webpki-root-certs = "1.0.12"
 zstd = "0.14"
 
 [patch.crates-io]
+jaq-core = { path = "vendor/jaq-core" }
 jaq-json = { path = "vendor/jaq-json" }
 jaq-std = { path = "vendor/jaq-std" }
 brush-shell = { path = "vendor/brush-shell" }

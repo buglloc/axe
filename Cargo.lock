@@ -3711,8 +3711,6 @@ dependencies = [
 [[package]]
 name = "jaq-core"
 version = "3.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "723ad9253808e95daa2d10ad5b258ac4e65c07003e223e08d1d8734c2942d606"
 dependencies = [
  "dyn-clone",
  "once_cell",
