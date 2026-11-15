@@ -967,7 +967,7 @@ fn perform_backup(from: &Path, to: &Path, b: &Behavior) -> UResult<Option<PathBu
         );
     }
 
-    if to.exists() {
+    if to.symlink_metadata().is_ok() {
         if b.verbose {
             writeln!(
                 stdout(),

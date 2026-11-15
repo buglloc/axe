@@ -111,3 +111,16 @@ fn install_checks_entry_identity_before_backing_up() {
         }
     }
 }
+
+#[test]
+fn install_backs_up_dangling_and_cyclic_symlink_entries() {
+    for target in ["missing", "destination"] {
+        let scratch = Scratch::new("install-backup");
+        fs::write(scratch.path().join("source"), b"original").unwrap();
+        symlink(target, scratch.path().join("destination")).unwrap();
+        success(&run(scratch.path(), "install", &["-b", "source", "destination"]));
+        assert_eq!(fs::read(scratch.path().join("source")).unwrap(), b"original");
+        assert_eq!(fs::read(scratch.path().join("destination")).unwrap(), b"original");
+        assert_eq!(fs::read_link(scratch.path().join("destination~")).unwrap(), Path::new(target));
+    }
+}

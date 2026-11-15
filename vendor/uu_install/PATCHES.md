@@ -14,6 +14,7 @@ Source: the `uu_install` 0.12.0 crate from crates.io, upstream revision
   omit upstream workspace benchmark/lint wiring; AXE owns dependency resolution.
 - Check source/destination entry identity before backups, including directory
   aliases, while allowing replacement of a symlink pointing to the source.
+- Back up dangling and cyclic destination symlinks as existing entries.
 
 Upstreamability: descriptor-pinned directory creation is intended for upstream;
 no upstream issue or commit is recorded in AXE.
