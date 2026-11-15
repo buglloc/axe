@@ -33,6 +33,7 @@ hickory-resolver.workspace = true
 object.workspace = true
 regex.workspace = true
 goblin.workspace = true
+onig = { version = "6.5.3", default-features = false }
 jaq-all.workspace = true
 memmap2 = "0.9"
 sed-rs = { version = "2.0.0" }

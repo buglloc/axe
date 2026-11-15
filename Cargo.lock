@@ -395,6 +395,7 @@ dependencies = [
  "netlink-packet-route",
  "nix 0.32.0",
  "object 0.41.0",
+ "onig",
  "procutils-free",
  "procutils-hugetop",
  "procutils-killall",
