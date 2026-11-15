@@ -204,3 +204,21 @@ fn expand_preserves_logical_line_state_across_files_and_chunks() {
     expected.extend_from_slice(b"\tend\n        z");
     assert_success(run(scratch.path(), "expand", &["-i"], &input), &expected);
 }
+
+#[test]
+fn expand_accepts_extended_tab_intervals_smaller_than_fixed_stops() {
+    let scratch = Scratch::new();
+    for (tabs, expected) in [
+        ("4,+3", &b"          x\n"[..]),
+        ("4,/3", &b"         x\n"[..]),
+        ("2,4,+1", &b"     x\n"[..]),
+    ] {
+        assert_success(
+            run(scratch.path(), "expand", &["-t", tabs], b"\t\t\tx\n"),
+            expected,
+        );
+    }
+    let invalid = run(scratch.path(), "expand", &["-t4,3"], b"");
+    assert_eq!(invalid.status.code(), Some(1));
+    assert!(!invalid.stderr.is_empty());
+}

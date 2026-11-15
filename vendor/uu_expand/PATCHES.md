@@ -12,6 +12,8 @@ Source: the `uu_expand` 0.12.0 crate from crates.io, upstream revision
   shortcuts; a bare dash is not a tab-size option.
 - Carry the current display column and initial-blank state across read chunks
   and file operands; only a newline begins a new logical line.
+- Validate ascending order only for absolute tab stops; a trailing `+N` or `/N`
+  specifies an interval and may be smaller than the last absolute stop.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
 
