@@ -74,6 +74,7 @@ version = "0.2.0"
 version = "0.12.0"
 features = [
     "hardware",
+    "i18n-charmap",
     "parser",
     "pipes",
     "quoting-style",

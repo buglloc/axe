@@ -32,13 +32,14 @@ use uucore::{
     error::{FromIo, UError, UResult},
     format_usage,
     hardware::{HardwareFeature, HasHardwareFeatures as _, SimdPolicy},
+    i18n::charmap::{Encoding, locale_encoding},
     parser::shortcut_value_parser::ShortcutValueParser,
     quoting_style::{self, QuotingStyle},
     show,
 };
 
 use crate::{
-    count_fast::{count_bytes_chars_and_lines_fast, count_bytes_fast},
+    count_fast::{count_bytes_and_lines_fast, count_bytes_fast},
     countable::WordCountable,
     word_count::WordCount,
 };
@@ -469,9 +470,10 @@ fn word_count_from_reader<T: WordCountable>(
     mut reader: T,
     settings: &Settings,
 ) -> (WordCount, Option<io::Error>) {
-    match (
-        settings.show_bytes,
-        settings.show_chars,
+    let single_byte = locale_encoding() == Encoding::SingleByte;
+    let (mut total, error) = match (
+        settings.show_bytes || (settings.show_chars && single_byte),
+        settings.show_chars && !single_byte,
         settings.show_lines,
         settings.show_max_line_length,
         settings.show_words,
@@ -492,30 +494,29 @@ fn word_count_from_reader<T: WordCountable>(
             )
         }
 
-        // Fast paths that can be computed without Unicode decoding.
         // show_lines
         (false, false, true, false, false) => {
-            count_bytes_chars_and_lines_fast::<_, false, false, true>(&mut reader)
+            count_bytes_and_lines_fast::<_, false, true>(&mut reader)
         }
         // show_chars
         (false, true, false, false, false) => {
-            count_bytes_chars_and_lines_fast::<_, false, true, false>(&mut reader)
+            word_count_from_reader_specialized::<_, true, false, false, false>(reader)
         }
         // show_chars, show_lines
         (false, true, true, false, false) => {
-            count_bytes_chars_and_lines_fast::<_, false, true, true>(&mut reader)
+            word_count_from_reader_specialized::<_, true, true, false, false>(reader)
         }
         // show_bytes, show_lines
         (true, false, true, false, false) => {
-            count_bytes_chars_and_lines_fast::<_, true, false, true>(&mut reader)
+            count_bytes_and_lines_fast::<_, true, true>(&mut reader)
         }
         // show_bytes, show_chars
         (true, true, false, false, false) => {
-            count_bytes_chars_and_lines_fast::<_, true, true, false>(&mut reader)
+            word_count_from_reader_specialized::<_, true, false, false, false>(reader)
         }
         // show_bytes, show_chars, show_lines
         (true, true, true, false, false) => {
-            count_bytes_chars_and_lines_fast::<_, true, true, true>(&mut reader)
+            word_count_from_reader_specialized::<_, true, true, false, false>(reader)
         }
         // show_words
         (_, false, false, false, true) => {
@@ -565,7 +566,11 @@ fn word_count_from_reader<T: WordCountable>(
         (_, true, true, true, true) => {
             word_count_from_reader_specialized::<_, true, true, true, true>(reader)
         }
+    };
+    if settings.show_chars && single_byte {
+        total.chars = total.bytes;
     }
+    (total, error)
 }
 
 fn process_chunk<
@@ -579,10 +584,21 @@ fn process_chunk<
     current_len: &mut usize,
     in_word: &mut bool,
     is_posixly_correct: bool,
+    single_byte: bool,
 ) {
+    if !SHOW_WORDS && !SHOW_MAX_LINE_LENGTH {
+        if SHOW_CHARS {
+            total.chars += text.chars().count();
+        }
+        if SHOW_LINES {
+            total.lines += bytecount::naive_count(text.as_bytes(), b'\n');
+        }
+        total.bytes += text.len();
+        return;
+    }
     for ch in text.chars() {
         if SHOW_WORDS {
-            let is_space = if is_posixly_correct {
+            let is_space = if is_posixly_correct || single_byte {
                 matches!(ch, '\t'..='\r' | ' ')
             } else {
                 ch.is_whitespace()
@@ -607,7 +623,9 @@ fn process_chunk<
                     *current_len += 8;
                 }
                 _ => {
-                    *current_len += ch.width().unwrap_or(0);
+                    if !single_byte || ch.is_ascii() {
+                        *current_len += ch.width().unwrap_or(0);
+                    }
                 }
             }
         }
@@ -655,6 +673,7 @@ fn word_count_from_reader_specialized<
     let mut in_word = false;
     let mut current_len = 0;
     let is_posixly_correct = *IS_POSIXLY_CORRECT;
+    let single_byte = locale_encoding() == Encoding::SingleByte;
     while let Some(chunk) = reader.next_strict() {
         match chunk {
             Ok(text) => {
@@ -664,6 +683,7 @@ fn word_count_from_reader_specialized<
                     &mut current_len,
                     &mut in_word,
                     is_posixly_correct,
+                    single_byte,
                 );
             }
             Err(e) => {

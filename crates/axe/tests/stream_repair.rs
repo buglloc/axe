@@ -1,7 +1,10 @@
 #![cfg(unix)]
 
+use std::ffi::CString;
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -305,4 +308,89 @@ fn paste_serial_keeps_output_around_missing_operands() {
         run(scratch.path(), "paste", &["-s", "-d|:"], &input),
         &expected,
     );
+}
+
+#[test]
+fn wc_character_counts_follow_locale_not_other_selected_counts() {
+    let scratch = Scratch::new();
+    let input = b"\xff\x80a\n\xfe\nb\xff";
+    fs::write(scratch.path().join("input"), input).unwrap();
+    for (locale, chars) in [("C", 8), ("C.UTF-8", 4)] {
+        assert_success(
+            run_locale(scratch.path(), "wc", &["-m"], input, locale),
+            format!("{chars}\n").as_bytes(),
+        );
+        for args in [&["-lwmcL"][..], &["-lwmcL", "input"][..]] {
+            let output = run_locale(scratch.path(), "wc", args, input, locale);
+            assert_eq!(output.status.code(), Some(0));
+            assert!(output.stderr.is_empty());
+            let text = std::str::from_utf8(&output.stdout).unwrap();
+            let counts: Vec<usize> = text
+                .split_whitespace()
+                .take(5)
+                .map(|count| count.parse().unwrap())
+                .collect();
+            assert_eq!(counts, [2, 3, chars, 8, 1]);
+        }
+    }
+    let mut boundary = vec![b'a'; 8191];
+    boundary.extend_from_slice(b"\xc3\xa9\xff\xe2");
+    fs::write(scratch.path().join("input"), &boundary).unwrap();
+    for (locale, chars) in [("C", 8195), ("C.UTF-8", 8192)] {
+        assert_success(
+            run_locale(scratch.path(), "wc", &["-m", "input"], b"", locale),
+            format!("{chars} input\n").as_bytes(),
+        );
+    }
+}
+
+#[test]
+fn wc_character_counts_match_on_fifo_and_descriptor_inputs() {
+    let scratch = Scratch::new();
+    let fifo = scratch.path().join("fifo");
+    let c_path = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: c_path is NUL-terminated and names a new path in our scratch directory.
+    assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+    let input = b"\xff\x80a\n\xfe\nb\xff";
+    for (locale, chars) in [("C", 8), ("C.UTF-8", 4)] {
+        let child = command(scratch.path(), "wc", &["-m", "fifo"], locale)
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let output = std::thread::scope(|scope| {
+            let writer = scope.spawn(|| {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let mut writer = loop {
+                    match fs::OpenOptions::new()
+                        .write(true)
+                        .custom_flags(libc::O_NONBLOCK)
+                        .open(&fifo)
+                    {
+                        Ok(writer) => break writer,
+                        Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
+                            assert!(Instant::now() < deadline, "FIFO reader did not open");
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("open FIFO writer: {error}"),
+                    }
+                };
+                writer.write_all(input).unwrap();
+            });
+            let output = finish(child);
+            writer.join().unwrap();
+            output
+        });
+        assert_success(output, format!("{chars} fifo\n").as_bytes());
+        #[cfg(target_os = "linux")]
+        assert_success(
+            run_locale(
+                scratch.path(),
+                "wc",
+                &["-m", "/proc/self/fd/0"],
+                input,
+                locale,
+            ),
+            format!("{chars} /proc/self/fd/0\n").as_bytes(),
+        );
+    }
 }

@@ -177,19 +177,8 @@ impl Default for AlignedBuffer {
     }
 }
 
-/// Returns a [`WordCount`] that counts the number of bytes, lines, and/or the number of Unicode characters encoded in UTF-8 read via a Reader.
-///
-/// This corresponds to the `-c`, `-l` and `-m` command line flags to wc.
-///
-/// # Arguments
-///
-/// * `R` - A Reader from which the UTF-8 stream will be read.
-pub(crate) fn count_bytes_chars_and_lines_fast<
-    R: Read,
-    const COUNT_BYTES: bool,
-    const COUNT_CHARS: bool,
-    const COUNT_LINES: bool,
->(
+/// Count bytes and newlines without character decoding.
+pub(crate) fn count_bytes_and_lines_fast<R: Read, const COUNT_BYTES: bool, const COUNT_LINES: bool>(
     handle: &mut R,
 ) -> (WordCount, Option<io::Error>) {
     let mut total = WordCount::default();
@@ -202,13 +191,6 @@ pub(crate) fn count_bytes_chars_and_lines_fast<
             Ok(n) => {
                 if COUNT_BYTES {
                     total.bytes += n;
-                }
-                if COUNT_CHARS {
-                    total.chars += if simd_allowed {
-                        bytecount::num_chars(&buf[..n])
-                    } else {
-                        bytecount::naive_num_chars(&buf[..n])
-                    };
                 }
                 if COUNT_LINES {
                     total.lines += if simd_allowed {
