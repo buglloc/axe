@@ -68,6 +68,7 @@
                 url = "https://github.com/rust-cross/cargo-zigbuild/commit/110abf59ba07cb84ed71b31c8cd81eefdc37bcec.patch";
                 hash = "sha256-CTmasj5u7EqWuJaZKbuxP/Vq4IYJJZKpHMPqa+EWM80=";
               })
+              ./nix/patches/cargo-zigbuild-frameworks.patch
             ];
           postPatch =
             (old.postPatch or "")

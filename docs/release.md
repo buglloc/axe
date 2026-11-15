@@ -44,6 +44,8 @@ just release-publish
 
 `release-publish` checks formatting, the project and Store inventory, Clippy, and smoke tests. It builds `axe`, `axe-relay`, and `vzik` for all three supported targets, checks the runnable x86_64 `axe` binary's version, commit, and `oss` edition, generates `registry.json`, and stages the complete release. Existing staged assets are reused rather than rebuilt.
 
+Darwin builds use the development shell's patched `cargo-zigbuild` to deduplicate framework linker arguments. Repeated framework loads can make macOS `dyld` abort before the program starts. Rebuild affected binaries with `just build-darwin-arm64`; copying or re-signing an existing binary does not fix its load commands.
+
 The optional local preflight is still available when the publisher wants to test both Store publication phases without touching remote systems:
 
 ```bash

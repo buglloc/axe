@@ -1,0 +1,70 @@
+diff --git a/src/zig/linker_args.rs b/src/zig/linker_args.rs
+--- a/src/zig/linker_args.rs
++++ b/src/zig/linker_args.rs
+@@ -38,20 +38,30 @@
+-/// Deduplicate `-l` arguments for Apple targets, keeping the first occurrence.
++/// Deduplicate `-l` and `-framework` arguments for Apple targets, keeping the first occurrence.
+ ///
+ /// ld64 ignores duplicate libraries, but Zig's Mach-O linker (since 0.14) emits
+-/// one `LC_LOAD_DYLIB` load command per `-l` flag, and newer macOS dyld refuses
++/// one `LC_LOAD_DYLIB` load command per library flag, and newer macOS dyld refuses
+ /// to load binaries with duplicate linked dylibs.
+ /// See https://github.com/rust-cross/cargo-zigbuild/issues/457
+ pub(crate) fn dedup_apple_link_libs(args: Vec<String>) -> Vec<String> {
+     let mut seen = std::collections::HashSet::new();
+-    args.into_iter()
+-        .filter(|arg| {
+-            if arg.starts_with("-l") && arg.len() > 2 {
+-                seen.insert(arg.clone())
+-            } else {
+-                true
++    let mut frameworks = std::collections::HashSet::new();
++    let mut result = Vec::with_capacity(args.len());
++    let mut args = args.into_iter();
++    while let Some(arg) = args.next() {
++        if arg == "-framework" {
++            if let Some(name) = args.next() {
++                if frameworks.insert(name.clone()) {
++                    result.push(arg);
++                    result.push(name);
++                }
++            } else {
++                // Preserve a missing operand so the compiler reports it.
++                result.push(arg);
+             }
+-        })
+-        .collect()
++        } else if !arg.starts_with("-l") || arg.len() <= 2 || seen.insert(arg.clone()) {
++            result.push(arg);
++        }
++    }
++    result
+ }
+ 
+ pub(crate) fn filter_linker_arg(
+@@ -656,8 +666,14 @@
+                 "-lobjc",
+                 "-framework",
+                 "AppKit",
++                "-framework",
++                "CoreFoundation",
+                 "-lobjc",
+                 "-liconv",
++                "-framework",
++                "AppKit",
++                "-framework",
++                "CoreFoundation",
+                 "-lobjc",
+                 "main.o",
+             ],
+@@ -669,1 +685,9 @@
+-            vec!["-lobjc", "-framework", "AppKit", "-liconv", "main.o"]
++            vec![
++                "-lobjc",
++                "-framework",
++                "AppKit",
++                "-framework",
++                "CoreFoundation",
++                "-liconv",
++                "main.o"
++            ]
