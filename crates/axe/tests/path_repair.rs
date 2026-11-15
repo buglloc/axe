@@ -171,18 +171,37 @@ fn xargs_default_mode_truncates_nul_fields_but_zero_mode_keeps_arguments() {
 }
 
 #[test]
-fn forced_recursive_rm_ignores_a_trailing_slash_symlink_without_following_it() {
-    let scratch = Scratch::new();
-    fs::create_dir(scratch.0.join("target")).unwrap();
-    fs::write(scratch.0.join("target/keep"), b"keep").unwrap();
-    std::os::unix::fs::symlink("target", scratch.0.join("link")).unwrap();
-    let argv = args(&["-rf", "link/"]);
-    let output = run(&scratch.0, "rm", &refs(&argv), b"");
-    assert!(output.status.success(), "{:?}", output.stderr);
-    assert!(output.stderr.is_empty());
-    assert_eq!(
-        fs::read_link(scratch.0.join("link")).unwrap(),
-        Path::new("target")
-    );
-    assert_eq!(fs::read(scratch.0.join("target/keep")).unwrap(), b"keep");
+fn rm_trailing_slash_follows_only_the_operand_directory_link() {
+    for operand in ["link/", "link////"] {
+        for (flag, status, removes_contents) in
+            [("-f", 1, false), ("-r", 1, true), ("-rf", 0, true)]
+        {
+            let scratch = Scratch::new();
+            fs::create_dir_all(scratch.0.join("target/sub")).unwrap();
+            fs::write(scratch.0.join("target/sub/file"), b"remove").unwrap();
+            fs::create_dir(scratch.0.join("outside")).unwrap();
+            fs::write(scratch.0.join("outside/keep"), b"keep").unwrap();
+            std::os::unix::fs::symlink("../outside", scratch.0.join("target/nested")).unwrap();
+            std::os::unix::fs::symlink("target", scratch.0.join("link")).unwrap();
+            let argv = args(&[flag, operand]);
+            let output = run(&scratch.0, "rm", &refs(&argv), b"");
+            assert_eq!(output.status.code(), Some(status), "{:?}", output.stderr);
+            assert!(output.stdout.is_empty());
+            assert_eq!(output.stderr.is_empty(), status == 0);
+            assert_eq!(
+                fs::read_link(scratch.0.join("link")).unwrap(),
+                Path::new("target")
+            );
+            assert_eq!(fs::read(scratch.0.join("outside/keep")).unwrap(), b"keep");
+            if removes_contents {
+                assert_eq!(fs::read_dir(scratch.0.join("target")).unwrap().count(), 0);
+            } else {
+                assert_eq!(
+                    fs::read(scratch.0.join("target/sub/file")).unwrap(),
+                    b"remove"
+                );
+                assert!(scratch.0.join("target/nested").is_symlink());
+            }
+        }
+    }
 }

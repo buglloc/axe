@@ -197,6 +197,11 @@ NUL in each argument; use `-0` for NUL-separated pathname transport.
 `?` in UTF-8 locales. JSON (`-J`), following directory symlinks (`-l`), and
 `--charset` are not supported.
 
+`rm -r link/` follows a directory symlink named as an operand, empties its target,
+and leaves both the link and target directory in place, matching GNU. Without
+the trailing slash, `rm` removes the link instead. Links encountered inside a
+directory are never traversed. `-f` suppresses the final ENOTDIR for `link/`.
+
 `mkdir -m` preserves all requested permission and special bits, including
 sticky, set-user-ID and set-group-ID bits. With `-p`, only newly created
 ancestors use the parent policy; the final directory receives the requested

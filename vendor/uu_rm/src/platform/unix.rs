@@ -163,6 +163,7 @@ pub fn safe_remove_empty_dir(
             report_verbose_write_error(verbose_removed_directory(path, options));
             Some(false)
         }
+        Err(e) if options.force && e.raw_os_error() == Some(libc::ENOTDIR) => Some(false),
         Err(e) => {
             let e =
                 e.map_err_context(|| translate!("rm-error-cannot-remove", "file" => path.quote()));
@@ -237,6 +238,7 @@ fn handle_unlink(
 /// Helper function to remove directory handling special cases
 pub fn remove_dir_with_special_cases(path: &Path, options: &Options, error_occurred: bool) -> bool {
     match fs::remove_dir(path) {
+        Err(e) if options.force && e.raw_os_error() == Some(libc::ENOTDIR) => error_occurred,
         Err(_) if !error_occurred && !is_readable(path) => {
             // For compatibility with GNU test case
             // `tests/rm/unread2.sh`, show "Permission denied" in this
