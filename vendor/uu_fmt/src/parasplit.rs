@@ -253,17 +253,20 @@ impl Iterator for FileLines<'_> {
             .read_until(b'\n', &mut buf)
             .ok()
             .filter(|n| *n > 0)?;
-        if buf.ends_with(b"\n") {
-            buf.pop();
-        }
-        let n = buf;
+        let terminated = buf.ends_with(b"\n");
+        let content_len = buf.len() - usize::from(terminated);
+        let n = &buf[..content_len];
 
         // if this line is entirely whitespace,
         // emit a blank line
         // Err(true) indicates that this was a linebreak,
         // which is important to know when detecting mail headers
         if n.iter().all(|&b| is_fmt_whitespace_byte(b)) {
-            return Some(Line::NoFormatLine(Vec::new(), true));
+            buf.clear();
+            if terminated {
+                buf.push(b'\n');
+            }
+            return Some(Line::NoFormatLine(buf, true));
         }
 
         let (pmatch, poffset) = self.match_prefix(&n[..]);
@@ -271,7 +274,7 @@ impl Iterator for FileLines<'_> {
         // if this line does not match the prefix,
         // emit the line unprocessed and iterate again
         if !pmatch {
-            return Some(Line::NoFormatLine(n, false));
+            return Some(Line::NoFormatLine(buf, false));
         }
 
         // if the line matches the prefix, but is blank after,
@@ -283,21 +286,22 @@ impl Iterator for FileLines<'_> {
             .iter()
             .all(|&b| is_fmt_whitespace_byte(b))
         {
-            return Some(Line::NoFormatLine(n, false));
+            return Some(Line::NoFormatLine(buf, false));
         }
 
         // skip if this line matches the anti_prefix
         // (NOTE definition of match_anti_prefix is TRUE if we should process)
         if !self.match_anti_prefix(&n[..]) {
-            return Some(Line::NoFormatLine(n, false));
+            return Some(Line::NoFormatLine(buf, false));
         }
 
         // figure out the indent, prefix, and prefixindent ending points
         let prefix_end = poffset + self.opts.prefix.as_ref().map_or(0, String::len);
         let (indent_end, prefix_len, indent_len) = self.compute_indent(&n[..], prefix_end);
+        buf.truncate(content_len);
 
         Some(Line::FormatLine(FileLine {
-            line: n,
+            line: buf,
             indent_end,
             prefix_indent_end: poffset,
             indent_len,

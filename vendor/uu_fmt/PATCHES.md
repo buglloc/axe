@@ -13,6 +13,8 @@ Source: the `uu_fmt` 0.12.0 crate from crates.io, upstream revision
   dependencies; AXE owns dependency resolution and locales.
 - Treat carriage returns and other nonblank control bytes as text instead of
   stripping CRLF or consuming them as word separators.
+- Keep record terminators on unformatted lines, including nonmatching prefix
+  records, rather than synthesizing a newline at EOF.
 
 Upstreamability: width and line-break changes target GNU fmt and are
 upstreamable; no upstream issue or commit is recorded in AXE.

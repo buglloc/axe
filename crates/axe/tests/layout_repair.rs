@@ -92,3 +92,14 @@ fn fmt_preserves_carriage_returns_in_formatted_words() {
         b"a\r b\r last\r\n",
     );
 }
+
+#[test]
+fn fmt_nonmatching_prefix_records_keep_their_terminators() {
+    let scratch = Scratch::new();
+    for input in [&b"a"[..], &b"a\r\nb\xff\r"[..], &b"a\n"[..]] {
+        assert_success(
+            run(scratch.path(), "fmt", &["-p", "> ", "-w12"], input),
+            input,
+        );
+    }
+}
