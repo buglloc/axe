@@ -1,5 +1,6 @@
 {
   mkNixpkgsBinary,
+  buildPkgs,
   linuxSystems,
   portableSystems,
   portableNcurses,
@@ -84,13 +85,28 @@
     synopsis = "Process and transform YAML, JSON, and XML data";
     systems = portableSystems;
     packageFor = system: pkgs:
-      if system == "aarch64-darwin"
-      then
-        goDarwin {
-          package = "yq-go";
-          binary = "yq";
-          subPackage = ".";
-        }
-      else (packageSetFor system pkgs).yq-go;
+      (
+        if system == "aarch64-darwin"
+        then
+          goDarwin {
+            package = "yq-go";
+            binary = "yq";
+            subPackage = ".";
+          }
+        else (packageSetFor system pkgs).yq-go
+      ).overrideAttrs (old: {
+        version = "4.54.3";
+        src = buildPkgs.fetchFromGitHub {
+          owner = "mikefarah";
+          repo = "yq";
+          tag = "v4.54.3";
+          hash = "sha256-zY37LwHXyuDVILM0bN+2jhN99zQ65hPigV9YanWtPLk=";
+        };
+        vendorHash = "sha256-YSmd0X/xlT1L6iGinCNs58k5h/8kxOCigEuDk5y0T+k=";
+        patches = (old.patches or []) ++ [../patches/yq-json-error-test.patch];
+        env = (old.env or {}) // {CGO_ENABLED = 0;};
+        nativeBuildInputs = builtins.filter (input: input != buildPkgs.pandoc && input != buildPkgs.installShellFiles) (old.nativeBuildInputs or []);
+        postInstall = "";
+      });
   };
 }

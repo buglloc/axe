@@ -127,6 +127,8 @@ The `nuclei` package includes pinned `nuclei-templates`; no separate template do
 
 Pass `--config FILE` for repository-specific Betterleaks rules. Automatic `.betterleaks.toml` and `.gitleaks.toml` loading requires `--unsafe-auto-load-config`; local Git configuration requires `--trust-local-git-config`. Enable either only for trusted repositories.
 
+`yq --split-exp` confines output paths to the working directory unless `--security-allow-write-any-path` is explicitly enabled for trusted input. `--inplace` replaces a symbolic link instead of modifying its target and rejects direct updates to read-only files.
+
 `gix` is a low-level Git plumbing CLI, not a drop-in replacement for `git` and not a stable scripting interface. Local repository inspection, revision walking, status, diff, and HTTPS clone/fetch are supported workflows; push, merge orchestration, rebase, reset, hooks, and self-contained SSH transport remain incomplete. SSH uses an external `ssh` command, and some credential flows may invoke `git credential`.
 
 `katana` performs standard crawling and JavaScript endpoint discovery without a browser. Automatic version checks and browser downloads are disabled. Headless and hybrid modes require an installed Chrome/Chromium, `-system-chrome-path`, or `-chrome-ws-url`; no browser is bundled. Katana can return status 0 after browser initialization or crawl failures, so check diagnostics and results rather than exit status alone. Use `-debug` to expose headless browser-launch errors.
