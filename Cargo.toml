@@ -115,7 +115,6 @@ uu_expand = { path = "vendor/uu_expand" }
 uu_fmt = { path = "vendor/uu_fmt" }
 uu_fold = { path = "vendor/uu_fold" }
 uu_grep = { path = "vendor/uu_grep" }
-uu_head = { path = "vendor/uu_head" }
 uu_install = { path = "vendor/uu_install" }
 uu_join = { path = "vendor/uu_join" }
 uu_logname = { path = "vendor/uu_logname" }
@@ -136,7 +135,6 @@ uu_sort = { path = "vendor/uu_sort" }
 uu_stat = { path = "vendor/uu_stat" }
 uu_stty = { path = "vendor/uu_stty" }
 uu_tail = { path = "vendor/uu_tail" }
-uu_timeout = { path = "vendor/uu_timeout" }
 uu_uniq = { path = "vendor/uu_uniq" }
 uu_unexpand = { path = "vendor/uu_unexpand" }
 uu_wc = { path = "vendor/uu_wc" }
