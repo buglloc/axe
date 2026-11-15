@@ -14,10 +14,12 @@ Source: the `uu_printf` 0.12.0 crate from crates.io, upstream revision
   errors instead of panicking.
 - Keep the build script deterministic across glibc, musl, and Darwin: compile
   the checked-in C bridge, use debug optimization required by fortified libc,
-  and link `libm` only where the target needs it.
+  and link `libm` only where the target needs it. Run compiler probes in Cargo's
+  `OUT_DIR`: cargo-zigbuild's Darwin `--version` probe writes an empty `a.o`
+  in its working directory.
 - Keep a standalone manifest without upstream workspace lint/benchmark wiring;
   AXE owns dependency resolution. The checked-in `tests/` cover the AXE native
-  bridge; the stray `a.o` artifact is intentionally not part of the package.
+  bridge.
 
 Upstreamability: the numeric behavior is intended for upstream; the C bridge is
 an AXE portability implementation because the upstream Rust formatter narrows

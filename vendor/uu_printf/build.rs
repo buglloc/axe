@@ -1,8 +1,15 @@
 fn main() {
+    let source = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo sets CARGO_MANIFEST_DIR"),
+    )
+    .join("src/long_double.c");
     println!("cargo:rerun-if-changed=src/long_double.c");
+    // cargo-zigbuild's compiler version probe can write a.o in the working directory.
+    std::env::set_current_dir(std::env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR"))
+        .expect("enter Cargo build output directory");
     let mut build = cc::Build::new();
     build
-        .file("src/long_double.c")
+        .file(source)
         .std("c17")
         .flag_if_supported("-fno-fast-math");
     // Nix's FORTIFY_SOURCE requires optimization in debug builds too.
