@@ -119,6 +119,8 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 
 `difft` is Difftastic's syntax-aware structural diff tool; it performs local comparisons without automatic update checks or telemetry.
 
+Nmap NSE script threads are interrupted after five seconds without yielding; allocations beyond 400 MB fail. Long-running custom scripts must yield during computation.
+
 The `nuclei` package includes pinned `nuclei-templates`; no separate template download is needed on first run.
 
 `betterleaks` embeds its default detection rules, tokenizer, and word list. Filesystem and stdin scans do not require Git; history and clone modes require `git` on `PATH`. Live credential validation is opt-in with `--validation` and sends detected credentials to provider APIs. Use `--redact` when writing reports that must not expose secrets.

@@ -463,6 +463,12 @@
       zlib = dependencySet.zlib;
     }).overrideAttrs
     (old: {
+      version = "7.993";
+      src = buildPkgs.fetchurl {
+        url = "https://nmap.org/dist/nmap-7.993.tar.bz2";
+        hash = "sha256-Jw5V8EkVv87LXbj+uVnUxbqGpIwJRSCk8cB1ceHHnFk=";
+      };
+      patches = [];
       enableParallelBuilding = false;
       outputs = ["out"];
       configureFlags =
