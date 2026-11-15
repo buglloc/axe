@@ -11,8 +11,11 @@ Source: the `uu_fold` 0.12.0 crate from crates.io, upstream revision
   bytes.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
+- Count nonprinting control characters as one column (except zero-width NUL),
+  consistently in ASCII, decoded UTF-8, and retained wraparound buffers.
 
 Upstreamability: byte and wrapping behavior target GNU fold and are
 upstreamable; no upstream issue or commit is recorded in AXE.
 
-AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs`.
+AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs` and
+`crates/axe/tests/layout_repair.rs`.

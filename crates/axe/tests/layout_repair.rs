@@ -132,3 +132,18 @@ fn csplit_suppressed_numeric_boundary_may_follow_the_final_record() {
     assert_eq!(output.status.code(), Some(1));
     assert!(!scratch.path().join("bad00").exists());
 }
+
+#[test]
+fn fold_control_bytes_advance_columns_except_nul() {
+    let scratch = Scratch::new();
+    for (args, expected) in [
+        (&["-w1"][..], &b"a\x08b\rc\n\x0b\n\x0c\nd\n\0e\n"[..]),
+        (&["-w2"][..], &b"a\x08b\rc\x0b\n\x0cd\n\0e\n"[..]),
+        (&["-s", "-w3"][..], &b"a\x08b\rc\x0b\x0c\nd\n\0e\n"[..]),
+    ] {
+        assert_success(
+            run(scratch.path(), "fold", args, b"a\x08b\rc\x0b\x0cd\n\0e\n"),
+            expected,
+        );
+    }
+}

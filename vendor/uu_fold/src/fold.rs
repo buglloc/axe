@@ -293,7 +293,7 @@ fn compute_col_count(buffer: &[u8], mode: WidthMode) -> usize {
                 _ => {
                     width += match mode {
                         WidthMode::Characters => 1,
-                        WidthMode::Columns => UnicodeWidthChar::width(ch).unwrap_or(0),
+                        WidthMode::Columns => UnicodeWidthChar::width(ch).unwrap_or(1),
                     }
                 }
             }
@@ -413,6 +413,10 @@ fn process_ascii_line<W: Write>(line: &[u8], ctx: &mut FoldContext<'_, W>) -> UR
                 idx += 1;
             }
             0x00..=0x07 | 0x0B..=0x0C | 0x0E..=0x1F | 0x7F => {
+                let added = usize::from(ctx.mode == WidthMode::Characters || line[idx] != 0);
+                while added > 0 && *ctx.col_count >= ctx.width && !ctx.output.is_empty() {
+                    emit_output(ctx)?;
+                }
                 push_byte(ctx, line[idx])?;
                 if ctx.spaces && line[idx].is_ascii_whitespace() && line[idx] != CR {
                     *ctx.last_space = Some(ctx.output.len() - 1);
@@ -420,12 +424,7 @@ fn process_ascii_line<W: Write>(line: &[u8], ctx: &mut FoldContext<'_, W>) -> UR
                     *ctx.last_space = None;
                 }
 
-                if ctx.mode == WidthMode::Characters {
-                    *ctx.col_count = ctx.col_count.saturating_add(1);
-                    if *ctx.col_count >= ctx.width {
-                        emit_output(ctx)?;
-                    }
-                }
+                *ctx.col_count = ctx.col_count.saturating_add(added);
                 idx += 1;
             }
             _ => {
@@ -551,7 +550,7 @@ fn process_utf8_chars<W: Write>(line: &str, ctx: &mut FoldContext<'_, W>) -> URe
         }
 
         let added = match ctx.mode {
-            WidthMode::Columns => UnicodeWidthChar::width(ch).unwrap_or(0),
+            WidthMode::Columns => UnicodeWidthChar::width(ch).unwrap_or(1),
             WidthMode::Characters => 1,
         };
 
