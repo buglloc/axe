@@ -7,12 +7,12 @@
   axePortableCaBundle,
   ...
 }: let
-  version = "1.9.0";
+  version = "1.10.1";
   src = buildPkgs.fetchFromGitHub {
     owner = "betterleaks";
     repo = "betterleaks";
-    rev = "81aff7a638638aae3a659845d089043e1d8fe9ac";
-    hash = "sha256-gMh96BrWI5D0+y3ugA82lJVO0h56euIq8vjD2r+gR9Y=";
+    rev = "39d5bdcf34db54e944facac5cf6e8b03db5e2b99";
+    hash = "sha256-27u8JVp6KRfY9ZFTdN7dSooW4nt6dCDhfjFSU3YKajE=";
   };
   betterleaksPackageFor = target: targetPkgs:
     (
@@ -26,7 +26,7 @@
     ).overrideAttrs (old:
       {
         inherit version src;
-        vendorHash = "sha256-iawGHP22k96dnpoSMNxlMJ8aHZPOW1Mbaih6vAh3G94=";
+        vendorHash = "sha256-ro62XSWPEXLWxbs2iLZahlcZOaEYCLUZerat0PPtg34=";
         outputs = ["out"];
         patches = (old.patches or []) ++ [../../patches/betterleaks-embedded-ca.patch];
         postPatch =
