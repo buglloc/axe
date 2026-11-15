@@ -879,9 +879,6 @@ fn strtonum(value: &[u8]) -> f64 {
         if unsigned.starts_with(b"0x") || unsigned.starts_with(b"0X") {
             return 0.0;
         }
-        if unsigned.first().is_some_and(u8::is_ascii_alphabetic) {
-            return 0.0;
-        }
         return crate::value::parse_leading_number(value);
     };
     let mut number = 0.0;

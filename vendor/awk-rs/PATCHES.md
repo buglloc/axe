@@ -25,9 +25,9 @@ Source: the `awk-rs` 0.2.0 crate from crates.io, upstream revision
   Paragraph mode waits for a non-newline byte or EOF to complete `RT`, as
   gawk's `io.c::rsnullscan` does. Leading blank runs are discarded with bounded
   storage; a trailing run belongs to the observable separator and is retained.
-- Recognize signed, case-insensitive `inf`/`nan` numeric strings in arithmetic
-  and field comparisons, and print their signs. Keep the documented `strtonum`
-  rejection; numeric coercion preserves negative zero for floating formatting.
+- Recognize signed, case-insensitive `inf`/`nan` numeric strings in arithmetic,
+  field comparisons, and AXE's `strtonum` extension, and print their signs.
+  Numeric coercion preserves negative zero for floating formatting.
 - Keep a standalone library manifest without the upstream binary, integration
   tests, benchmarks, benchmark dependencies, and release profile; AXE invokes
   the library through its own applet wrapper.

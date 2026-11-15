@@ -144,9 +144,9 @@ stream or in-place I/O failures exit with status 4.
 
 `awk` preserves bytes in records, string values and file operands. Its program
 source must be UTF-8. Record separators, field splitting, assignments between
-files and `getline` share the same input lifecycle. `strtonum` does not accept
-signed IEEE special-value strings such as `+inf` and `+nan`. Fatal input errors
-exit with status 2; stdout write or flush failures exit with status 1.
+files and `getline` share the same input lifecycle. `strtonum` accepts signed
+IEEE special-value strings such as `+inf` and `+nan`. Fatal input errors exit
+with status 2; stdout write or flush failures exit with status 1.
 `RT` contains the matched input record separator, including separators read by
 `getline`, and is empty when a final record ends at EOF without a separator.
 

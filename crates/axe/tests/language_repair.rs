@@ -118,8 +118,26 @@ fn awk_arithmetic_and_fields_recognize_signed_infinity() {
             "C",
         ),
         0,
-        b"+inf +inf 0\n-0\n+nan -nan\n",
+        b"+inf +inf +inf\n-0\n+nan -nan\n",
     );
+}
+
+#[test]
+fn awk_strtonum_accepts_signed_special_values_without_accepting_longer_spellings() {
+    let program = r#"BEGIN {
+        print strtonum("+inf"),strtonum("-INF"),strtonum("+NaN"),strtonum("-nan")
+        print strtonum("  +Inf"),strtonum("\t-nan"),strtonum("+inf "),strtonum("+nan\n")
+        print strtonum("inf"),strtonum("nan"),strtonum("+infinity"),strtonum("-infinity")
+        print strtonum("+infjunk"),strtonum("-nanx"),strtonum("+NaN(payload)"),strtonum("+nan()")
+        print strtonum("-nan\0x"),strtonum("+inf\0x"),strtonum("\0+inf")
+    }"#;
+    for locale in ["C", "C.UTF-8"] {
+        assert_output(
+            run("awk", &[program], b"", locale),
+            0,
+            b"+inf -inf +nan -nan\n+inf -nan +inf +nan\n0 0 0 0\n0 0 0 0\n0 0 0\n",
+        );
+    }
 }
 
 #[test]
