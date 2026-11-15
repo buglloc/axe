@@ -147,6 +147,8 @@ source must be UTF-8. Record separators, field splitting, assignments between
 files and `getline` share the same input lifecycle. `strtonum` does not accept
 signed IEEE special-value strings such as `+inf` and `+nan`. Fatal input errors
 exit with status 2; stdout write or flush failures exit with status 1.
+`RT` contains the matched input record separator, including separators read by
+`getline`, and is empty when a final record ends at EOF without a separator.
 
 Field counts and field indices are bounded at 10,000,000 to prevent unbounded
 allocation; negative, non-finite, or larger values are fatal runtime errors
@@ -159,6 +161,8 @@ replaced with U+FFFD, and output is valid JSON. `--tab`, `--indent`, `--seq`,
 `--raw-output0`, `--jsonargs`, and `$__loc__` are supported; `halt_error` keeps
 string payloads raw and terminates non-string JSON payloads with a newline.
 `--stream` and `--stream-errors` are not supported.
+Sequence mode ignores bytes before the first record separator and discards a
+final numeric record without a terminator, which may have been truncated.
 
 `diff` computes raw line edit scripts with Myers; `-d`/`--minimal` selects the
 minimal variant. It supports normal, unified (`-u`/`-U`), context (`-c`/`-C`),
@@ -208,6 +212,11 @@ and `-h`/`--no-dereference`, but not `-F` or `-k`. Empty regular files use
 `inode/x-empty`; empty stdin uses `application/x-empty`. Valid JSON scalars are
 recognized as JSON. `strings --unicode` is not supported; its JSON output is
 an AXE extension.
+Wide `strings` encodings use printable ASCII units; `-w` also preserves
+whitespace controls, including vertical tabs.
+
+Base32/Base64 decoders ignore line feeds, but carriage returns require
+`--ignore-garbage`. `basenc --base64url -d` accepts unpadded final groups.
 
 ## Archives and compression
 
@@ -217,6 +226,8 @@ decompression (`-d`), stdout (`-c`), explicit output (`-o FILE`), integrity chec
 20–22, `--fast[=N]`, and worker counts (`-T N`; zero selects available CPUs).
 Compression includes a checksum; decompression accepts concatenated frames.
 Successful `-t` reports the decoded byte count on stderr unless quiet.
+`zstd -dcf` copies non-frame plaintext to stdout, including a plaintext tail
+after complete frames. Recognized corrupt frame headers remain errors.
 
 File-to-file compression and decompression use private temporary output and
 publish it only after the codec and temporary-file finalization succeed. A failed
