@@ -911,8 +911,17 @@ fn append_comparison_byte(
 
 fn line_is_ignored(line: &[u8], options: &DiffOptions) -> bool {
     let content = line.strip_suffix(b"\n").unwrap_or(line);
-    let content = content.strip_suffix(b"\r").unwrap_or(content);
-    (options.ignore_blank_lines && content.iter().all(u8::is_ascii_whitespace))
+    let content = if options.strip_trailing_cr {
+        content.strip_suffix(b"\r").unwrap_or(content)
+    } else {
+        content
+    };
+    let blank = content.is_empty()
+        || ((options.ignore_all_space
+            || options.ignore_space_change
+            || options.ignore_trailing_space)
+            && content.iter().all(u8::is_ascii_whitespace));
+    (options.ignore_blank_lines && blank)
         || options
             .ignore_matching
             .iter()
