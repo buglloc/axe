@@ -38,6 +38,10 @@ impl Drop for Scratch {
 }
 
 fn run(root: &Path, applet: &str, args: &[&str], input: &[u8]) -> Output {
+    run_with_locale(root, applet, args, input, "C")
+}
+
+fn run_with_locale(root: &Path, applet: &str, args: &[&str], input: &[u8], locale: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_axe"))
         .args(["--applet", applet, "--"])
         .args(args)
@@ -45,8 +49,8 @@ fn run(root: &Path, applet: &str, args: &[&str], input: &[u8]) -> Output {
         .env_clear()
         .env("HOME", root)
         .env("PATH", "/nonexistent")
-        .env("LANG", "C")
-        .env("LC_ALL", "C")
+        .env("LANG", locale)
+        .env("LC_ALL", locale)
         .env("TZ", "UTC")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -146,4 +150,23 @@ fn fold_control_bytes_advance_columns_except_nul() {
             expected,
         );
     }
+}
+
+#[test]
+fn fold_respects_locale_and_keeps_multibyte_units_in_byte_mode() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(scratch.path(), "fold", &["-w2"], "界é\n".as_bytes()),
+        b"\xe7\x95\n\x8c\xc3\n\xa9\n",
+    );
+    assert_success(
+        run_with_locale(
+            scratch.path(),
+            "fold",
+            &["-b", "-w2"],
+            "界é\tA\n".as_bytes(),
+            "C.UTF-8",
+        ),
+        "界\né\n\tA\n".as_bytes(),
+    );
 }

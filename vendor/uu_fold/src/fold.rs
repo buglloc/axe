@@ -14,6 +14,7 @@ use unicode_width::UnicodeWidthChar;
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, USimpleError};
 use uucore::format_usage;
+use uucore::i18n::charmap::{Encoding, locale_encoding};
 use uucore::show;
 use uucore::translate;
 
@@ -38,6 +39,7 @@ mod options {
 enum WidthMode {
     Columns,
     Characters,
+    Bytes,
 }
 
 struct FoldContext<'a, W: Write> {
@@ -183,10 +185,12 @@ fn fold(
             &mut file_buf as &mut dyn Read
         });
 
-        if bytes {
+        if bytes && locale_encoding() == Encoding::SingleByte {
             fold_file_bytewise(buffer, spaces, width, &mut output)?;
         } else {
-            let mode = if characters {
+            let mode = if bytes {
+                WidthMode::Bytes
+            } else if characters {
                 WidthMode::Characters
             } else {
                 WidthMode::Columns
@@ -283,6 +287,22 @@ fn next_tab_stop(col_count: usize) -> usize {
 }
 
 fn compute_col_count(buffer: &[u8], mode: WidthMode) -> usize {
+    if mode == WidthMode::Bytes {
+        return buffer.len();
+    }
+    if locale_encoding() == Encoding::SingleByte {
+        let mut width: usize = 0;
+        for &byte in buffer {
+            match byte {
+                CR => width = 0,
+                TAB => width = next_tab_stop(width),
+                0x08 => width = width.saturating_sub(1),
+                0 if mode == WidthMode::Columns => (),
+                _ => width += 1,
+            }
+        }
+        return width;
+    }
     let mut width = 0;
     for chunk in buffer.utf8_chunks() {
         for ch in chunk.valid().chars() {
@@ -294,6 +314,7 @@ fn compute_col_count(buffer: &[u8], mode: WidthMode) -> usize {
                     width += match mode {
                         WidthMode::Characters => 1,
                         WidthMode::Columns => UnicodeWidthChar::width(ch).unwrap_or(1),
+                        WidthMode::Bytes => unreachable!(),
                     }
                 }
             }
@@ -483,7 +504,7 @@ fn push_ascii_segment<W: Write>(segment: &[u8], ctx: &mut FoldContext<'_, W>) ->
 }
 
 fn process_utf8_line<W: Write>(line: &str, ctx: &mut FoldContext<'_, W>) -> UResult<()> {
-    if line.is_ascii() {
+    if line.is_ascii() && ctx.mode != WidthMode::Bytes {
         return process_ascii_line(line.as_bytes(), ctx);
     }
 
@@ -518,19 +539,19 @@ fn process_utf8_chars<W: Write>(line: &str, ctx: &mut FoldContext<'_, W>) -> URe
             continue;
         }
 
-        if ch == '\r' {
+        if ch == '\r' && ctx.mode != WidthMode::Bytes {
             push_bytes(ctx, &line_bytes[byte_idx..next_idx])?;
             *ctx.col_count = 0;
             continue;
         }
 
-        if ch == '\x08' {
+        if ch == '\x08' && ctx.mode != WidthMode::Bytes {
             push_bytes(ctx, &line_bytes[byte_idx..next_idx])?;
             *ctx.col_count = ctx.col_count.saturating_sub(1);
             continue;
         }
 
-        if ch == '\t' {
+        if ch == '\t' && ctx.mode != WidthMode::Bytes {
             loop {
                 let next_stop = next_tab_stop(*ctx.col_count);
                 if next_stop > ctx.width && !ctx.output.is_empty() {
@@ -552,6 +573,7 @@ fn process_utf8_chars<W: Write>(line: &str, ctx: &mut FoldContext<'_, W>) -> URe
         let added = match ctx.mode {
             WidthMode::Columns => UnicodeWidthChar::width(ch).unwrap_or(1),
             WidthMode::Characters => 1,
+            WidthMode::Bytes => ch.len_utf8(),
         };
 
         while added > 0 && *ctx.col_count + added > ctx.width && !ctx.output.is_empty() {
@@ -653,6 +675,12 @@ fn fold_file<T: Read, W: Write>(
                 .map_err_context(|| translate!("fold-error-readline"))?;
             if buffer.is_empty() {
                 break;
+            }
+            if locale_encoding() == Encoding::SingleByte {
+                process_ascii_line(buffer, &mut ctx)?;
+                let consumed = buffer.len();
+                file.consume(consumed);
+                continue;
             }
             pending.extend_from_slice(buffer);
             let consumed = buffer.len();

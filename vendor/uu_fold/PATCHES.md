@@ -13,6 +13,8 @@ Source: the `uu_fold` 0.12.0 crate from crates.io, upstream revision
   dependencies; AXE owns dependency resolution and locales.
 - Count nonprinting control characters as one column (except zero-width NUL),
   consistently in ASCII, decoded UTF-8, and retained wraparound buffers.
+- Use single-byte folding in C/POSIX locales; UTF-8 byte-count mode counts
+  encoded bytes without splitting a decoded character.
 
 Upstreamability: byte and wrapping behavior target GNU fold and are
 upstreamable; no upstream issue or commit is recorded in AXE.
