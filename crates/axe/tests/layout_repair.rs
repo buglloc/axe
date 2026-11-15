@@ -243,3 +243,12 @@ fn ptx_leading_context_whitespace_does_not_drop_a_fitting_tail() {
         b"     alpha beta Gamma delta.\n Gamma delta.     alpha beta\n delta/   alpha beta  Gamma\n    beta  Gamma delta.   /alpha\n",
     );
 }
+
+#[test]
+fn fmt_tagged_paragraphs_use_the_secondary_indent() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(scratch.path(), "fmt", &["-t", "-w15"], b"1234567\x08\tX\n"),
+        b"1234567\x08\n   X\n",
+    );
+}

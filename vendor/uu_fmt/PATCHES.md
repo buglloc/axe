@@ -17,6 +17,8 @@ Source: the `uu_fmt` 0.12.0 crate from crates.io, upstream revision
   records, rather than synthesizing a newline at EOF.
 - Diagnose failed file operands and continue formatting later files while
   retaining a failing command status.
+- Use GNU's three-column secondary indent for an initial unindented tagged
+  paragraph, and retain the secondary indent learned from earlier paragraphs.
 
 Upstreamability: width and line-break changes target GNU fmt and are
 upstreamable; no upstream issue or commit is recorded in AXE.

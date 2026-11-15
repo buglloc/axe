@@ -341,6 +341,7 @@ pub struct ParagraphStream<'a> {
     lines: Peekable<FileLines<'a>>,
     next_mail: bool,
     opts: &'a FmtOptions,
+    tagged_indent: usize,
 }
 
 impl ParagraphStream<'_> {
@@ -351,6 +352,7 @@ impl ParagraphStream<'_> {
             lines,
             next_mail: true,
             opts,
+            tagged_indent: 0,
         }
     }
 
@@ -447,14 +449,18 @@ impl Iterator for ParagraphStream<'_> {
                     prefix_len = fl.prefix_len;
                     prefix_indent_end = fl.prefix_indent_end;
 
-                    // in tagged mode, add 4 spaces of additional indenting by default
-                    // (gnu fmt's behavior is different: it seems to find the closest column to
-                    // indent_end that is divisible by 3. But honestly that behavior seems
-                    // pretty arbitrary.
-                    // Perhaps a better default would be 1 TABWIDTH? But ugh that's so big.
                     if self.opts.tagged {
-                        indent_str.extend_from_slice(b"    ");
-                        indent_len += 4;
+                        if self.tagged_indent == init_len {
+                            self.tagged_indent = if init_len == 0 { 3 } else { 0 };
+                        }
+                        let prefix_end = fl.prefix_indent_end
+                            + self.opts.prefix.as_ref().map_or(0, String::len);
+                        indent_str.truncate(prefix_end);
+                        indent_str.resize(
+                            prefix_end + self.tagged_indent.saturating_sub(fl.prefix_len),
+                            b' ',
+                        );
+                        indent_len = self.tagged_indent;
                     }
                 }
             } else if in_mail {
@@ -472,7 +478,7 @@ impl Iterator for ParagraphStream<'_> {
 
                 // in tagged mode, indent has to be *different* on following lines
                 if self.opts.tagged
-                    && indent_len - 4 == fl.indent_len
+                    && init_len == fl.indent_len
                     && indent_end == fl.indent_end
                 {
                     break;
@@ -483,6 +489,9 @@ impl Iterator for ParagraphStream<'_> {
                 indent_str.extend_from_slice(&fl.line[..fl.indent_end]);
                 indent_len = fl.indent_len;
                 indent_end = fl.indent_end;
+                if self.opts.tagged {
+                    self.tagged_indent = fl.indent_len;
+                }
 
                 second_done = true;
             } else {
