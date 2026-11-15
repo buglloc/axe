@@ -401,3 +401,17 @@ fn pr_retains_padding_for_empty_records_and_terminal_columns() {
         b"a     1\nb     \n",
     );
 }
+
+#[test]
+fn fmt_nul_does_not_receive_an_opening_delimiter_bonus() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(
+            scratch.path(),
+            "fmt",
+            &["-w8"],
+            b"a\x08b\rc\x0b\x0cd\n\0e\n",
+        ),
+        b"a\x08b\rc\x0b\n\x0cd \0e\n",
+    );
+}

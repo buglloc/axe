@@ -30,3 +30,12 @@ upstreamable; no upstream issue or commit is recorded in AXE.
 
 AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs` and
 `crates/axe/tests/layout_repair.rs`.
+
+GNU differential exclusion: `src/fmt.c` implements `isopen(c)` with `strchr`
+on a C string. NUL matches the string terminator and incorrectly receives an
+opening-delimiter bonus instead of an orphan-word cost. AXE classifies only
+the explicit opening punctuation bytes, so paragraphs containing a
+NUL-leading word can have different, intentional line breaks.
+
+Primary source: <https://github.com/coreutils/coreutils/blob/master/src/fmt.c>
+(`isopen`, `check_punctuation`, and `base_cost`).
