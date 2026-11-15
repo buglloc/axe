@@ -8,10 +8,13 @@ Source: the `uu_expand` 0.12.0 crate from crates.io, upstream revision
   embedded NUL records.
 - Take the direct-write fast path only for complete newline-terminated lines;
   preserve the current column for a partial line instead of resetting it.
+- Preserve explicit `-` stdin operands when expanding obsolete numeric tab
+  shortcuts; a bare dash is not a tab-size option.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
 
 Upstreamability: NUL/partial-line column behavior is intended for upstream; no
 upstream issue or commit is recorded in AXE.
 
-AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs`.
+AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs` and
+`crates/axe/tests/stream_repair.rs`.

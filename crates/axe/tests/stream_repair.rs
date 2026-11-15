@@ -157,3 +157,26 @@ fn comm_default_order_check_depends_on_unpaired_records() {
     assert_eq!(unpaired.stdout, b"b\na\n");
     assert!(!unpaired.stderr.is_empty());
 }
+
+#[test]
+fn tab_converters_preserve_explicit_stdin_among_file_operands() {
+    let scratch = Scratch::new();
+    fs::write(scratch.path().join("a"), b"abc\tdef\n").unwrap();
+    for args in [&["-", "a", "-"][..], &["a", "-", "-"][..]] {
+        let expected = if args[0] == "-" {
+            &b"ab      cd\nabc     def\n"[..]
+        } else {
+            &b"abc     def\nab      cd\n"[..]
+        };
+        assert_success(run(scratch.path(), "expand", args, b"ab\tcd\n"), expected);
+    }
+    fs::write(scratch.path().join("a"), b"        a\n").unwrap();
+    assert_success(
+        run(scratch.path(), "unexpand", &["-", "a", "-"], b"        i\n"),
+        b"\ti\n\ta\n",
+    );
+    assert_success(
+        run(scratch.path(), "unexpand", &["a", "-", "-"], b"        i\n"),
+        b"\ta\n\ti\n",
+    );
+}

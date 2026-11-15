@@ -6,10 +6,13 @@ Source: the `uu_unexpand` 0.12.0 crate from crates.io, upstream revision
 
 - Treat NUL as a zero-width non-tab byte when converting spaces to tabs, so
   embedded NULs do not advance the column as printable text would.
+- Preserve explicit `-` stdin operands when expanding obsolete numeric tab
+  shortcuts; a bare dash is not a tab-size option.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
 
 Upstreamability: NUL column behavior is intended for upstream; no upstream issue
 or commit is recorded in AXE.
 
-AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs`.
+AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs` and
+`crates/axe/tests/stream_repair.rs`.
