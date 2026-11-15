@@ -376,11 +376,7 @@ fn pr_omit_pagination_discards_input_form_feeds() {
 fn pr_retains_padding_for_empty_records_and_terminal_columns() {
     let scratch = Scratch::new();
     for (args, input, expected) in [
-        (
-            &["-t", "-2", "-w12"][..],
-            &b"\n\n"[..],
-            &b"      \n"[..],
-        ),
+        (&["-t", "-2", "-w12"][..], &b"\n\n"[..], &b"      \n"[..]),
         (
             &["-t", "-a", "-3", "-w20"][..],
             &b"\n\n"[..],

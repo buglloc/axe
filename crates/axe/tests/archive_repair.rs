@@ -351,7 +351,10 @@ fn incomplete_compression_magic_is_plaintext_only_in_forced_stdout_mode() {
             input.extend_from_slice(&magic[..length]);
             let output = run(scratch.path(), "zstd", &["-dcf"], &input);
             assert!(output.status.success(), "{input:?}: {output:?}");
-            assert_eq!(output.stdout, [&b"payload\n"[..], &magic[..length]].concat());
+            assert_eq!(
+                output.stdout,
+                [&b"payload\n"[..], &magic[..length]].concat()
+            );
         }
     }
 }

@@ -422,7 +422,12 @@ fn install_replaces_distinct_hardlinks_but_rejects_same_path_aliases() {
         if backup {
             install.arg("-b");
         }
-        success(&install.args(["source/file", "alias/hard"]).output().unwrap());
+        success(
+            &install
+                .args(["source/file", "alias/hard"])
+                .output()
+                .unwrap(),
+        );
         let source = fs::metadata(scratch.path().join("source/file")).unwrap();
         let destination = fs::metadata(scratch.path().join("source/hard")).unwrap();
         assert_ne!(source.ino(), destination.ino());
@@ -437,7 +442,9 @@ fn install_replaces_distinct_hardlinks_but_rejects_same_path_aliases() {
         if backup {
             assert_eq!(
                 source.ino(),
-                fs::metadata(scratch.path().join("source/hard~")).unwrap().ino()
+                fs::metadata(scratch.path().join("source/hard~"))
+                    .unwrap()
+                    .ino()
             );
         }
         for target in ["source/file", "./source/file", "alias/file"] {
