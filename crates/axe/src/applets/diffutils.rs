@@ -1741,12 +1741,12 @@ fn render_side_by_side(
             old += 1;
             new += 1;
         }
-        let count = change.old.len().max(change.new.len());
-        for index in 0..count {
-            let left = from[change.old.clone()].get(index).copied();
-            let right = to[change.new.clone()].get(index).copied();
-            let marker = side_marker(left, right, change.ignored);
-            if !(render_options.suppress_common_lines && marker == b' ') {
+        if !render_options.suppress_common_lines || !change.ignored {
+            let count = change.old.len().max(change.new.len());
+            for index in 0..count {
+                let left = from[change.old.clone()].get(index).copied();
+                let right = to[change.new.clone()].get(index).copied();
+                let marker = side_marker(left, right, change.ignored);
                 side_row(
                     output,
                     left,
