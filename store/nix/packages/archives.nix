@@ -11,6 +11,16 @@
       useUasm = false;
     }).overrideAttrs
     (old: {
+      version = "26.06";
+      src = buildPkgs.fetchFromGitHub {
+        owner = "ip7z";
+        repo = "7zip";
+        tag = "26.06";
+        hash = "sha256-N9NDcem1+lHEusM23oi/XW1QTNRvCDsMiYZXReYE7k4=";
+        postFetch = ''
+          rm -r $out/CPP/7zip/Compress/Rar*
+        '';
+      };
       outputs = ["out"];
       setupHook = null;
       makeFlags = (old.makeFlags or []) ++ ["LDFLAGS_STATIC_2=-static"];
@@ -26,10 +36,10 @@
       doInstallCheck = false;
     });
   sevenZipDarwin = let
-    version = "26.04";
+    version = "26.06";
     archive = buildPkgs.fetchurl {
       url = "https://github.com/ip7z/7zip/releases/download/${version}/7z${builtins.replaceStrings ["."] [""] version}-mac.tar.xz";
-      hash = "sha256-vuBDWMvLxxBic87g6NcpFtsmlsSAZ6NTjDTYzW/RZXg=";
+      hash = "sha256-tvF5ILQkCUBGHayO9ACYkYgaxE0qXq1iXt4uyEchhd0=";
     };
   in
     buildPkgs.runCommand "7zz-${version}-aarch64-darwin"
