@@ -52,6 +52,13 @@ enum Compression {
     Zstd,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Format {
+    Gnu,
+    Ustar,
+    Pax,
+}
+
 struct Operand {
     name: PathBuf,
     directory: usize,
@@ -66,6 +73,7 @@ struct Exclusion {
 struct Options {
     action: Action,
     compression: Option<Compression>,
+    format: Format,
     archive: Option<OsString>,
     directories: Vec<PathBuf>,
     operands: Vec<Operand>,
@@ -171,6 +179,7 @@ impl Options {
     fn parse(args: Vec<OsString>) -> io::Result<Self> {
         let mut action = None;
         let mut compression = None;
+        let mut format = Format::Gnu;
         let mut archive = None;
         let mut directories = vec![PathBuf::from(".")];
         let mut operands = Vec::new();
@@ -209,6 +218,21 @@ impl Options {
                     .split_once('=')
                     .map_or((text, None), |(option, value)| (option, Some(value)));
                 match option {
+                    "--format" => {
+                        let value = long_argument(option, value, &mut iter)?;
+                        format = match value.to_str() {
+                            Some("gnu") => Format::Gnu,
+                            Some("ustar") => Format::Ustar,
+                            Some("posix" | "pax") => Format::Pax,
+                            _ => {
+                                return Err(invalid(format!(
+                                    "invalid archive format '{}'",
+                                    value.display()
+                                )));
+                            }
+                        };
+                        continue;
+                    }
                     "--file" => {
                         archive = Some(long_argument(option, value, &mut iter)?);
                         continue;
@@ -271,7 +295,7 @@ impl Options {
                                 "Usage: tar (-c|--create)|(-x|--extract)|(-t|--list) \
                                  [-z|-j|-J|--zstd|-a] [-h] [-v] [-m] [-O] \
                                  [--strip-components N] [-f ARCHIVE] [-C DIR] \
-                                 [-T FILE] [--null] [FILE...]"
+                                 [-T FILE] [--null] [--format=gnu|ustar|posix] [FILE...]"
                             );
                         } else {
                             println!("tar (axe) {}", env!("CARGO_PKG_VERSION"));
@@ -346,6 +370,7 @@ impl Options {
         Ok(Self {
             action,
             compression,
+            format,
             archive,
             directories,
             operands,
@@ -687,7 +712,18 @@ impl CreateContext<'_> {
                 }
                 self.active_directories.push(identity);
             }
-            archive.append_dir(archive_path, source)?;
+            if self.options.format == Format::Gnu {
+                archive.append_dir(archive_path, source)?;
+            } else {
+                append_portable(
+                    archive,
+                    self.options.format,
+                    source,
+                    archive_path,
+                    &metadata,
+                    None,
+                )?;
+            }
             for child in fs::read_dir(source)? {
                 let child = child?;
                 self.append_tree(
@@ -704,26 +740,50 @@ impl CreateContext<'_> {
             if metadata.is_file() && metadata.nlink() > 1 {
                 let identity = (metadata.dev(), metadata.ino());
                 if let Some(target) = self.hard_links.get(&identity) {
-                    let mut header = tar::Header::new_gnu();
-                    header.set_metadata(&metadata);
-                    header.set_entry_type(tar::EntryType::Link);
-                    header.set_size(0);
-                    archive.append_link(&mut header, archive_path, target)?;
+                    if self.options.format == Format::Gnu {
+                        let mut header = tar::Header::new_gnu();
+                        header.set_metadata(&metadata);
+                        header.set_entry_type(tar::EntryType::Link);
+                        header.set_size(0);
+                        archive.append_link(&mut header, archive_path, target)?;
+                    } else {
+                        append_portable(
+                            archive,
+                            self.options.format,
+                            source,
+                            archive_path,
+                            &metadata,
+                            Some(target),
+                        )?;
+                    }
                     return Ok(());
                 }
-                archive.append_path_with_name(source, archive_path)?;
+                self.append_member(archive, source, archive_path, &metadata)?;
                 let target = archive_relative_name(archive_path).to_path_buf();
                 self.hard_link_names.insert(target.clone(), identity);
                 self.hard_links.insert(identity, target);
                 return Ok(());
             }
-            #[cfg(unix)]
-            if append_special(archive, archive_path, &metadata)? {
-                return Ok(());
-            }
-            archive.append_path_with_name(source, archive_path)?;
+            self.append_member(archive, source, archive_path, &metadata)?;
         }
         Ok(())
+    }
+
+    fn append_member<W: Write>(
+        &self,
+        archive: &mut tar::Builder<W>,
+        source: &Path,
+        path: &Path,
+        metadata: &fs::Metadata,
+    ) -> io::Result<()> {
+        if self.options.format != Format::Gnu {
+            return append_portable(archive, self.options.format, source, path, metadata, None);
+        }
+        #[cfg(unix)]
+        if append_special(archive, path, metadata)? {
+            return Ok(());
+        }
+        archive.append_path_with_name(source, path)
     }
 }
 
@@ -736,6 +796,145 @@ fn archive_relative_name(path: &Path) -> &Path {
         components.next();
     }
     components.as_path()
+}
+
+fn append_portable<W: Write>(
+    archive: &mut tar::Builder<W>,
+    format: Format,
+    source: &Path,
+    path: &Path,
+    metadata: &fs::Metadata,
+    hard_link: Option<&Path>,
+) -> io::Result<()> {
+    let mut header = tar::Header::new_ustar();
+    header.set_metadata(metadata);
+    let mut extensions: Vec<(&str, Cow<'_, [u8]>)> = Vec::new();
+    let path: PathBuf = archive_relative_name(path).components().collect();
+    if path.components().any(|part| part == Component::ParentDir) {
+        return Err(invalid("archive member paths must not contain '..'"));
+    }
+    let path = if path.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        &path
+    };
+    let path_result = header.set_path(path);
+    if format == Format::Pax
+        && (path_result.is_err() || !path.as_os_str().as_encoded_bytes().is_ascii())
+    {
+        header = tar::Header::new_ustar();
+        header.set_metadata(metadata);
+        header.set_path("PaxFile")?;
+        extensions.push(("path", Cow::Borrowed(path.as_os_str().as_encoded_bytes())));
+    } else {
+        path_result?;
+    }
+
+    let symlink = if metadata.file_type().is_symlink() && hard_link.is_none() {
+        Some(fs::read_link(source)?)
+    } else {
+        None
+    };
+    if let Some(target) = hard_link.or(symlink.as_deref()) {
+        header.set_entry_type(if hard_link.is_some() {
+            tar::EntryType::Link
+        } else {
+            tar::EntryType::Symlink
+        });
+        header.set_size(0);
+        let bytes = target.as_os_str().as_encoded_bytes();
+        if format == Format::Pax && (bytes.len() > 100 || !bytes.is_ascii()) {
+            header.set_link_name_literal(b"PaxLink")?;
+            extensions.push(("linkpath", Cow::Borrowed(bytes)));
+        } else {
+            header.set_link_name_literal(bytes)?;
+        }
+    } else if !metadata.is_file() {
+        header.set_size(0);
+        let kind = header.entry_type();
+        if !kind.is_dir()
+            && !kind.is_fifo()
+            && !kind.is_character_special()
+            && !kind.is_block_special()
+        {
+            return Err(invalid(format!("{}: unsupported file type", source.display())));
+        }
+    }
+
+    #[cfg(unix)]
+    if format == Format::Pax && (metadata.mtime() < 0 || metadata.mtime_nsec() != 0) {
+        let nanos =
+            i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec());
+        let absolute = nanos.abs();
+        let mut timestamp = format!(
+            "{}{}.{:09}",
+            if nanos < 0 { "-" } else { "" },
+            absolute / 1_000_000_000,
+            absolute % 1_000_000_000,
+        );
+        while timestamp.ends_with('0') {
+            timestamp.pop();
+        }
+        if timestamp.ends_with('.') {
+            timestamp.pop();
+        }
+        extensions.push(("mtime", Cow::Owned(timestamp.into_bytes())));
+        header.set_mtime(0);
+    }
+
+    const SMALL_MAX: u64 = 0o7777777;
+    const LARGE_MAX: u64 = 0o77777777777;
+    let fields = [
+        (
+            "uid",
+            header.uid()?,
+            SMALL_MAX,
+            tar::Header::set_uid as fn(&mut tar::Header, u64),
+        ),
+        ("gid", header.gid()?, SMALL_MAX, tar::Header::set_gid),
+        ("size", header.size()?, LARGE_MAX, tar::Header::set_size),
+        ("mtime", header.mtime()?, LARGE_MAX, tar::Header::set_mtime),
+    ];
+    for (key, value, max, set) in fields {
+        if value > max {
+            if format == Format::Ustar {
+                return Err(invalid(format!(
+                    "{}: {key} cannot be represented in USTAR",
+                    path.display()
+                )));
+            }
+            extensions.push((key, Cow::Owned(value.to_string().into_bytes())));
+            set(&mut header, 0);
+        }
+    }
+    #[cfg(unix)]
+    {
+        if header.entry_type().is_character_special() || header.entry_type().is_block_special() {
+            let (major, minor) = device_numbers(metadata);
+            if u64::from(major) > SMALL_MAX || u64::from(minor) > SMALL_MAX {
+                return Err(invalid(format!(
+                    "{}: device number cannot be represented in USTAR",
+                    path.display()
+                )));
+            }
+            header.set_device_major(major)?;
+            header.set_device_minor(minor)?;
+        }
+    }
+    if format == Format::Pax {
+        if extensions.iter().any(|(key, value)| {
+            matches!(*key, "path" | "linkpath") && std::str::from_utf8(value).is_err()
+        }) {
+            extensions.insert(0, ("hdrcharset", Cow::Borrowed(b"BINARY")));
+        }
+        archive.append_pax_extensions(extensions.iter().map(|(key, value)| (*key, value.as_ref())))?;
+    }
+    header.set_cksum();
+    if metadata.is_file() && hard_link.is_none() {
+        archive.append(&header, File::open(source)?.take(metadata.len()))
+    } else {
+        archive.append(&header, io::empty())
+    }
 }
 
 #[cfg(unix)]
@@ -759,19 +958,25 @@ fn append_special<W: Write>(
     header.set_entry_type(kind);
     header.set_size(0);
     if kind.is_character_special() || kind.is_block_special() {
-        let device = metadata.rdev() as libc::dev_t;
-        #[cfg(any(target_os = "solaris", target_os = "illumos"))]
-        // SAFETY: these scalar device-number accessors have no memory preconditions.
-        let (major, minor) = unsafe { (libc::major(device), libc::minor(device)) };
-        #[cfg(not(any(target_os = "solaris", target_os = "illumos")))]
-        let (major, minor) = (libc::major(device), libc::minor(device));
-        #[cfg(not(target_os = "linux"))]
-        let (major, minor) = (major as u32, minor as u32);
+        let (major, minor) = device_numbers(metadata);
         header.set_device_major(major)?;
         header.set_device_minor(minor)?;
     }
     archive.append_data(&mut header, path, io::empty())?;
     Ok(true)
+}
+
+#[cfg(unix)]
+fn device_numbers(metadata: &fs::Metadata) -> (u32, u32) {
+    let device = metadata.rdev() as libc::dev_t;
+    #[cfg(any(target_os = "solaris", target_os = "illumos"))]
+    // SAFETY: these scalar device-number accessors have no memory preconditions.
+    let (major, minor) = unsafe { (libc::major(device), libc::minor(device)) };
+    #[cfg(not(any(target_os = "solaris", target_os = "illumos")))]
+    let (major, minor) = (libc::major(device), libc::minor(device));
+    #[cfg(not(target_os = "linux"))]
+    let (major, minor) = (major as u32, minor as u32);
+    (major, minor)
 }
 
 #[cfg(unix)]
