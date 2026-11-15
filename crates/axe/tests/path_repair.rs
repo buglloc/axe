@@ -79,3 +79,18 @@ fn find_utf8_globs_keep_invalid_filename_bytes() {
         }
     }
 }
+
+#[test]
+fn find_empty_streamed_roots_fail_without_skipping_valid_neighbors() {
+    let scratch = Scratch::new();
+    let raw = OsString::from_vec(b"raw-\xff".to_vec());
+    fs::write(scratch.0.join(&raw), b"raw").unwrap();
+    fs::write(scratch.0.join("other"), b"other").unwrap();
+    let mut input = raw.as_bytes().to_vec();
+    input.extend_from_slice(b"\0\0other\0");
+    let argv = args(&["-files0-from", "-", "-print0"]);
+    let output = run(&scratch.0, "find", &refs(&argv), &input);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, b"raw-\xff\0other\0");
+    assert!(!output.stderr.is_empty());
+}

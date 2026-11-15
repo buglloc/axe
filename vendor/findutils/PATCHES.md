@@ -21,6 +21,8 @@ provenance, not a local AXE edit. Archive SHA-256:
   locale without changing process-global locale state.
 - Retry unmatched invalid-byte glob inputs in the C locale when libc reports
   `FNM_NOMATCH` instead of `EILSEQ`, preserving musl UTF-8 filename matches.
+- Report an empty `-files0-from` record as a failing starting point while
+  continuing to traverse valid surrounding records.
 - Treat `BrokenPipe` as an ordinary write failure, including stdout's shared
   error handler. The upstream success special case disagrees with GNU find
   when the inherited disposition is `SIG_IGN`; AXE reports the write error and

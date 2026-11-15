@@ -190,36 +190,27 @@ impl Iterator for Files0Paths {
     type Item = Result<OsString, Box<dyn Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let mut buffer = Vec::new();
-            match self.reader.read_until(0, &mut buffer) {
-                Err(e) => return Some(Err(e.into())),
-                Ok(0) => return None,
-                Ok(_) => {}
-            }
-            // A trailing separator terminates the name; without one we are at
-            // EOF and the bytes read are still a name.
-            if buffer.last() == Some(&0) {
-                buffer.pop();
-            }
-            if buffer.is_empty() {
-                // Skip it so as to avoid a file not found error.
-                eprintln!("{}: invalid zero-length file name", program_name());
-                continue;
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::ffi::OsStringExt;
-                return Some(Ok(OsString::from_vec(buffer)));
-            }
-            #[cfg(not(unix))]
-            {
-                return Some(
-                    String::from_utf8(buffer)
-                        .map(OsString::from)
-                        .map_err(Into::into),
-                );
-            }
+        let mut buffer = Vec::new();
+        match self.reader.read_until(0, &mut buffer) {
+            Err(e) => return Some(Err(e.into())),
+            Ok(0) => return None,
+            Ok(_) => {}
+        }
+        if buffer.last() == Some(&0) {
+            buffer.pop();
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            Some(Ok(OsString::from_vec(buffer)))
+        }
+        #[cfg(not(unix))]
+        {
+            Some(
+                String::from_utf8(buffer)
+                    .map(OsString::from)
+                    .map_err(Into::into),
+            )
         }
     }
 }
@@ -388,6 +379,7 @@ fn do_find<S: AsRef<OsStr>>(args: &[S], deps: &dyn Dependencies) -> Result<i32, 
         return Ok(0);
     }
 
+    let streamed_roots = paths_and_matcher.files0_paths.is_some();
     let paths: Box<dyn Iterator<Item = Result<OsString, Box<dyn Error>>>> =
         match paths_and_matcher.files0_paths {
             Some(files0_paths) => Box::new(files0_paths),
@@ -398,6 +390,11 @@ fn do_find<S: AsRef<OsStr>>(args: &[S], deps: &dyn Dependencies) -> Result<i32, 
     let mut quit = false;
     for path in paths {
         let path = path?;
+        if streamed_roots && path.is_empty() {
+            eprintln!("{}: invalid zero-length file name", program_name());
+            ret = 1;
+            continue;
+        }
         let dir_ret = process_dir(
             Path::new(&path),
             &paths_and_matcher.config,
