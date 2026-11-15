@@ -232,3 +232,36 @@ fn jq_sequence_input_requires_initial_framing_and_complete_numbers() {
     );
     expect_output(scratch.run("jq", &["-c", "."], b"2"), 0, b"2\n");
 }
+
+#[test]
+fn jq_arithmetic_rounds_large_integer_operands_before_computing() {
+    let scratch = Scratch::new();
+    expect_output(
+        scratch.run(
+            "jq",
+            &["-cn", "[9007199254740993, (9007199254740993 + 1), (9007199254740993 - 1), (9007199254740993 * 1), (9007199254740992 + 1 + 1)]"],
+            b"",
+        ),
+        0,
+        b"[9007199254740993,9007199254740992,9007199254740991,9007199254740992,9007199254740992]\n",
+    );
+    expect_output(
+        scratch.run(
+            "jq",
+            &["-c", "[., (. + 1), (. - 1), (. * 1)]"],
+            b"9007199254740993\n",
+        ),
+        0,
+        b"[9007199254740993,9007199254740992,9007199254740991,9007199254740992]\n",
+    );
+    expect_output(
+        scratch.run("jq", &["-cn", "[10,20,30][1 + 1]"], b""),
+        0,
+        b"30\n",
+    );
+    expect_output(
+        scratch.run("jq", &["-cn", "1000000000000000000000000 - 1000000000000000000000000"], b""),
+        0,
+        b"0\n",
+    );
+}

@@ -17,6 +17,10 @@ Source: the `jaq-json` 2.0.3 crate from crates.io, upstream revision
   canonicalization.
 - Return null when slicing null, matching jq's null indexing semantics.
   Consumer coverage: `crates/axe/tests/json_diff_repair.rs`.
+- Round addition, subtraction, and multiplication through IEEE754 doubles,
+  matching jq arithmetic while preserving untouched integer literals and
+  keeping integral arithmetic results usable as indices.
+  Contract: <https://jqlang.org/manual/v1.8/#types-and-values>.
 - This is a standalone library manifest; the workspace owns resolution and
   `Cargo.lock`, and the upstream command-line package is not vendored. Its
   upstream `defs`/`funs` tests require `jaq-std/format` and the optional

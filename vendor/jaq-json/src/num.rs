@@ -15,9 +15,9 @@ use num_traits::cast::ToPrimitive;
 /// This allows using integers to index arrays,
 /// while using floating-point numbers to do general math.
 ///
-/// Operations on numbers follow a few principles:
-/// * The sum, difference, product, and remainder of two integers is integer.
-/// * Any other operation between two numbers yields a float.
+/// Addition, subtraction, multiplication, and division round through IEEE754
+/// doubles, matching jq. Integral results retain a machine-integer
+/// representation when possible so they remain usable as indices.
 #[derive(Clone, Debug)]
 pub enum Num {
     /// Machine-size integer
@@ -90,6 +90,18 @@ impl Num {
             Self::BigInt(n) => n.to_f64().unwrap(),
             Self::Float(n) => *n,
             Self::Dec(n) => n.parse().unwrap(),
+        }
+    }
+
+    fn from_arithmetic(value: f64) -> Self {
+        if value >= isize::MIN as f64
+            && value < -(isize::MIN as f64)
+            && value == (value as isize) as f64
+            && (value != 0.0 || value.is_sign_positive())
+        {
+            Self::Int(value as isize)
+        } else {
+            Self::Float(value)
         }
     }
 
@@ -166,58 +178,21 @@ fn biguint_from_str_radix(s: &str, radix: u32) -> Option<BigUint> {
 impl core::ops::Add for Num {
     type Output = Num;
     fn add(self, rhs: Self) -> Self::Output {
-        use num_bigint::BigInt;
-        use Num::*;
-        match (self, rhs) {
-            (Int(x), Int(y)) => int_or_big(x.checked_add(y), [x, y], |[x, y]| x + y),
-            (Int(i), BigInt(b)) | (BigInt(b), Int(i)) => Self::big_int(&BigInt::from(i) + &*b),
-            (Int(i), Float(f)) | (Float(f), Int(i)) => Float(f + i as f64),
-            (BigInt(x), BigInt(y)) => Self::big_int(&*x + &*y),
-            (BigInt(i), Float(f)) | (Float(f), BigInt(i)) => Float(f + i.to_f64().unwrap()),
-            (Float(x), Float(y)) => Float(x + y),
-            (Dec(n), r) => Self::from_dec_str(&n) + r,
-            (l, Dec(n)) => l + Self::from_dec_str(&n),
-        }
+        Self::from_arithmetic(self.as_f64() + rhs.as_f64())
     }
 }
 
 impl core::ops::Sub for Num {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
-        use num_bigint::BigInt;
-        use Num::*;
-        match (self, rhs) {
-            (Int(x), Int(y)) => int_or_big(x.checked_sub(y), [x, y], |[x, y]| x - y),
-            (Int(i), BigInt(b)) => Self::big_int(&BigInt::from(i) - &*b),
-            (BigInt(b), Int(i)) => Self::big_int(&*b - &BigInt::from(i)),
-            (BigInt(x), BigInt(y)) => Self::big_int(&*x - &*y),
-            (Float(f), Int(i)) => Float(f - i as f64),
-            (Int(i), Float(f)) => Float(i as f64 - f),
-            (Float(f), BigInt(i)) => Float(f - i.to_f64().unwrap()),
-            (BigInt(i), Float(f)) => Float(i.to_f64().unwrap() - f),
-            (Float(x), Float(y)) => Float(x - y),
-            (Dec(n), r) => Self::from_dec_str(&n) - r,
-            (l, Dec(n)) => l - Self::from_dec_str(&n),
-        }
+        Self::from_arithmetic(self.as_f64() - rhs.as_f64())
     }
 }
 
 impl core::ops::Mul for Num {
     type Output = Self;
     fn mul(self, rhs: Self) -> Self::Output {
-        use num_bigint::BigInt;
-        use Num::*;
-        match (self, rhs) {
-            (Int(x), Int(y)) => int_or_big(x.checked_mul(y), [x, y], |[x, y]| x * y),
-
-            (Int(i), BigInt(b)) | (BigInt(b), Int(i)) => Self::big_int(&BigInt::from(i) * &*b),
-            (BigInt(x), BigInt(y)) => Self::big_int(&*x * &*y),
-            (BigInt(i), Float(f)) | (Float(f), BigInt(i)) => Float(f * i.to_f64().unwrap()),
-            (Float(f), Int(i)) | (Int(i), Float(f)) => Float(f * i as f64),
-            (Float(x), Float(y)) => Float(x * y),
-            (Dec(n), r) => Self::from_dec_str(&n) * r,
-            (l, Dec(n)) => l * Self::from_dec_str(&n),
-        }
+        Self::from_arithmetic(self.as_f64() * rhs.as_f64())
     }
 }
 
