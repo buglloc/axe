@@ -86,6 +86,8 @@ Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-sty
 
 For the bundled HTTP applet, see [HTTP requests](http.md).
 
+For `sshd` forwarding, environment policy (`--accept-env`), PTYs, signals, and SFTP extensions, see [SSH server and relay](ssh-relay.md).
+
 For passive host context and targeted evidence, see [Vzik](vzik.md).
 
 ## Linux diagnostics

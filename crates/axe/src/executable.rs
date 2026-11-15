@@ -1288,7 +1288,7 @@ pub(crate) struct ExecutableCommand {
     #[cfg(target_os = "linux")]
     argv0: OsString,
     #[cfg(target_os = "linux")]
-    environment: BTreeMap<OsString, OsString>,
+    environment: BTreeMap<OsString, Option<OsString>>,
     #[cfg(target_os = "linux")]
     prepared: bool,
 }
@@ -1349,10 +1349,20 @@ impl ExecutableCommand {
         let value = value.as_ref().to_owned();
         #[cfg(target_os = "linux")]
         if self.descriptor.is_some() {
-            self.environment.insert(name, value);
+            self.environment.insert(name, Some(value));
             return self;
         }
         self.inner.env(name, value);
+        self
+    }
+
+    pub(crate) fn env_remove(&mut self, name: impl AsRef<OsStr>) -> &mut Self {
+        #[cfg(target_os = "linux")]
+        if self.descriptor.is_some() {
+            self.environment.insert(name.as_ref().to_owned(), None);
+            return self;
+        }
+        self.inner.env_remove(name);
         self
     }
 
@@ -1414,11 +1424,16 @@ impl ExecutableCommand {
             }
 
             let mut environment: BTreeMap<OsString, OsString> = std::env::vars_os().collect();
-            environment.extend(
-                self.environment
-                    .iter()
-                    .map(|(name, value)| (name.clone(), value.clone())),
-            );
+            for (name, value) in &self.environment {
+                match value {
+                    Some(value) => {
+                        environment.insert(name.clone(), value.clone());
+                    }
+                    None => {
+                        environment.remove(name);
+                    }
+                }
+            }
             environment.remove(OsStr::new(INHERITED_EXECUTABLE_FD));
             environment.remove(OsStr::new(INHERITED_EXECUTABLE_FALLBACK));
             environment.remove(OsStr::new(INHERITED_RUNTIME_ROOT));
@@ -1461,6 +1476,11 @@ impl TokioExecutableCommand {
 
     pub(crate) fn env(&mut self, name: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
         self.command().env(name, value);
+        self
+    }
+
+    pub(crate) fn env_remove(&mut self, name: impl AsRef<OsStr>) -> &mut Self {
+        self.command().env_remove(name);
         self
     }
 

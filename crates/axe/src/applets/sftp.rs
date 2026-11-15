@@ -4,9 +4,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use bytes::Bytes;
-use russh_sftp::extensions::{EXPAND_PATH, ExpandPathExtension};
+use russh_sftp::extensions::{
+    EXPAND_PATH, ExpandPathExtension, FSYNC, FsyncExtension, HARDLINK, HardlinkExtension, LIMITS,
+    LimitsExtension, STATVFS, Statvfs, StatvfsExtension,
+};
 use russh_sftp::protocol::{
-    Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Packet, Status, StatusCode, Version,
+    Attrs, Data, ExtendedReply, File, FileAttributes, Handle, Name, OpenFlags, Packet, Status,
+    StatusCode, Version,
 };
 use russh_sftp::server::{Handler, StatusReply};
 
@@ -16,6 +20,15 @@ const DIRECTORY_BATCH_SIZE: usize = 64;
 const MAX_CLIENT_PACKET_SIZE: u32 = 256 * 1024;
 const MAX_TRANSFER_SIZE: usize = 240 * 1024;
 const MAX_OPEN_HANDLES: usize = 256;
+const POSIX_RENAME: &str = "posix-rename@openssh.com";
+#[cfg(unix)]
+const FSTATVFS: &str = "fstatvfs@openssh.com";
+
+#[derive(serde::Deserialize)]
+struct RenameExtension {
+    oldpath: String,
+    newpath: String,
+}
 
 enum OpenHandle {
     File {
@@ -112,6 +125,13 @@ impl Handler for Filesystem {
         version
             .extensions
             .insert(EXPAND_PATH.to_owned(), "1".to_owned());
+        for name in [FSYNC, HARDLINK, LIMITS, POSIX_RENAME] {
+            version.extensions.insert(name.to_owned(), "1".to_owned());
+        }
+        #[cfg(unix)]
+        for name in [STATVFS, FSTATVFS] {
+            version.extensions.insert(name.to_owned(), "2".to_owned());
+        }
         Ok(version)
     }
 
@@ -409,27 +429,122 @@ impl Handler for Filesystem {
         request: String,
         data: Vec<u8>,
     ) -> Result<Packet, Self::Error> {
-        if request != EXPAND_PATH {
-            return Err(StatusCode::OpUnsupported.into());
+        match request.as_str() {
+            EXPAND_PATH => {
+                let request: ExpandPathExtension = decode_extension(data)?;
+                let path = self
+                    .canonical_path(&request.path)
+                    .await
+                    .map_err(sftp_error)?;
+                Ok(Packet::Name(Name {
+                    id,
+                    files: vec![File::dummy(path.to_string_lossy())],
+                }))
+            }
+            FSYNC => {
+                let request: FsyncExtension = decode_extension(data)?;
+                let Some(OpenHandle::File { file, .. }) = self.handles.get_mut(&request.handle)
+                else {
+                    return Err(invalid_handle());
+                };
+                file.flush().await.map_err(sftp_error)?;
+                file.sync_all().await.map_err(sftp_error)?;
+                Ok(Packet::Status(ok(id)))
+            }
+            POSIX_RENAME => {
+                let request: RenameExtension = decode_extension(data)?;
+                tokio::fs::rename(self.path(&request.oldpath), self.path(&request.newpath))
+                    .await
+                    .map_err(sftp_error)?;
+                Ok(Packet::Status(ok(id)))
+            }
+            HARDLINK => {
+                let request: HardlinkExtension = decode_extension(data)?;
+                tokio::fs::hard_link(self.path(&request.oldpath), self.path(&request.newpath))
+                    .await
+                    .map_err(sftp_error)?;
+                Ok(Packet::Status(ok(id)))
+            }
+            LIMITS => {
+                if !data.is_empty() {
+                    return Err(StatusCode::BadMessage
+                        .with_message("limits request contains trailing data"));
+                }
+                extension_reply(
+                    id,
+                    &LimitsExtension {
+                        max_packet_len: u64::from(MAX_CLIENT_PACKET_SIZE),
+                        max_read_len: MAX_TRANSFER_SIZE as u64,
+                        max_write_len: MAX_TRANSFER_SIZE as u64,
+                        max_open_handles: MAX_OPEN_HANDLES as u64,
+                    },
+                )
+            }
+            #[cfg(unix)]
+            STATVFS => {
+                let request: StatvfsExtension = decode_extension(data)?;
+                let path = self.path(&request.path);
+                let stats = tokio::task::spawn_blocking(move || nix::sys::statvfs::statvfs(&path))
+                    .await
+                    .map_err(|error| sftp_error(io::Error::other(error)))?
+                    .map_err(|error| sftp_error(io::Error::from(error)))?;
+                extension_reply(id, &filesystem_statistics(stats))
+            }
+            #[cfg(unix)]
+            FSTATVFS => {
+                let request: FsyncExtension = decode_extension(data)?;
+                let Some(OpenHandle::File { file, .. }) = self.handles.get(&request.handle) else {
+                    return Err(invalid_handle());
+                };
+                let file = file.try_clone().await.map_err(sftp_error)?;
+                let stats = tokio::task::spawn_blocking(move || nix::sys::statvfs::fstatvfs(&file))
+                    .await
+                    .map_err(|error| sftp_error(io::Error::other(error)))?
+                    .map_err(|error| sftp_error(io::Error::from(error)))?;
+                extension_reply(id, &filesystem_statistics(stats))
+            }
+            _ => Err(StatusCode::OpUnsupported.into()),
         }
+    }
+}
 
-        let mut data = Bytes::from(data);
-        let request: ExpandPathExtension = russh_sftp::de::from_bytes(&mut data)
-            .map_err(|error| StatusCode::BadMessage.with_message(error.to_string()))?;
-        if !data.is_empty() {
-            return Err(
-                StatusCode::BadMessage.with_message("expand-path request contains trailing data")
-            );
-        }
+fn decode_extension<T: serde::de::DeserializeOwned>(data: Vec<u8>) -> Result<T, StatusReply> {
+    let mut data = Bytes::from(data);
+    let request = russh_sftp::de::from_bytes(&mut data)
+        .map_err(|error| StatusCode::BadMessage.with_message(error.to_string()))?;
+    if !data.is_empty() {
+        return Err(StatusCode::BadMessage.with_message("extension request contains trailing data"));
+    }
+    Ok(request)
+}
 
-        let path = self
-            .canonical_path(&request.path)
-            .await
-            .map_err(sftp_error)?;
-        Ok(Packet::Name(Name {
-            id,
-            files: vec![File::dummy(path.to_string_lossy())],
-        }))
+fn extension_reply(id: u32, value: &impl serde::Serialize) -> Result<Packet, StatusReply> {
+    let data =
+        russh_sftp::ser::to_bytes(value).map_err(|error| sftp_error(io::Error::other(error)))?;
+    Ok(Packet::ExtendedReply(ExtendedReply {
+        id,
+        data: data.to_vec(),
+    }))
+}
+
+#[cfg(unix)]
+#[allow(clippy::unnecessary_cast)] // POSIX counter widths differ between target ABIs.
+fn filesystem_statistics(stats: nix::sys::statvfs::Statvfs) -> Statvfs {
+    use nix::sys::statvfs::FsFlags;
+    let flags = u64::from(stats.flags().contains(FsFlags::ST_RDONLY))
+        | (u64::from(stats.flags().contains(FsFlags::ST_NOSUID)) << 1);
+    Statvfs {
+        block_size: stats.block_size() as u64,
+        fragment_size: stats.fragment_size() as u64,
+        blocks: stats.blocks() as u64,
+        blocks_free: stats.blocks_free() as u64,
+        blocks_avail: stats.blocks_available() as u64,
+        inodes: stats.files() as u64,
+        inodes_free: stats.files_free() as u64,
+        inodes_avail: stats.files_available() as u64,
+        fs_id: stats.filesystem_id() as u64,
+        flags,
+        name_max: stats.name_max() as u64,
     }
 }
 
@@ -688,6 +803,87 @@ mod tests {
             .expect("SFTP server did not stop")
             .expect("SFTP server task failed")
             .expect("SFTP server returned an error");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::unnecessary_cast)] // POSIX counter widths differ between target ABIs.
+    async fn extensions_replace_link_sync_and_stat_open_files() {
+        fn strings(values: &[&str]) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            for value in values {
+                bytes.extend_from_slice(&(value.len() as u32).to_be_bytes());
+                bytes.extend_from_slice(value.as_bytes());
+            }
+            bytes
+        }
+        let scratch = Scratch::new();
+        std::fs::write(scratch.0.join("source"), b"new").expect("create source");
+        std::fs::write(scratch.0.join("target"), b"old").expect("create target");
+        let mut filesystem = Filesystem::with_home(scratch.0.clone(), scratch.0.clone());
+        let mut malformed = strings(&["source", "target"]);
+        malformed.push(0);
+        let error = filesystem
+            .extended(1, POSIX_RENAME.to_owned(), malformed)
+            .await
+            .expect_err("reject trailing mutation data");
+        assert_eq!(error.status_code, StatusCode::BadMessage);
+        assert_eq!(std::fs::read(scratch.0.join("source")).unwrap(), b"new");
+        assert_eq!(std::fs::read(scratch.0.join("target")).unwrap(), b"old");
+        filesystem
+            .extended(2, POSIX_RENAME.to_owned(), strings(&["source", "target"]))
+            .await
+            .expect("replace target");
+        assert!(!scratch.0.join("source").exists());
+        assert_eq!(std::fs::read(scratch.0.join("target")).unwrap(), b"new");
+        filesystem
+            .extended(3, HARDLINK.to_owned(), strings(&["target", "linked"]))
+            .await
+            .expect("create hardlink");
+        std::fs::write(scratch.0.join("linked"), b"shared").expect("modify linked inode");
+        assert_eq!(std::fs::read(scratch.0.join("target")).unwrap(), b"shared");
+        let handle = filesystem
+            .open(
+                4,
+                "target".to_owned(),
+                OpenFlags::READ | OpenFlags::WRITE,
+                FileAttributes::default(),
+            )
+            .await
+            .expect("open target")
+            .handle;
+        filesystem
+            .write(5, handle.clone(), 0, b"synced".to_vec())
+            .await
+            .expect("write target");
+        filesystem
+            .extended(6, FSYNC.to_owned(), strings(&[&handle]))
+            .await
+            .expect("sync target");
+        assert_eq!(std::fs::read(scratch.0.join("linked")).unwrap(), b"synced");
+        std::fs::remove_file(scratch.0.join("target")).expect("unlink open path");
+        std::fs::remove_file(scratch.0.join("linked")).expect("unlink last path");
+        let Packet::ExtendedReply(reply) = filesystem
+            .extended(7, FSTATVFS.to_owned(), strings(&[&handle]))
+            .await
+            .expect("stat unlinked open file")
+        else {
+            panic!("fstatvfs must return EXTENDED_REPLY");
+        };
+        let stats: Statvfs = russh_sftp::de::from_bytes(&mut Bytes::from(reply.data))
+            .expect("decode filesystem statistics");
+        let native = nix::sys::statvfs::statvfs(&scratch.0).expect("stat fixture filesystem");
+        assert_eq!(stats.block_size, native.block_size() as u64);
+        assert_eq!(stats.name_max, native.name_max() as u64);
+        filesystem
+            .close(8, handle.clone())
+            .await
+            .expect("close target");
+        let error = filesystem
+            .extended(9, FSYNC.to_owned(), strings(&[&handle]))
+            .await
+            .expect_err("reject closed handle");
+        assert_eq!(error.status_code, StatusCode::Failure);
     }
 
     #[tokio::test]

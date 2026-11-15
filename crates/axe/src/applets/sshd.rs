@@ -18,11 +18,16 @@ use russh::keys::{
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId, ChannelOpenFailure, server};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinSet;
 
+#[cfg(unix)]
+mod agent;
+mod environment;
 mod supervisor;
+#[cfg(unix)]
+mod terminal;
 
 const NO_SHELL_EXECUTABLE: &str = "sshd: cannot locate AXE executable for shell sessions";
 const DEFAULT_SSH_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -52,6 +57,9 @@ struct Options {
     /// Allowed SSH certificate principals, separated by commas.
     #[arg(long, env = "AXE_SSHD_PRINCIPALS", value_delimiter = ',')]
     principals: Option<Vec<String>>,
+    /// Accepted client environment patterns ('*' and '?'), separated by commas.
+    #[arg(long, value_delimiter = ',', default_value = environment::DEFAULT_ACCEPT_ENV)]
+    accept_env: Vec<String>,
     #[arg(long)]
     daemon: bool,
     #[arg(long)]
@@ -538,6 +546,7 @@ async fn run(
         (options.store_mode == crate::registry::StoreMode::Auto).then(IdleIndexRefresher::start);
     let mut factory = SshServer {
         principals,
+        accept_env: options.accept_env.into(),
         ca_fingerprints: Arc::new(ca_fingerprints),
         workdir,
         home_dir,
@@ -682,6 +691,12 @@ type ProcessOutput = Box<dyn AsyncRead + Send + Unpin>;
 struct ChannelState {
     /// Session channel not yet claimed by a shell, exec, or subsystem request.
     unclaimed: Option<Channel<Msg>>,
+    started: bool,
+    environment: HashMap<String, String>,
+    environment_bytes: usize,
+    signals: Option<mpsc::Sender<i32>>,
+    #[cfg(unix)]
+    agent: Option<agent::AgentForward>,
     input: Option<Arc<Mutex<ProcessInput>>>,
     /// Asks the task that owns the child to kill and reap it.
     child: Option<oneshot::Sender<()>>,
@@ -715,6 +730,7 @@ type Channels = Arc<Mutex<HashMap<ChannelId, ChannelState>>>;
 struct PtyRequest {
     term: String,
     size: PtySize,
+    modes: Vec<(russh::Pty, u32)>,
 }
 
 #[cfg(unix)]
@@ -926,6 +942,7 @@ impl Drop for ConnectionLifecycle {
 
 struct SshServer {
     principals: Arc<[String]>,
+    accept_env: Arc<[String]>,
     ca_fingerprints: Arc<Vec<ssh_key::Fingerprint>>,
     workdir: Arc<PathBuf>,
     home_dir: Arc<PathBuf>,
@@ -956,6 +973,7 @@ impl server::Server for SshServer {
         ));
         Self {
             principals: self.principals.clone(),
+            accept_env: self.accept_env.clone(),
             ca_fingerprints: self.ca_fingerprints.clone(),
             workdir: self.workdir.clone(),
             home_dir: self.home_dir.clone(),
@@ -1040,6 +1058,102 @@ impl server::Handler for SshServer {
         Ok(())
     }
 
+    async fn agent_request(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        #[cfg(unix)]
+        {
+            let mut channels = self.channels.lock().await;
+            let Some(state) = channels.get_mut(&channel) else {
+                return Ok(false);
+            };
+            if state.started || state.agent.is_some() {
+                return Ok(false);
+            }
+            match agent::AgentForward::start(session.handle()) {
+                Ok(agent) => {
+                    state.agent = Some(agent);
+                    Ok(true)
+                }
+                Err(error) => {
+                    eprintln!("sshd: create forwarded agent socket: {error}");
+                    Ok(false)
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (channel, session);
+            Ok(false)
+        }
+    }
+
+    async fn env_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        value: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let mut channels = self.channels.lock().await;
+        let accepted = if let Some(state) = channels.get_mut(&channel) {
+            let previous = state.environment.get(name);
+            let bytes = state.environment_bytes - previous.map_or(0, |old| name.len() + old.len())
+                + name.len()
+                + value.len();
+            if !state.started
+                && environment::accepts(&self.accept_env, name, value)
+                && (previous.is_some() || state.environment.len() < environment::MAX_VARIABLES)
+                && bytes <= environment::MAX_ENVIRONMENT_BYTES
+            {
+                state.environment.insert(name.to_owned(), value.to_owned());
+                state.environment_bytes = bytes;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        drop(channels);
+        if accepted {
+            let _ = session.channel_success(channel);
+        } else {
+            let _ = session.channel_failure(channel);
+        }
+        Ok(())
+    }
+
+    async fn signal(
+        &mut self,
+        channel: ChannelId,
+        signal: russh::Sig,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        #[cfg(unix)]
+        let accepted = {
+            let channels = self.channels.lock().await;
+            channels
+                .get(&channel)
+                .and_then(|state| state.signals.as_ref())
+                .zip(signal_number(&signal))
+                .is_some_and(|(sender, signal)| sender.try_send(signal).is_ok())
+        };
+        #[cfg(not(unix))]
+        let accepted = {
+            let _ = signal;
+            false
+        };
+        if accepted {
+            let _ = session.channel_success(channel);
+        } else {
+            let _ = session.channel_failure(channel);
+        }
+        Ok(())
+    }
+
     async fn channel_open_direct_tcpip(
         &mut self,
         channel: Channel<Msg>,
@@ -1081,15 +1195,21 @@ impl server::Handler for SshServer {
         rows: u32,
         pixel_width: u32,
         pixel_height: u32,
-        _: &[(russh::Pty, u32)],
+        modes: &[(russh::Pty, u32)],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         #[cfg(unix)]
         {
             let requested = match self.channels.lock().await.get_mut(&channel) {
-                Some(state) => {
+                Some(state)
+                    if !state.started
+                        && state.pty.is_none()
+                        && term.len() <= 256
+                        && !term.contains('\0') =>
+                {
                     state.pty = Some(PtyState::Requested(PtyRequest {
                         term: term.to_owned(),
+                        modes: modes.to_vec(),
                         size: PtySize {
                             columns,
                             rows,
@@ -1099,7 +1219,7 @@ impl server::Handler for SshServer {
                     }));
                     true
                 }
-                None => false,
+                _ => false,
             };
             if requested {
                 let _ = session.channel_success(channel);
@@ -1109,7 +1229,7 @@ impl server::Handler for SshServer {
         }
         #[cfg(not(unix))]
         {
-            let _ = (term, columns, rows, pixel_width, pixel_height);
+            let _ = (term, columns, rows, pixel_width, pixel_height, modes);
             let _ = session.channel_failure(channel);
         }
         Ok(())
@@ -1169,12 +1289,12 @@ impl server::Handler for SshServer {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let mut channels = self.channels.lock().await;
-        let state = channels.get_mut(&channel);
-        let ssh_channel = state.and_then(|state| state.unclaimed.take());
+        let ssh_channel = channels
+            .get_mut(&channel)
+            .filter(|state| name == "sftp" && !state.started)
+            .and_then(|state| state.unclaimed.take());
 
-        if name == "sftp"
-            && let Some(ssh_channel) = ssh_channel
-        {
+        if let Some(ssh_channel) = ssh_channel {
             let filesystem = super::sftp::Filesystem::with_home(
                 (*self.workdir).clone(),
                 (*self.home_dir).clone(),
@@ -1184,6 +1304,7 @@ impl server::Handler for SshServer {
                 super::sftp::run(ssh_channel.into_stream(), filesystem).await
             });
             if let Some(state) = channels.get_mut(&channel) {
+                state.started = true;
                 state.sftp = Some(task);
             }
             drop(channels);
@@ -1444,19 +1565,44 @@ impl SshServer {
     ) -> io::Result<()> {
         let mut process = self.executable.tokio_command()?;
 
-        // The daemon owns Index freshness; the session remains online for
-        // Store tool delivery but builds its registry from the verified cache.
         process
             .arg("--noprofile")
             .arg("--no-config")
             .current_dir(&*self.workdir)
+            .env_remove("SSH_AUTH_SOCK")
+            .env_remove("SSH_AGENT_PID")
+            .kill_on_drop(true);
+
+        {
+            let channels = self.channels.lock().await;
+            let state = channels.get(&channel).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "session channel is closed")
+            })?;
+            if state.started {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "session already started",
+                ));
+            }
+            for (name, value) in &state.environment {
+                process.env(name, value);
+            }
+            #[cfg(unix)]
+            if let Some(agent) = &state.agent {
+                process.env("SSH_AUTH_SOCK", agent.socket());
+            }
+        }
+
+        // Session identity and Store policy remain server-owned even when all
+        // client environment names are accepted.
+        // The daemon owns Index freshness; sessions use the verified cache
+        // while retaining online Store delivery.
+        process
             .env("HOME", &*self.home_dir)
             .env("AXE", "true")
             .env("AXE_WORK_DIR", &*self.workdir)
             .env("AXE_STORE_MODE", self.store_mode.as_str())
-            .env(crate::registry::INDEX_CACHE_ONLY_ENV, "1")
-            .kill_on_drop(true);
-
+            .env(crate::registry::INDEX_CACHE_ONLY_ENV, "1");
         if let Some(store_dir) = self.store_dir.as_ref() {
             process.env("AXE_STORE_DIR", store_dir);
         }
@@ -1477,21 +1623,31 @@ impl SshServer {
             _ => None,
         };
         #[cfg(unix)]
+        let mut child_exit = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())?;
+        #[cfg(unix)]
         let mut spawned = match requested_pty {
             Some(request) => spawn_pty_shell(process, request)?,
             None => spawn_pipe_shell(process)?,
         };
         #[cfg(not(unix))]
         let mut spawned = spawn_pipe_shell(process)?;
+        #[cfg(unix)]
+        let child_pid = spawned
+            .child
+            .id()
+            .ok_or_else(|| io::Error::other("missing SSH child PID"))?;
         let active_session = self
             .index_activity
             .as_ref()
             .map(|activity| activity.start());
 
-        let (cancel, cancelled) = oneshot::channel();
+        let (cancel, mut cancelled) = oneshot::channel();
+        let (signals, mut pending_signals) = mpsc::channel(16);
         {
             let mut channels = self.channels.lock().await;
             let state = channels.entry(channel).or_default();
+            state.started = true;
+            state.signals = Some(signals);
             // russh also queues every data packet for this Channel before calling
             // Handler::data. The shell reads through the handler, so leaving the
             // unused receiver alive would block the connection once its queue fills.
@@ -1521,16 +1677,38 @@ impl SshServer {
         tokio::spawn(async move {
             let _active_session = active_session;
             let mut child = spawned.child;
-            let status = tokio::select! {
-                status = child.wait() => Some(status),
-                _ = cancelled => None,
-            };
-            let status = match status {
-                Some(status) => status,
-                None => {
-                    if let Err(error) = child.start_kill() {
-                        eprintln!("sshd: child termination failed: {error}");
+            #[cfg(unix)]
+            let status = loop {
+                tokio::select! {
+                    ready = wait_for_child_exit(child_pid, &mut child_exit) => {
+                        if let Err(error) = ready {
+                            eprintln!("sshd: observe child exit: {error}");
+                        }
+                        // Keep the leader unreaped until descendants are stopped:
+                        // its PID cannot be reused as another process group's ID.
+                        let _ = signal_process_group(child_pid, libc::SIGKILL);
+                        break child.wait().await;
                     }
+                    Some(signal) = pending_signals.recv() => {
+                        if let Err(error) = signal_process_group(child_pid, signal)
+                        {
+                            eprintln!("sshd: deliver SSH signal: {error}");
+                        }
+                    }
+                    _ = &mut cancelled => {
+                        let _ = signal_process_group(child_pid, libc::SIGKILL);
+                        if let Err(error) = child.start_kill() {
+                            eprintln!("sshd: child termination failed: {error}");
+                        }
+                        break child.wait().await;
+                    }
+                }
+            };
+            #[cfg(not(unix))]
+            let status = tokio::select! {
+                status = child.wait() => status,
+                _ = &mut cancelled => {
+                    let _ = child.start_kill();
                     child.wait().await
                 }
             };
@@ -1549,15 +1727,38 @@ impl SshServer {
                 eprintln!("sshd: stderr forwarding task failed: {error}");
             }
 
-            let code = match status {
-                Ok(status) => status.code().unwrap_or(255) as u32,
+            match status {
+                Ok(status) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::ExitStatusExt;
+                        if let Some(signal) = status.signal() {
+                            let signal = signal_name(signal);
+                            let _ = handle
+                                .exit_signal_request(
+                                    channel,
+                                    signal,
+                                    status.core_dumped(),
+                                    String::new(),
+                                    String::new(),
+                                )
+                                .await;
+                        } else {
+                            let _ = handle
+                                .exit_status_request(channel, status.code().unwrap_or(255) as u32)
+                                .await;
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    let _ = handle
+                        .exit_status_request(channel, status.code().unwrap_or(255) as u32)
+                        .await;
+                }
                 Err(error) => {
                     eprintln!("sshd: child wait failed: {error}");
-                    255
+                    let _ = handle.exit_status_request(channel, 255).await;
                 }
-            };
-
-            let _ = handle.exit_status_request(channel, code).await;
+            }
             let _ = handle.eof(channel).await;
             let _ = handle.close(channel).await;
         });
@@ -1638,6 +1839,93 @@ impl SshServer {
     }
 }
 
+#[cfg(unix)]
+fn signal_number(signal: &russh::Sig) -> Option<libc::c_int> {
+    use russh::Sig;
+    Some(match signal {
+        Sig::ABRT => libc::SIGABRT,
+        Sig::ALRM => libc::SIGALRM,
+        Sig::FPE => libc::SIGFPE,
+        Sig::HUP => libc::SIGHUP,
+        Sig::ILL => libc::SIGILL,
+        Sig::INT => libc::SIGINT,
+        Sig::KILL => libc::SIGKILL,
+        Sig::PIPE => libc::SIGPIPE,
+        Sig::QUIT => libc::SIGQUIT,
+        Sig::SEGV => libc::SIGSEGV,
+        Sig::TERM => libc::SIGTERM,
+        Sig::USR1 => libc::SIGUSR1,
+        Sig::Custom(name) => match name.as_str() {
+            "USR2" => libc::SIGUSR2,
+            "STOP" => libc::SIGSTOP,
+            "CONT" => libc::SIGCONT,
+            "TSTP" => libc::SIGTSTP,
+            "TTIN" => libc::SIGTTIN,
+            "TTOU" => libc::SIGTTOU,
+            "WINCH" => libc::SIGWINCH,
+            _ => return None,
+        },
+    })
+}
+
+#[cfg(unix)]
+fn signal_name(signal: libc::c_int) -> russh::Sig {
+    let name = nix::sys::signal::Signal::try_from(signal).map_or("UNKNOWN", |signal| {
+        signal.as_str().strip_prefix("SIG").unwrap_or("UNKNOWN")
+    });
+    russh::Sig::Custom(name.to_owned())
+}
+
+#[cfg(unix)]
+fn signal_process_group(pid: u32, signal: libc::c_int) -> io::Result<()> {
+    let pid = libc::pid_t::try_from(pid)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "child PID exceeds pid_t"))?;
+    // SAFETY: pid is the positive PID of an owned, unreaped group leader.
+    if unsafe { libc::kill(-pid, signal) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn wait_for_child_exit(pid: u32, exited: &mut tokio::signal::unix::Signal) -> io::Result<()> {
+    loop {
+        // Darwin's siginfo_t contains pointers and must not cross an await.
+        let ready = {
+            let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+            // SAFETY: info has storage for siginfo_t; WNOHANG requires zeroed si_signo
+            // to distinguish no event, and WNOWAIT leaves the owned child unreaped.
+            let result = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    info.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+                )
+            };
+            if result == -1 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            // SAFETY: waitid succeeded and siginfo_t contains only C scalar/union
+            // fields; untouched bytes were initialized to zero before the call.
+            unsafe { info.assume_init() }.si_signo != 0
+        };
+        if ready {
+            return Ok(());
+        }
+        if exited.recv().await.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "SIGCHLD observer closed",
+            ));
+        }
+    }
+}
+
 fn spawn_pipe_shell(
     mut process: crate::executable::TokioExecutableCommand,
 ) -> io::Result<SpawnedShell> {
@@ -1645,6 +1933,16 @@ fn spawn_pipe_shell(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    // SAFETY: setpgid is async-signal-safe and affects only the newly forked child.
+    unsafe {
+        process.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
 
     let mut child = process.spawn()?;
     let input = child
@@ -1681,6 +1979,7 @@ fn spawn_pty_shell(
     let OpenptyResult { master, slave } =
         nix::pty::openpty(Some(&size), None::<&nix::sys::termios::Termios>)
             .map_err(io::Error::from)?;
+    terminal::apply_modes(&slave, &request.modes)?;
     let input = nix::unistd::dup(&master).map_err(io::Error::from)?;
     let control = nix::unistd::dup(&master).map_err(io::Error::from)?;
     let child_stdin = nix::unistd::dup(&slave).map_err(io::Error::from)?;
@@ -2153,6 +2452,126 @@ mod tests {
         std::fs::remove_dir_all(directory).expect("remove SSH filesystem test directory");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_environment_isolated_and_signals_reported() {
+        async fn environment_reply(
+            channel: &mut Channel<russh::client::Msg>,
+            name: &str,
+            value: &str,
+            accepted: bool,
+        ) {
+            channel
+                .set_env(true, name, value)
+                .await
+                .expect("send environment request");
+            let reply = tokio::time::timeout(Duration::from_secs(5), channel.wait())
+                .await
+                .expect("environment reply timeout");
+            assert!(matches!(
+                (reply, accepted),
+                (Some(russh::ChannelMsg::Success), true)
+                    | (Some(russh::ChannelMsg::Failure), false)
+            ));
+        }
+        let directory =
+            std::env::temp_dir().join(format!("axe-sshd-env-signal-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("create session fixture directory");
+        let axe = std::env::current_exe()
+            .expect("locate test executable")
+            .parent()
+            .and_then(Path::parent)
+            .expect("locate target directory")
+            .join("axe")
+            .canonicalize()
+            .expect("locate AXE binary");
+        let (client, _, server) = test_connection_with_store_mode(
+            directory.clone(),
+            None,
+            Some(axe),
+            crate::registry::StoreMode::Off,
+        )
+        .await;
+        let mut channel = client
+            .channel_open_session()
+            .await
+            .expect("open session channel");
+        environment_reply(&mut channel, "LC_AXE_SESSION_TEST", "first", true).await;
+        for name in ["PATH", "SSH_AUTH_SOCK", "LD_PRELOAD", "AXE_STORE_MODE"] {
+            environment_reply(&mut channel, name, "denied", false).await;
+        }
+        channel
+            .exec(
+                true,
+                b"printf '%s\\n' \"$LC_AXE_SESSION_TEST\"; read REPLY".as_slice(),
+            )
+            .await
+            .expect("start blocking command");
+        let mut output = Vec::new();
+        let mut success = false;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !success || !output.ends_with(b"first\n") {
+                match channel.wait().await {
+                    Some(russh::ChannelMsg::Success) => success = true,
+                    Some(russh::ChannelMsg::Data { data }) => output.extend_from_slice(&data),
+                    Some(_) => {}
+                    None => panic!("session ended before environment was printed"),
+                }
+            }
+        })
+        .await
+        .expect("command readiness timeout");
+        assert_eq!(output, b"first\n");
+        environment_reply(&mut channel, "LC_AXE_SESSION_TEST", "late", false).await;
+        channel
+            .signal(russh::Sig::TERM)
+            .await
+            .expect("send SSH signal");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match channel.wait().await {
+                    Some(russh::ChannelMsg::ExitSignal { signal_name, .. }) => {
+                        assert!(matches!(&signal_name, russh::Sig::TERM) || matches!(&signal_name, russh::Sig::Custom(name) if name == "TERM"));
+                        break;
+                    }
+                    Some(russh::ChannelMsg::ExitStatus { exit_status }) => panic!("signal reported as exit status {exit_status}"),
+                    Some(_) => {}
+                    None => panic!("session closed without exit-signal"),
+                }
+            }
+        }).await.expect("SSH signal did not terminate command");
+        let mut other = client
+            .channel_open_session()
+            .await
+            .expect("open isolated session");
+        other
+            .exec(
+                true,
+                b"printf '%s' \"${LC_AXE_SESSION_TEST-unset}\"".as_slice(),
+            )
+            .await
+            .expect("start isolated command");
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match other.wait().await {
+                    Some(russh::ChannelMsg::Data { data }) => output.extend_from_slice(&data),
+                    Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                        assert_eq!(exit_status, 0);
+                        break;
+                    }
+                    Some(_) => {}
+                    None => panic!("isolated session closed without exit status"),
+                }
+            }
+        })
+        .await
+        .expect("isolated session timeout");
+        assert_eq!(output, b"unset");
+        close_test_connection(client, server).await;
+        std::fs::remove_dir_all(directory).expect("remove session fixture");
+    }
+
     enum ForwardedChannel {
         Tcp(Channel<russh::client::Msg>),
         #[cfg(unix)]
@@ -2306,6 +2725,7 @@ mod tests {
         let handler = SshServer {
             ca_fingerprints: Arc::new(vec![ca_key.public_key().fingerprint(HashAlg::Sha256)]),
             principals,
+            accept_env: Arc::from([String::from("LANG"), String::from("LC_*")]),
             workdir: Arc::new(workdir),
             home_dir: Arc::new(home_dir),
             store_dir: Arc::new(store_dir),
@@ -2727,6 +3147,7 @@ mod tests {
         let handler = SshServer {
             ca_fingerprints: Arc::new(vec![ca_key.public_key().fingerprint(HashAlg::Sha256)]),
             principals: Arc::from([String::from("axe-user")]),
+            accept_env: Arc::from([String::from("LANG"), String::from("LC_*")]),
             workdir: Arc::new(workdir.clone()),
             home_dir: Arc::new(home_dir.clone()),
             store_dir: Arc::new(Some(store_dir.clone())),

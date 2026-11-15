@@ -53,6 +53,8 @@ Commands:
                                    Store mode: auto, cache-only, or off
                                    SSH certificates only; edition-specific
                                    principals, user CA, and host key
+                                   TCP/Unix forwarding, agent forwarding, SFTP
+                                   --accept-env LANG,LC_* (patterns: * and ?)
   axe-relay                         separate relay service with dashboard/API/CLI
 
 AXE Store Index v2 pins immutable signed manifests by SHA-256; metadata and

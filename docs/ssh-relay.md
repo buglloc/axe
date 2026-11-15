@@ -28,6 +28,42 @@ The AXE applet bridge remains at the front of `PATH` when it is available. A non
 
 SFTP resolves relative paths from `workdir` and `~` from the session home. The `expand-path@openssh.com` extension keeps `scp`'s default SFTP mode and `scp -O`'s legacy remote-shell mode consistent.
 
+### Forwarding and session requests
+
+TCP and Unix-domain stream sockets support local (`ssh -L`) and reverse (`ssh -R`) forwarding, including TCP-to-Unix and Unix-to-TCP endpoints. Dynamic forwarding (`ssh -D`) supports SOCKS TCP connections, not UDP.
+
+Agent forwarding requires an explicit client request (`ssh -A`). Each session channel receives its own `SSH_AUTH_SOCK`, backed by a mode-0600 socket in a mode-0700 temporary directory. Socket connections and the directory are removed when that session ends or the SSH connection closes. Sessions without forwarding do not inherit the daemon's agent socket. At most 16 agent connections run concurrently per session.
+
+Forward only to hosts trusted to request signatures with the agent's keys. Private keys stay in the client agent, but a process able to access the forwarded socket can request signatures while the session is open.
+
+`SendEnv` and `SetEnv` requests are accepted before shell/exec/subsystem startup. The default allowlist is `LANG,LC_*`. Replace it with a comma-separated list such as `--accept-env='LANG,LC_*,TEST_?L*WED'`. Patterns are case-sensitive and follow OpenSSH matching: `*` matches zero or more bytes and `?` matches one byte, anywhere in the pattern. Other characters are literal; character classes, brace expansion, and `!` negation are not supported.
+
+`--accept-env='*'` accepts every environment name without a denylist, including `LD_*`, `DYLD_*`, `SSH_*`, and `AXE*`. It only permits variables the client actually sends; it does not copy the client's entire environment. Accept-all permits loader and shell startup variables, so use it only with trusted clients.
+
+Names must be nonempty, at most 128 bytes, and contain neither `=` nor NUL; values must contain no NUL and be at most 4096 bytes. Each session accepts at most 64 variables and 32 KiB of combined names and values.
+
+As in OpenSSH, accepted values can be superseded by server-generated session state. AXE sets `HOME`, `AXE`, `AXE_WORK_DIR`, its Store policy, and any configured Store directory after client variables. A PTY supplies `TERM`; agent forwarding supplies the real `SSH_AUTH_SOCK` after any client-provided socket value. The managed applet bridge remains at the front of `PATH`.
+
+On Unix, SSH signal requests target the session child's process group. Signal termination is reported through `exit-signal`; normal termination uses `exit-status`. Closing a session kills its process group and reaps the child. Remaining group members are also killed when the child exits, before its PID can be reused. Processes that deliberately create another session are outside this group.
+
+PTY requests apply supported native terminal modes, including echo/canonical/flow-control flags, control characters, and baud rates. Window changes update the active terminal.
+
+### SFTP extensions
+
+Alongside `expand-path@openssh.com`, SFTP implements:
+
+| Extension | Version | Behavior |
+| --- | --- | --- |
+| `fsync@openssh.com` | 1 | Flush buffered writes and synchronize an open file |
+| `posix-rename@openssh.com` | 1 | Rename with replacement using native filesystem semantics |
+| `hardlink@openssh.com` | 1 | Create a hard link without replacing an existing destination |
+| `statvfs@openssh.com` | 2 | Return native filesystem statistics for a path (Unix) |
+| `fstatvfs@openssh.com` | 2 | Return statistics through an open file handle, including an unlinked file (Unix) |
+| `limits@openssh.com` | 1 | Advertise packet, read/write, and open-handle limits |
+
+Malformed extension payloads are rejected before mutation. Closed or non-file handles fail `fsync` and `fstatvfs`.
+
+
 ## Relay
 
 The target runs `axe sshd`; the separate `axe-relay` daemon assigns public TCP ports on a reachable host. Relay is disabled by default in the OSS edition. Use `--relay ENDPOINT` to enable it or `--no-relay` to override an edition's configured default.
@@ -142,3 +178,30 @@ To run only the relay tests:
 ```bash
 cargo test --locked -p axe-relay --all-features
 ```
+
+The local relay smoke verifies real SSH banners over TCP and QUIC, supervised-daemon registration, relay crash/re-registration, concurrent binary traffic, half-close, idle-stream isolation, and listener/target cleanup:
+
+```bash
+cargo build --locked -p axe -p axe-relay
+bash scripts/relay-live-smoke.sh target/debug/axe target/debug/axe-relay
+```
+
+
+The local SSH interoperability smoke uses the current certificate-bearing `SSH_AUTH_SOCK`. It creates an isolated edition containing only that certificate issuer's public trust and a disposable host key; it does not create another agent or copy authentication private keys. Run inside the development shell:
+
+```bash
+(
+    set -eu
+    scratch=$(mktemp -d)
+    trap 'rm -rf -- "$scratch"' EXIT
+    python3 scripts/ssh-live-smoke.py prepare-edition "$scratch/edition"
+    AXE_EDITION_ROOT="$scratch/edition" cargo build --locked -p axe
+    cp target/debug/axe "$scratch/axe"
+    AXE_EDITION_ROOT="${AXE_EDITION_ROOT:-$PWD}" cargo build --locked -p axe
+    python3 scripts/ssh-live-smoke.py run \
+        --axe "$scratch/axe" --identity-config "$scratch/edition/smoke-identity.json"
+)
+```
+
+The smoke covers OpenSSH forwarding, agent signing and isolation, environment policy, actual PTY settings/resize, signal exits, process cleanup, concurrent sessions, SFTP wire extensions, and OpenSSH SFTP transfers. It requires Linux `/proc`. Direct SSH signal requests and environment requests after exec are covered by the Rust tests because the OpenSSH CLI cannot issue them.
+
