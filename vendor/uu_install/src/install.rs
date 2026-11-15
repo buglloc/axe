@@ -823,13 +823,6 @@ fn standard(mut paths: Vec<OsString>, b: &Behavior) -> UResult<()> {
             return copy_files_into_dir(sources, &target, b);
         }
 
-        if b.backup_mode.ne(&BackupMode::None)
-            && let Ok(to_abs) = target.canonicalize()
-            && source.canonicalize()? == to_abs
-        {
-            return Err(InstallError::SameFile(source.clone(), target.clone()).into());
-        }
-
         if is_valid_target(&target) {
             #[cfg(unix)]
             if let (Some(ref parent_fd), Some(ref filename)) = (target_parent_fd, target_filename) {
@@ -962,6 +955,10 @@ fn chown_optional_user_group(path: &Path, b: &Behavior) -> UResult<()> {
 /// Returns an Option containing the backup path, or None if backup is not needed.
 ///
 fn perform_backup(from: &Path, to: &Path, b: &Behavior) -> UResult<Option<PathBuf>> {
+    if same_file_entry(from, to) {
+        return Err(InstallError::SameFile(from.to_path_buf(), to.to_path_buf()).into());
+    }
+
     // Renaming the destination over the source would leave nothing to install
     // from, so refuse instead.
     if backup_would_destroy_source(from, to, &b.suffix, b.backup_mode, true) {
@@ -1021,6 +1018,15 @@ fn copy_file_safe(from: &Path, to_parent_fd: &DirFd, to_filename: &std::ffi::OsS
     Ok(())
 }
 
+fn same_file_entry(from: &Path, to: &Path) -> bool {
+    match (fs::metadata(from), fs::symlink_metadata(to)) {
+        (Ok(source), Ok(destination)) => {
+            source.dev() == destination.dev() && source.ino() == destination.ino()
+        }
+        _ => false,
+    }
+}
+
 /// Copy a file from one path to another. Handles the certain cases of special
 /// files (e.g character specials).
 ///
@@ -1035,9 +1041,7 @@ fn copy_file_safe(from: &Path, to_parent_fd: &DirFd, to_filename: &std::ffi::OsS
 ///
 fn copy_file(from: &Path, to: &Path) -> UResult<()> {
     use std::os::unix::fs::OpenOptionsExt;
-    if let Ok(to_abs) = to.canonicalize()
-        && from.canonicalize()? == to_abs
-    {
+    if same_file_entry(from, to) {
         return Err(InstallError::SameFile(from.to_path_buf(), to.to_path_buf()).into());
     }
 

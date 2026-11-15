@@ -81,3 +81,33 @@ fn mv_preserves_symlink_entries_for_no_clobber_and_backup() {
         }
     }
 }
+
+#[test]
+fn install_checks_entry_identity_before_backing_up() {
+    for directory in ["alias", "alias/"] {
+        let scratch = Scratch::new("install-self");
+        fs::create_dir(scratch.path().join("source")).unwrap();
+        fs::write(scratch.path().join("source/file"), b"original").unwrap();
+        symlink("source", scratch.path().join("alias")).unwrap();
+        let output = run(scratch.path(), "install", &["-b", "source/file", directory]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
+        assert!(!scratch.path().join("source/file~").exists());
+    }
+    for option in ["-C", "-p", "-b"] {
+        let scratch = Scratch::new("install-source-link");
+        fs::write(scratch.path().join("source"), b"original").unwrap();
+        symlink("source", scratch.path().join("destination")).unwrap();
+        success(&run(scratch.path(), "install", &[option, "source", "destination"]));
+        let source = fs::metadata(scratch.path().join("source")).unwrap();
+        let destination = fs::symlink_metadata(scratch.path().join("destination")).unwrap();
+        assert!(destination.is_file());
+        assert_ne!(source.ino(), destination.ino());
+        assert_eq!(destination.permissions().mode() & 0o777, 0o755);
+        assert_eq!(fs::read(scratch.path().join("source")).unwrap(), b"original");
+        assert_eq!(fs::read(scratch.path().join("destination")).unwrap(), b"original");
+        if option == "-b" {
+            assert_eq!(fs::read_link(scratch.path().join("destination~")).unwrap(), Path::new("source"));
+        }
+    }
+}
