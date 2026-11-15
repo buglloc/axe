@@ -47,6 +47,13 @@
       enableMagic = true;
       enableStatic = true;
     }).overrideAttrs (old: {
+      version = "4.6.0";
+      src = buildPkgs.fetchFromGitHub {
+        owner = "VirusTotal";
+        repo = "yara";
+        tag = "v4.6.0";
+        hash = "sha256-EMeJdk3w05EunzHzK+pDitB9YUgTNZKKuJi8cSjdBgs=";
+      };
       outputs = ["out"];
       nativeBuildInputs = (old.nativeBuildInputs or []) ++ [buildPkgs.xxd];
       buildInputs = [openssl file packageSet.jansson packageSet.zlib];
