@@ -1580,7 +1580,7 @@ fn verbose_creation_uses_stdout_for_files_and_stderr_for_archive_streams() {
 }
 
 #[test]
-fn empty_creation_and_unsupported_format_never_truncate_an_existing_archive() {
+fn empty_creation_and_unknown_format_never_truncate_an_existing_archive() {
     let scratch = Scratch::new();
     fs::write(scratch.path().join("bundle.tar"), b"existing archive").unwrap();
     let output = run_tar(scratch.path(), &["-cf", "bundle.tar"]);
@@ -1590,7 +1590,7 @@ fn empty_creation_and_unsupported_format_never_truncate_an_existing_archive() {
     assert_status(
         &run_tar(
             scratch.path(),
-            &["--format=pax", "-cf", "bundle.tar", "data"],
+            &["--format=not-a-format", "-cf", "bundle.tar", "data"],
         ),
         2,
     );

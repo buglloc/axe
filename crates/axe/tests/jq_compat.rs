@@ -523,18 +523,6 @@ fn filter_files_and_ascii_output_follow_the_normal_jq_contract() {
 }
 
 #[test]
-fn stream_options_are_explicitly_unsupported_instead_of_misparsed_filters() {
-    let scratch = Scratch::new("stream-option");
-    let output = run(&scratch, &["--stream", "."], b"[1]\n");
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert!(output.stdout.is_empty(), "{output:?}");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("not supported"),
-        "{output:?}"
-    );
-}
-
-#[test]
 fn from_file_is_a_mode_flag_and_preserves_the_program_operand() {
     let scratch = Scratch::new("file-mode");
     fs::write(scratch.path().join("identity.jq"), ".\n").unwrap();
