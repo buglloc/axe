@@ -400,3 +400,58 @@ fn stat_literal_quoting_preserves_path_and_symlink_target_bytes() {
         );
     }
 }
+
+#[test]
+fn install_replaces_distinct_hardlinks_but_rejects_same_path_aliases() {
+    for backup in [false, true] {
+        let scratch = Scratch::new("install-hardlink-entry");
+        fs::create_dir(scratch.path().join("source")).unwrap();
+        fs::write(scratch.path().join("source/file"), b"original").unwrap();
+        fs::set_permissions(
+            scratch.path().join("source/file"),
+            fs::Permissions::from_mode(0o640),
+        )
+        .unwrap();
+        fs::hard_link(
+            scratch.path().join("source/file"),
+            scratch.path().join("source/hard"),
+        )
+        .unwrap();
+        symlink("source", scratch.path().join("alias")).unwrap();
+        let mut install = command(scratch.path(), "install");
+        if backup {
+            install.arg("-b");
+        }
+        success(&install.args(["source/file", "alias/hard"]).output().unwrap());
+        let source = fs::metadata(scratch.path().join("source/file")).unwrap();
+        let destination = fs::metadata(scratch.path().join("source/hard")).unwrap();
+        assert_ne!(source.ino(), destination.ino());
+        assert_eq!(source.nlink(), if backup { 2 } else { 1 });
+        assert_eq!(destination.nlink(), 1);
+        assert_eq!(source.mode() & 0o777, 0o640);
+        assert_eq!(destination.mode() & 0o777, 0o755);
+        assert_eq!(
+            fs::read(scratch.path().join("source/hard")).unwrap(),
+            b"original"
+        );
+        if backup {
+            assert_eq!(
+                source.ino(),
+                fs::metadata(scratch.path().join("source/hard~")).unwrap().ino()
+            );
+        }
+        for target in ["source/file", "./source/file", "alias/file"] {
+            let mut install = command(scratch.path(), "install");
+            if backup {
+                install.arg("-b");
+            }
+            let output = install.args(["source/file", target]).output().unwrap();
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert_eq!(
+                fs::read(scratch.path().join("source/file")).unwrap(),
+                b"original"
+            );
+            assert!(!scratch.path().join("source/file~").exists());
+        }
+    }
+}

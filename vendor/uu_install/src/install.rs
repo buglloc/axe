@@ -1039,7 +1039,13 @@ fn copy_file_safe(from: &Path, to_parent_fd: &DirFd, to_filename: &std::ffi::OsS
 fn same_file_entry(from: &Path, to: &Path) -> bool {
     match (fs::metadata(from), fs::symlink_metadata(to)) {
         (Ok(source), Ok(destination)) => {
-            source.dev() == destination.dev() && source.ino() == destination.ino()
+            source.dev() == destination.dev()
+                && source.ino() == destination.ino()
+                && from
+                    .canonicalize()
+                    .ok()
+                    .zip(to.canonicalize().ok())
+                    .is_some_and(|(source, destination)| source == destination)
         }
         _ => false,
     }

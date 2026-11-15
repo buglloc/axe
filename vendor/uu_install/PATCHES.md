@@ -13,7 +13,8 @@ Source: the `uu_install` 0.12.0 crate from crates.io, upstream revision
 - Add the required filesystem/rustix support in the standalone manifest and
   omit upstream workspace benchmark/lint wiring; AXE owns dependency resolution.
 - Check source/destination entry identity before backups, including directory
-  aliases, while allowing replacement of a symlink pointing to the source.
+  aliases, while allowing replacement of distinct hardlinks and symlinks pointing
+  to the source.
 - Back up dangling and cyclic destination symlinks as existing entries.
 - Refuse repeated source operands that would overwrite a destination created
   earlier in the same invocation, except with numbered backups.
