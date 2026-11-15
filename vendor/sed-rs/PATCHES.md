@@ -8,6 +8,13 @@ Source: the `sed-rs` 2.0.0 crate from crates.io, upstream revision
   forcing invalid input through UTF-8.
 - Resolve the active locale with libc so `y///` uses bytes in single-byte
   locales and characters in UTF-8 locales, matching GNU sed's locale model.
+- Keep empty-match substitution progress on character boundaries in UTF-8
+  locales. GNU sed's `sed/execute.c` `do_subst` advances `matched = 1` byte
+  after a vacuous match, which can insert replacements inside a UTF-8 character.
+  AXE follows the character-oriented locale contract documented in
+  <https://www.gnu.org/software/sed/manual/html_node/Locale-Considerations.html>,
+  not that byte-step artifact
+  (<https://github.com/mirror/sed/blob/master/sed/execute.c>).
 - Open each distinct `w`/`W` and `s///w` target once at startup, truncate regular
   files, retain handles across input cycles, and preserve `/dev/stdout` and
   `/dev/stderr` special outputs.
@@ -24,4 +31,5 @@ Upstreamability: the byte pipeline, locale handling, address ranges, and file
 lifecycle are intended for upstream; the set-ID clearing patch is an AXE
 compatibility backport. No upstream issue or commit is recorded in AXE.
 
-AXE consumer regressions are in `crates/axe/tests/sed_compat.rs`.
+AXE consumer regressions are in `crates/axe/tests/sed_compat.rs` and
+`crates/axe/tests/language_repair.rs`.

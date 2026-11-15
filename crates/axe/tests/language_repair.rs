@@ -178,3 +178,17 @@ fn printf_unicode_escapes_use_the_output_codeset() {
     assert!(invalid.stdout.is_empty(), "{invalid:?}");
     assert!(!invalid.stderr.is_empty(), "{invalid:?}");
 }
+
+#[test]
+fn sed_empty_matches_preserve_utf8_character_boundaries() {
+    assert_output(
+        run("sed", &["s/x*/X/g"], "é猫\n".as_bytes(), "C.UTF-8"),
+        0,
+        "XéX猫X\n".as_bytes(),
+    );
+    assert_output(
+        run("sed", &["s/x*/X/g"], "é\n".as_bytes(), "C"),
+        0,
+        b"X\xc3X\xa9X\n",
+    );
+}
