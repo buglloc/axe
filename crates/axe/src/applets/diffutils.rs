@@ -1014,7 +1014,10 @@ fn compare_diff_files(
     };
     let to = to_bytes.as_deref().unwrap_or(&from);
     let params = &options.params;
-    let from_label = options.labels.first().map_or(from_name, OsString::as_os_str);
+    let from_label = options
+        .labels
+        .first()
+        .map_or(from_name, OsString::as_os_str);
     let to_label = options.labels.get(1).map_or(to_name, OsString::as_os_str);
     let mut output = Vec::new();
     if from.as_slice() != to && !options.text && (from.contains(&0) || to.contains(&0)) {

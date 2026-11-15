@@ -140,11 +140,7 @@ fn jq_slicing_null_returns_null() {
         b"[null,null,null,null,null]\n",
     );
     expect_output(
-        scratch.run(
-            "jq",
-            &["-c", "try (.[-1:]) catch \"bad\""],
-            b"null\n",
-        ),
+        scratch.run("jq", &["-c", "try (.[-1:]) catch \"bad\""], b"null\n"),
         0,
         b"null\n",
     );
@@ -156,7 +152,10 @@ fn jq_global_regex_preserves_adjacent_and_trailing_empty_matches() {
     expect_output(
         scratch.run(
             "jq",
-            &["-cn", "[\"aa\" | match(\"a*\"; \"g\") | [.offset, .length, .string]]"],
+            &[
+                "-cn",
+                "[\"aa\" | match(\"a*\"; \"g\") | [.offset, .length, .string]]",
+            ],
             b"",
         ),
         0,
@@ -165,14 +164,21 @@ fn jq_global_regex_preserves_adjacent_and_trailing_empty_matches() {
     expect_output(
         scratch.run(
             "jq",
-            &["-cn", "[\"a猫\" | match(\"a*\"; \"g\") | [.offset, .length, .string]]"],
+            &[
+                "-cn",
+                "[\"a猫\" | match(\"a*\"; \"g\") | [.offset, .length, .string]]",
+            ],
             b"",
         ),
         0,
         b"[[0,1,\"a\"],[1,0,\"\"],[2,0,\"\"]]\n",
     );
     expect_output(
-        scratch.run("jq", &["-cn", "[\"aa\" | match(\"a*\"; \"gn\") | .string]"], b""),
+        scratch.run(
+            "jq",
+            &["-cn", "[\"aa\" | match(\"a*\"; \"gn\") | .string]"],
+            b"",
+        ),
         0,
         b"[\"aa\"]\n",
     );
@@ -260,7 +266,14 @@ fn jq_arithmetic_rounds_large_integer_operands_before_computing() {
         b"30\n",
     );
     expect_output(
-        scratch.run("jq", &["-cn", "1000000000000000000000000 - 1000000000000000000000000"], b""),
+        scratch.run(
+            "jq",
+            &[
+                "-cn",
+                "1000000000000000000000000 - 1000000000000000000000000",
+            ],
+            b"",
+        ),
         0,
         b"0\n",
     );

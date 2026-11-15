@@ -130,7 +130,10 @@ fn assert_success(output: Output, expected: &[u8]) {
 #[test]
 fn comm_repeated_stdin_consumes_records_without_locking_itself() {
     let scratch = Scratch::new();
-    assert_success(run(scratch.path(), "comm", &["-", "-"], b"a\nb\n"), b"a\n\tb\n");
+    assert_success(
+        run(scratch.path(), "comm", &["-", "-"], b"a\nb\n"),
+        b"a\n\tb\n",
+    );
     assert_success(
         run(scratch.path(), "comm", &["-z", "-", "-"], b"a\0b\0"),
         b"a\0\tb\0",
@@ -232,7 +235,12 @@ fn join_whitespace_fields_do_not_invent_empty_output_columns() {
     fs::write(scratch.path().join("a"), b"\n\n").unwrap();
     fs::write(scratch.path().join("b"), b"\n").unwrap();
     assert_success(
-        run(scratch.path(), "join", &["-1", "2", "-2", "2", "a", "b"], b""),
+        run(
+            scratch.path(),
+            "join",
+            &["-1", "2", "-2", "2", "a", "b"],
+            b"",
+        ),
         b"\n\n",
     );
     fs::write(scratch.path().join("a"), b"  a  x\nb y\nc z\n").unwrap();
@@ -266,17 +274,12 @@ fn uniq_field_skipping_uses_horizontal_blanks_only() {
             scratch.path(),
             "uniq",
             &["-f", "1"],
-            b" a\rb\tkey\n b\vc\tkey\n c\fd\tother\n",
+            b" a\rb\tkey\n b\x0bc\tkey\n c\x0cd\tother\n",
         ),
-        b" a\rb\tkey\n c\fd\tother\n",
+        b" a\rb\tkey\n c\x0cd\tother\n",
     );
     assert_success(
-        run(
-            scratch.path(),
-            "uniq",
-            &["-z", "-f", "1"],
-            b"a\nb\0x\ny\0",
-        ),
+        run(scratch.path(), "uniq", &["-z", "-f", "1"], b"a\nb\0x\ny\0"),
         b"a\nb\0",
     );
 }

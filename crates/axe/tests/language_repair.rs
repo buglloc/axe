@@ -59,7 +59,9 @@ fn awk_rt_tracks_regex_string_and_paragraph_terminators() {
     assert_output(
         run(
             "awk",
-            &[r#"{ print "<"$0">", length(RT); if (NR==1) { getline x; print "<"x">", length(RT) } }"#],
+            &[
+                r#"{ print "<"$0">", length(RT); if (NR==1) { getline x; print "<"x">", length(RT) } }"#,
+            ],
             b"one\ntwo\nthree",
             "C",
         ),
@@ -83,7 +85,9 @@ fn awk_redirected_getline_sets_rt_without_changing_main_counters() {
     assert_output(
         run(
             "awk",
-            &[r#"BEGIN { RS="a+"; while ((getline x < "/dev/stdin") > 0) print NR, "<"x">", "<"RT">" }"#],
+            &[
+                r#"BEGIN { RS="a+"; while ((getline x < "/dev/stdin") > 0) print NR, "<"x">", "<"RT">" }"#,
+            ],
             b"aaXaaaY",
             "C",
         ),
@@ -107,7 +111,9 @@ fn awk_arithmetic_and_fields_recognize_signed_infinity() {
     assert_output(
         run(
             "awk",
-            &[r#"BEGIN { print ("+inf"+0), sprintf("%.6g","+inf"), strtonum("+inf"); print sprintf("%.6g","-0"); print ("+NaN"+0), ("-NaN"+0) }"#],
+            &[
+                r#"BEGIN { print ("+inf"+0), sprintf("%.6g","+inf"), strtonum("+inf"); print sprintf("%.6g","-0"); print ("+NaN"+0), ("-NaN"+0) }"#,
+            ],
             b"",
             "C",
         ),
@@ -119,7 +125,12 @@ fn awk_arithmetic_and_fields_recognize_signed_infinity() {
 #[test]
 fn grep_c_locale_classes_and_words_are_byte_oriented() {
     assert_output(
-        run("grep", &["-a", "-o", "[[:alpha:]]"], "éa\n猫a\ne\u{301}\n".as_bytes(), "C"),
+        run(
+            "grep",
+            &["-a", "-o", "[[:alpha:]]"],
+            "éa\n猫a\ne\u{301}\n".as_bytes(),
+            "C",
+        ),
         0,
         b"a\na\ne\n",
     );
@@ -129,17 +140,32 @@ fn grep_c_locale_classes_and_words_are_byte_oriented() {
         b"a\n",
     );
     assert_output(
-        run("grep", &["-a", "-w", "-o", "a"], "éa猫 a_ a\n".as_bytes(), "C"),
+        run(
+            "grep",
+            &["-a", "-w", "-o", "a"],
+            "éa猫 a_ a\n".as_bytes(),
+            "C",
+        ),
         0,
         b"a\na\n",
     );
     assert_output(
-        run("grep", &["-a", "-o", "[[:alpha:]]"], "é猫a\n".as_bytes(), "C.UTF-8"),
+        run(
+            "grep",
+            &["-a", "-o", "[[:alpha:]]"],
+            "é猫a\n".as_bytes(),
+            "C.UTF-8",
+        ),
         0,
         "é\n猫\na\n".as_bytes(),
     );
     assert_output(
-        run("grep", &["-a", "-w", "-o", "a"], "éa猫 a_ a\n".as_bytes(), "C.UTF-8"),
+        run(
+            "grep",
+            &["-a", "-w", "-o", "a"],
+            "éa猫 a_ a\n".as_bytes(),
+            "C.UTF-8",
+        ),
         0,
         b"a\n",
     );
@@ -206,7 +232,12 @@ fn grep_utf8_regexes_do_not_consume_invalid_characters() {
         b"",
     );
     assert_output(
-        run("grep", &["-a", "-o", r"^a\|a$\|\`a\|a\'"], b"\xffa\xfe\n", "C.UTF-8"),
+        run(
+            "grep",
+            &["-a", "-o", r"^a\|a$\|\`a\|a\'"],
+            b"\xffa\xfe\n",
+            "C.UTF-8",
+        ),
         1,
         b"",
     );
@@ -233,9 +264,21 @@ fn grep_binary_nul_boundaries_affect_counts_and_anchors() {
     for locale in ["C", "C.UTF-8"] {
         assert_output(run("grep", &["-c", ""], b"a\0b\0\0a", locale), 0, b"4\n");
         assert_output(run("grep", &["-c", "a"], b"a\0b\0\0a", locale), 0, b"2\n");
-        assert_output(run("grep", &["-c", "a$"], b"a\0b\na\xffb\n", locale), 0, b"1\n");
-        assert_output(run("grep", &["-a", "-c", ""], b"a\0b\0\0a", locale), 0, b"1\n");
-        assert_output(run("grep", &["-z", "-c", ""], b"a\0b\0\0a", locale), 0, b"4\n");
+        assert_output(
+            run("grep", &["-c", "a$"], b"a\0b\na\xffb\n", locale),
+            0,
+            b"1\n",
+        );
+        assert_output(
+            run("grep", &["-a", "-c", ""], b"a\0b\0\0a", locale),
+            0,
+            b"1\n",
+        );
+        assert_output(
+            run("grep", &["-z", "-c", ""], b"a\0b\0\0a", locale),
+            0,
+            b"4\n",
+        );
         let inverted = run("grep", &["-v", "."], b"a\0b\0\0a", locale);
         assert_eq!(inverted.status.code(), Some(0), "{inverted:?}");
         assert!(inverted.stdout.is_empty(), "{inverted:?}");

@@ -81,12 +81,24 @@ fn mv_preserves_symlink_entries_for_no_clobber_and_backup() {
                 &[option, "source", "destination"],
             ));
             if option == "-n" {
-                assert_eq!(fs::read(scratch.path().join("source")).unwrap(), b"payload\0\n");
-                assert_eq!(fs::read_link(scratch.path().join("destination")).unwrap(), Path::new(target));
+                assert_eq!(
+                    fs::read(scratch.path().join("source")).unwrap(),
+                    b"payload\0\n"
+                );
+                assert_eq!(
+                    fs::read_link(scratch.path().join("destination")).unwrap(),
+                    Path::new(target)
+                );
             } else {
                 assert!(!scratch.path().join("source").exists());
-                assert_eq!(fs::read(scratch.path().join("destination")).unwrap(), b"payload\0\n");
-                assert_eq!(fs::read_link(scratch.path().join("destination~")).unwrap(), Path::new(target));
+                assert_eq!(
+                    fs::read(scratch.path().join("destination")).unwrap(),
+                    b"payload\0\n"
+                );
+                assert_eq!(
+                    fs::read_link(scratch.path().join("destination~")).unwrap(),
+                    Path::new(target)
+                );
             }
         }
     }
@@ -101,23 +113,39 @@ fn install_checks_entry_identity_before_backing_up() {
         symlink("source", scratch.path().join("alias")).unwrap();
         let output = run(scratch.path(), "install", &["-b", "source/file", directory]);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
-        assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
+        assert_eq!(
+            fs::read(scratch.path().join("source/file")).unwrap(),
+            b"original"
+        );
         assert!(!scratch.path().join("source/file~").exists());
     }
     for option in ["-C", "-p", "-b"] {
         let scratch = Scratch::new("install-source-link");
         fs::write(scratch.path().join("source"), b"original").unwrap();
         symlink("source", scratch.path().join("destination")).unwrap();
-        success(&run(scratch.path(), "install", &[option, "source", "destination"]));
+        success(&run(
+            scratch.path(),
+            "install",
+            &[option, "source", "destination"],
+        ));
         let source = fs::metadata(scratch.path().join("source")).unwrap();
         let destination = fs::symlink_metadata(scratch.path().join("destination")).unwrap();
         assert!(destination.is_file());
         assert_ne!(source.ino(), destination.ino());
         assert_eq!(destination.permissions().mode() & 0o777, 0o755);
-        assert_eq!(fs::read(scratch.path().join("source")).unwrap(), b"original");
-        assert_eq!(fs::read(scratch.path().join("destination")).unwrap(), b"original");
+        assert_eq!(
+            fs::read(scratch.path().join("source")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read(scratch.path().join("destination")).unwrap(),
+            b"original"
+        );
         if option == "-b" {
-            assert_eq!(fs::read_link(scratch.path().join("destination~")).unwrap(), Path::new("source"));
+            assert_eq!(
+                fs::read_link(scratch.path().join("destination~")).unwrap(),
+                Path::new("source")
+            );
         }
     }
 }
@@ -128,10 +156,23 @@ fn install_backs_up_dangling_and_cyclic_symlink_entries() {
         let scratch = Scratch::new("install-backup");
         fs::write(scratch.path().join("source"), b"original").unwrap();
         symlink(target, scratch.path().join("destination")).unwrap();
-        success(&run(scratch.path(), "install", &["-b", "source", "destination"]));
-        assert_eq!(fs::read(scratch.path().join("source")).unwrap(), b"original");
-        assert_eq!(fs::read(scratch.path().join("destination")).unwrap(), b"original");
-        assert_eq!(fs::read_link(scratch.path().join("destination~")).unwrap(), Path::new(target));
+        success(&run(
+            scratch.path(),
+            "install",
+            &["-b", "source", "destination"],
+        ));
+        assert_eq!(
+            fs::read(scratch.path().join("source")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read(scratch.path().join("destination")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read_link(scratch.path().join("destination~")).unwrap(),
+            Path::new(target)
+        );
     }
 }
 
@@ -140,12 +181,28 @@ fn mv_no_clobber_accepts_same_inode_and_directory_aliases() {
     let scratch = Scratch::new("mv-no-clobber-self");
     fs::create_dir(scratch.path().join("source")).unwrap();
     fs::write(scratch.path().join("source/file"), b"original").unwrap();
-    fs::hard_link(scratch.path().join("source/file"), scratch.path().join("hard")).unwrap();
+    fs::hard_link(
+        scratch.path().join("source/file"),
+        scratch.path().join("hard"),
+    )
+    .unwrap();
     symlink("source", scratch.path().join("alias")).unwrap();
     for destination in ["source/file", "hard", "alias", "alias/"] {
-        success(&run(scratch.path(), "mv", &["-n", "source/file", destination]));
-        assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
-        assert_eq!(fs::metadata(scratch.path().join("source/file")).unwrap().ino(), fs::metadata(scratch.path().join("hard")).unwrap().ino());
+        success(&run(
+            scratch.path(),
+            "mv",
+            &["-n", "source/file", destination],
+        ));
+        assert_eq!(
+            fs::read(scratch.path().join("source/file")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::metadata(scratch.path().join("source/file"))
+                .unwrap()
+                .ino(),
+            fs::metadata(scratch.path().join("hard")).unwrap().ino()
+        );
     }
 }
 
@@ -154,10 +211,17 @@ fn install_refuses_overwriting_its_fresh_destination() {
     let scratch = Scratch::new("install-duplicate");
     fs::write(scratch.path().join("source"), b"original").unwrap();
     fs::create_dir(scratch.path().join("destination")).unwrap();
-    let output = run(scratch.path(), "install", &["source", "source", "destination"]);
+    let output = run(
+        scratch.path(),
+        "install",
+        &["source", "source", "destination"],
+    );
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stderr).contains("just-created"));
-    assert_eq!(fs::read(scratch.path().join("destination/source")).unwrap(), b"original");
+    assert_eq!(
+        fs::read(scratch.path().join("destination/source")).unwrap(),
+        b"original"
+    );
 }
 
 #[test]
@@ -169,23 +233,60 @@ fn cp_recursive_h_follows_only_the_command_line_symlink() {
     symlink("source", scratch.path().join("alias")).unwrap();
     success(&run(scratch.path(), "cp", &["-RH", "alias", "destination"]));
     assert!(scratch.path().join("destination").is_dir());
-    assert_eq!(fs::metadata(scratch.path().join("destination")).unwrap().permissions().mode() & 0o777, fs::metadata(scratch.path().join("source")).unwrap().permissions().mode() & 0o777);
-    assert_eq!(fs::read(scratch.path().join("destination/file")).unwrap(), b"original");
-    assert_eq!(fs::read_link(scratch.path().join("destination/link")).unwrap(), Path::new("file"));
+    assert_eq!(
+        fs::metadata(scratch.path().join("destination"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        fs::metadata(scratch.path().join("source"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    );
+    assert_eq!(
+        fs::read(scratch.path().join("destination/file")).unwrap(),
+        b"original"
+    );
+    assert_eq!(
+        fs::read_link(scratch.path().join("destination/link")).unwrap(),
+        Path::new("file")
+    );
 }
 
 #[test]
 fn cp_backup_preserves_original_hardlinks_and_replaces_destination() {
     let scratch = Scratch::new("cp-backup-hardlinks");
     fs::write(scratch.path().join("source"), b"original").unwrap();
-    fs::hard_link(scratch.path().join("source"), scratch.path().join("destination")).unwrap();
+    fs::hard_link(
+        scratch.path().join("source"),
+        scratch.path().join("destination"),
+    )
+    .unwrap();
     success(&run(scratch.path(), "cp", &["-b", "source", "destination"]));
     let source = fs::metadata(scratch.path().join("source")).unwrap();
-    assert_eq!(source.ino(), fs::metadata(scratch.path().join("destination~")).unwrap().ino());
-    assert_ne!(source.ino(), fs::metadata(scratch.path().join("destination")).unwrap().ino());
+    assert_eq!(
+        source.ino(),
+        fs::metadata(scratch.path().join("destination~"))
+            .unwrap()
+            .ino()
+    );
+    assert_ne!(
+        source.ino(),
+        fs::metadata(scratch.path().join("destination"))
+            .unwrap()
+            .ino()
+    );
     fs::write(scratch.path().join("destination"), b"replacement").unwrap();
-    assert_eq!(fs::read(scratch.path().join("source")).unwrap(), b"original");
-    assert_eq!(fs::read(scratch.path().join("destination~")).unwrap(), b"original");
+    assert_eq!(
+        fs::read(scratch.path().join("source")).unwrap(),
+        b"original"
+    );
+    assert_eq!(
+        fs::read(scratch.path().join("destination~")).unwrap(),
+        b"original"
+    );
 }
 
 #[test]
@@ -193,31 +294,62 @@ fn cp_no_clobber_skips_same_inode_but_reports_cyclic_lookup() {
     let scratch = Scratch::new("cp-no-clobber");
     fs::create_dir(scratch.path().join("source")).unwrap();
     fs::write(scratch.path().join("source/file"), b"original").unwrap();
-    fs::hard_link(scratch.path().join("source/file"), scratch.path().join("hard")).unwrap();
+    fs::hard_link(
+        scratch.path().join("source/file"),
+        scratch.path().join("hard"),
+    )
+    .unwrap();
     symlink("source", scratch.path().join("alias")).unwrap();
     for destination in ["source/file", "hard", "alias", "alias/"] {
-        success(&run(scratch.path(), "cp", &["-n", "source/file", destination]));
-        assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
+        success(&run(
+            scratch.path(),
+            "cp",
+            &["-n", "source/file", destination],
+        ));
+        assert_eq!(
+            fs::read(scratch.path().join("source/file")).unwrap(),
+            b"original"
+        );
     }
     symlink("cycle", scratch.path().join("cycle")).unwrap();
     let output = run(scratch.path(), "cp", &["-n", "source/file", "cycle"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(fs::read_link(scratch.path().join("cycle")).unwrap(), Path::new("cycle"));
-    assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
+    assert_eq!(
+        fs::read_link(scratch.path().join("cycle")).unwrap(),
+        Path::new("cycle")
+    );
+    assert_eq!(
+        fs::read(scratch.path().join("source/file")).unwrap(),
+        b"original"
+    );
 }
 
 #[test]
 fn cp_recursive_l_restores_umask_permissions_after_a_loop_error() {
     let scratch = Scratch::new("cp-loop-mode");
     fs::create_dir(scratch.path().join("source")).unwrap();
-    fs::set_permissions(scratch.path().join("source"), fs::Permissions::from_mode(0o777)).unwrap();
+    fs::set_permissions(
+        scratch.path().join("source"),
+        fs::Permissions::from_mode(0o777),
+    )
+    .unwrap();
     fs::write(scratch.path().join("source/file"), b"original").unwrap();
     symlink(".", scratch.path().join("source/loop")).unwrap();
     symlink("source", scratch.path().join("alias")).unwrap();
     let output = run(scratch.path(), "cp", &["-RL", "alias", "destination"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(fs::metadata(scratch.path().join("destination")).unwrap().permissions().mode() & 0o777, 0o755);
-    assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
+    assert_eq!(
+        fs::metadata(scratch.path().join("destination"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs::read(scratch.path().join("source/file")).unwrap(),
+        b"original"
+    );
 }
 
 #[test]
@@ -262,6 +394,9 @@ fn stat_literal_quoting_preserves_path_and_symlink_target_bytes() {
             .output()
             .unwrap();
         success(&output);
-        assert_eq!(output.stdout, b"raw-\xff\nname\nlink-\xff\nname -> raw-\xff\nname\n");
+        assert_eq!(
+            output.stdout,
+            b"raw-\xff\nname\nlink-\xff\nname -> raw-\xff\nname\n"
+        );
     }
 }

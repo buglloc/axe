@@ -531,7 +531,9 @@ fn take_input_field(
     if let Some(index) = field.iter().position(|byte| *byte == 0) {
         field.truncate(index);
         if !*warned_nul {
-            eprintln!("xargs: warning: a NUL character in input cannot be passed to a command; use -0");
+            eprintln!(
+                "xargs: warning: a NUL character in input cannot be passed to a command; use -0"
+            );
             *warned_nul = true;
         }
     }

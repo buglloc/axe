@@ -35,7 +35,7 @@ use uucore::selinux::{
     selinux_error_description, set_selinux_security_context,
 };
 use uucore::translate;
-use uucore::{format_usage, show, show_error, show_if_err};
+use uucore::{format_usage, show, show_error};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;

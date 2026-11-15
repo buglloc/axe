@@ -102,8 +102,7 @@ fn missing_mode_preserves_cyclic_components_and_resolves_later_parents() {
     fs::write(root.join("present"), b"present").unwrap();
     for cycle in [&["a", "b"][..], &["x", "y", "z"][..]] {
         for (index, name) in cycle.iter().enumerate() {
-            std::os::unix::fs::symlink(cycle[(index + 1) % cycle.len()], root.join(name))
-                .unwrap();
+            std::os::unix::fs::symlink(cycle[(index + 1) % cycle.len()], root.join(name)).unwrap();
         }
         for tool in ["readlink", "realpath"] {
             for (operand, expected) in [
@@ -112,7 +111,11 @@ fn missing_mode_preserves_cyclic_components_and_resolves_later_parents() {
             ] {
                 let argv = args(&["-m", &operand]);
                 let output = run(&root, tool, &refs(&argv), b"");
-                assert!(output.status.success(), "{tool} {operand}: {:?}", output.stderr);
+                assert!(
+                    output.status.success(),
+                    "{tool} {operand}: {:?}",
+                    output.stderr
+                );
                 let mut bytes = expected.as_os_str().as_bytes().to_vec();
                 bytes.push(b'\n');
                 assert_eq!(output.stdout, bytes);
@@ -127,7 +130,10 @@ fn missing_mode_preserves_cyclic_components_and_resolves_later_parents() {
     let argv = args(&["-sr", "a", "dst/link"]);
     let output = run(&root, "ln", &refs(&argv), b"");
     assert!(output.status.success(), "{:?}", output.stderr);
-    assert_eq!(fs::read_link(root.join("dst/link")).unwrap(), Path::new("../a"));
+    assert_eq!(
+        fs::read_link(root.join("dst/link")).unwrap(),
+        Path::new("../a")
+    );
 }
 
 #[test]
@@ -174,6 +180,9 @@ fn forced_recursive_rm_ignores_a_trailing_slash_symlink_without_following_it() {
     let output = run(&scratch.0, "rm", &refs(&argv), b"");
     assert!(output.status.success(), "{:?}", output.stderr);
     assert!(output.stderr.is_empty());
-    assert_eq!(fs::read_link(scratch.0.join("link")).unwrap(), Path::new("target"));
+    assert_eq!(
+        fs::read_link(scratch.0.join("link")).unwrap(),
+        Path::new("target")
+    );
     assert_eq!(fs::read(scratch.0.join("target/keep")).unwrap(), b"keep");
 }

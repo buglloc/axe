@@ -130,7 +130,16 @@ fn timeout_kill_terminates_its_group_but_foreground_returns_timeout_status() {
             command.arg("--foreground");
         }
         let output = command
-            .args(["-s", "KILL", "0.02", env!("CARGO_BIN_EXE_axe"), "--applet", "sleep", "--", "0.2"])
+            .args([
+                "-s",
+                "KILL",
+                "0.02",
+                env!("CARGO_BIN_EXE_axe"),
+                "--applet",
+                "sleep",
+                "--",
+                "0.2",
+            ])
             .output()
             .unwrap();
         if foreground {

@@ -122,7 +122,12 @@ fn fmt_missing_operand_does_not_suppress_later_files() {
 fn csplit_suppressed_numeric_boundary_may_follow_the_final_record() {
     let scratch = Scratch::new();
     assert_success(
-        run(scratch.path(), "csplit", &["--suppress-matched", "-", "2"], b"a"),
+        run(
+            scratch.path(),
+            "csplit",
+            &["--suppress-matched", "-", "2"],
+            b"a",
+        ),
         b"1\n0\n",
     );
     assert_eq!(fs::read(scratch.path().join("xx00")).unwrap(), b"a");
@@ -201,13 +206,19 @@ fn pr_preserves_input_page_breaks_and_continuous_record_numbers() {
     ] {
         assert_success(run(scratch.path(), "pr", args, b"a\x0cb\nc\n"), expected);
     }
-    assert_success(run(scratch.path(), "pr", &["-t"], b"\x0c\x0ca"), b"\x0c\x0ca\n");
+    assert_success(
+        run(scratch.path(), "pr", &["-t"], b"\x0c\x0ca"),
+        b"\x0c\x0ca\n",
+    );
 }
 
 #[test]
 fn pr_does_not_double_space_after_an_unterminated_record() {
     let scratch = Scratch::new();
-    assert_success(run(scratch.path(), "pr", &["-t", "-d"], b"a\nb"), b"a\n\nb\n");
+    assert_success(
+        run(scratch.path(), "pr", &["-t", "-d"], b"a\nb"),
+        b"a\n\nb\n",
+    );
 }
 
 #[test]
@@ -344,7 +355,10 @@ fn ptx_reference_mode_accepts_nonempty_matches_at_offset_zero() {
     );
     assert_eq!(output.status.code(), Some(0), "stderr: {:?}", output.stderr);
     assert!(output.stderr.is_empty());
-    assert_eq!(output.stdout.iter().filter(|&&byte| byte == b'\n').count(), 2);
+    assert_eq!(
+        output.stdout.iter().filter(|&&byte| byte == b'\n').count(),
+        2
+    );
     assert!(output.stdout.windows(3).any(|bytes| bytes == b"REF"));
     assert!(output.stdout.windows(6).any(|bytes| bytes == b"SECOND"));
 }

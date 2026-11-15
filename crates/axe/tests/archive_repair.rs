@@ -71,7 +71,11 @@ fn base_decoders_reject_carriage_returns_unless_ignoring_garbage() {
         let mut args = vec!["-d"];
         args.extend(format);
         let output = run(scratch.path(), applet, &args, b"\r\n");
-        assert_eq!(output.status.code(), Some(1), "{applet} {args:?}: {output:?}");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{applet} {args:?}: {output:?}"
+        );
         assert!(output.stdout.is_empty());
         let output = run(scratch.path(), applet, &args, b"\n");
         assert!(output.status.success(), "{applet} {args:?}: {output:?}");
@@ -119,12 +123,20 @@ fn base32_short_padded_quanta_do_not_emit_uncommitted_bytes() {
         args.extend(format);
         for length in 3..8 {
             let output = run(scratch.path(), applet, &args, &alphabet[..length]);
-            assert_eq!(output.status.code(), Some(1), "{applet} {length}: {output:?}");
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{applet} {length}: {output:?}"
+            );
             assert!(output.stdout.is_empty(), "{applet} {length}: {output:?}");
             let mut input = alphabet.to_vec();
             input.extend_from_slice(&alphabet[..length]);
             let output = run(scratch.path(), applet, &args, &input);
-            assert_eq!(output.status.code(), Some(1), "{applet} {length}: {output:?}");
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{applet} {length}: {output:?}"
+            );
             assert_eq!(output.stdout, b"a", "{applet} {length}: {output:?}");
         }
         let output = run(scratch.path(), applet, &args, alphabet);
@@ -139,9 +151,12 @@ fn base32_short_padded_quanta_do_not_emit_uncommitted_bytes() {
 #[test]
 fn wide_strings_split_at_non_ascii_units_in_the_c_locale() {
     let scratch = Scratch::new("strings-wide");
-    for (encoding, width, big_endian) in
-        [("b", 2, true), ("l", 2, false), ("B", 4, true), ("L", 4, false)]
-    {
+    for (encoding, width, big_endian) in [
+        ("b", 2, true),
+        ("l", 2, false),
+        ("B", 4, true),
+        ("L", 4, false),
+    ] {
         for alignment in 0..width {
             let mut input = vec![0; alignment];
             for byte in b"hello\xe9world\0" {
@@ -188,7 +203,10 @@ fn zstd_forced_stdout_copies_plaintext_after_complete_frames() {
     let scratch = Scratch::new("zstd-tail");
     let first = zstd::stream::encode_all(&b"first\0\xff\n"[..], 1).unwrap();
     let second = zstd::stream::encode_all(&b"second\n"[..], 1).unwrap();
-    for frames in [vec![first.as_slice()], vec![first.as_slice(), second.as_slice()]] {
+    for frames in [
+        vec![first.as_slice()],
+        vec![first.as_slice(), second.as_slice()],
+    ] {
         for tail in [&b"GARBAGE"[..], &[0][..], &[0; 4][..], &[0; 8][..]] {
             let mut compressed = frames.concat();
             compressed.extend_from_slice(tail);
