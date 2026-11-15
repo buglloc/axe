@@ -1600,7 +1600,7 @@ fn copy_source(
     created_parent_dirs: &mut HashSet<PathBuf>,
 ) -> CopyResult<()> {
     let source_path = Path::new(&source);
-    if source_path.is_dir() && (options.dereference || !source_path.is_symlink()) {
+    if source_path.is_dir() && (options.dereference(true) || !source_path.is_symlink()) {
         // Copy as directory
         copy_directory(
             progress_bar,
