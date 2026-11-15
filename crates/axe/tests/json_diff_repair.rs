@@ -126,3 +126,26 @@ fn diff_labels_name_binary_and_brief_reports() {
         b"Binary files L and right differ\n",
     );
 }
+
+#[test]
+fn jq_slicing_null_returns_null() {
+    let scratch = Scratch::new();
+    expect_output(
+        scratch.run(
+            "jq",
+            &["-c", "[.[-1:], .[:2], .[0:1], .[:], .[\"bad\":]]"],
+            b"null\n",
+        ),
+        0,
+        b"[null,null,null,null,null]\n",
+    );
+    expect_output(
+        scratch.run(
+            "jq",
+            &["-c", "try (.[-1:]) catch \"bad\""],
+            b"null\n",
+        ),
+        0,
+        b"null\n",
+    );
+}

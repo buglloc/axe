@@ -12,6 +12,8 @@ Source: the `jaq-json` 2.0.3 crate from crates.io, upstream revision
 - Preserve invalid bytes and jq-compatible number values through the reader
   boundary; the AXE jq frontend performs the final output validation and
   canonicalization.
+- Return null when slicing null, matching jq's null indexing semantics.
+  Consumer coverage: `crates/axe/tests/json_diff_repair.rs`.
 - This is a standalone library manifest; the workspace owns resolution and
   `Cargo.lock`, and the upstream command-line package is not vendored. Its
   upstream `defs`/`funs` tests require `jaq-std/format` and the optional

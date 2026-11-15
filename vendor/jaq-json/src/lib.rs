@@ -167,6 +167,7 @@ impl jaq_core::ValT for Val {
                 .map(|(skip, take)| b.slice(skip..skip + take))
         };
         match self {
+            Val::Null => Ok(Val::Null),
             Val::BStr(b) => fs(*b, range, skip_take_bytes).map(Val::byte_str),
             Val::TStr(b) => fs(*b, range, skip_take_chars).map(Val::utf8_str),
             Val::Arr(a) => Self::range_int(range)
