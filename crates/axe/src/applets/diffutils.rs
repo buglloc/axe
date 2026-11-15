@@ -868,7 +868,11 @@ fn comparison_key(line: &[u8], options: &DiffOptions) -> Vec<u8> {
             append_comparison_byte(&mut key, byte, options, &mut column, &mut whitespace);
         }
     }
-    if has_newline && !options.ignore_all_space && !options.ignore_space_change {
+    if has_newline
+        && !options.ignore_all_space
+        && !options.ignore_space_change
+        && !options.ignore_trailing_space
+    {
         key.push(b'\n');
     }
     key

@@ -82,3 +82,20 @@ fn diff_blank_lines_are_empty_unless_trailing_whitespace_is_ignored() {
         b"",
     );
 }
+
+#[test]
+fn diff_ignoring_trailing_space_also_ignores_final_newline_presence() {
+    let scratch = Scratch::new();
+    for (left, right) in [
+        (b"a".as_slice(), b"a\n".as_slice()),
+        (b"a \t", b"a\n"),
+        (b"a\n", b"a \t"),
+    ] {
+        expect_output(scratch.diff(&["-Z"], left, right), 0, b"");
+    }
+    expect_output(
+        scratch.diff(&["-Z"], b"a b\n", b"ab\n"),
+        1,
+        b"1c1\n< a b\n---\n> ab\n",
+    );
+}
