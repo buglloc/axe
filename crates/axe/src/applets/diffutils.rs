@@ -1014,6 +1014,8 @@ fn compare_diff_files(
     };
     let to = to_bytes.as_deref().unwrap_or(&from);
     let params = &options.params;
+    let from_label = options.labels.first().map_or(from_name, OsString::as_os_str);
+    let to_label = options.labels.get(1).map_or(to_name, OsString::as_os_str);
     let mut output = Vec::new();
     if from.as_slice() != to && !options.text && (from.contains(&0) || to.contains(&0)) {
         output.extend_from_slice(if params.brief {
@@ -1021,7 +1023,7 @@ fn compare_diff_files(
         } else {
             b"Binary files "
         });
-        append_names(&mut output, from_name, to_name, b" differ\n");
+        append_names(&mut output, from_label, to_label, b" differ\n");
         return Ok((output, 1, true));
     }
     let from_lines = split_lines(&from);
@@ -1030,12 +1032,12 @@ fn compare_diff_files(
     let different = changes.iter().any(|change| !change.ignored);
     if !different && params.report_identical_files {
         output.extend_from_slice(b"Files ");
-        append_names(&mut output, from_name, to_name, b" are identical\n");
+        append_names(&mut output, from_label, to_label, b" are identical\n");
     }
     if params.brief {
         if different {
             output.extend_from_slice(b"Files ");
-            append_names(&mut output, from_name, to_name, b" differ\n");
+            append_names(&mut output, from_label, to_label, b" differ\n");
         }
     } else if params.format == Format::SideBySide {
         render_side_by_side(

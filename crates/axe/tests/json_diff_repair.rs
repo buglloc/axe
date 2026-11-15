@@ -99,3 +99,30 @@ fn diff_ignoring_trailing_space_also_ignores_final_newline_presence() {
         b"1c1\n< a b\n---\n> ab\n",
     );
 }
+
+#[test]
+fn diff_labels_name_binary_and_brief_reports() {
+    let scratch = Scratch::new();
+    expect_output(
+        scratch.diff(&["--label=L", "--label=R"], b"a\0", b"b\0"),
+        1,
+        b"Binary files L and R differ\n",
+    );
+    for (left, right) in [(b"a\0".as_slice(), b"b\0".as_slice()), (b"a\n", b"b\n")] {
+        expect_output(
+            scratch.diff(&["-q", "--label=L", "--label=R"], left, right),
+            1,
+            b"Files L and R differ\n",
+        );
+    }
+    expect_output(
+        scratch.diff(&["-s", "--label=L", "--label=R"], b"a\n", b"a\n"),
+        0,
+        b"Files L and R are identical\n",
+    );
+    expect_output(
+        scratch.diff(&["--label=L"], b"a\0", b"b\0"),
+        1,
+        b"Binary files L and right differ\n",
+    );
+}
