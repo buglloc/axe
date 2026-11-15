@@ -845,7 +845,7 @@ struct Change {
     ignored: bool,
 }
 
-fn comparison_key(line: &[u8], options: &DiffOptions) -> Vec<u8> {
+fn comparison_key(line: &[u8], options: &DiffOptions, locale: SideLocale) -> Vec<u8> {
     // GNU's ed comparison includes the virtual newline it adds to an
     // incomplete final line; the diagnostic/status still reports the missing
     // newline after rendering.
@@ -864,12 +864,12 @@ fn comparison_key(line: &[u8], options: &DiffOptions) -> Vec<u8> {
     let mut column = 0;
     let mut whitespace = false;
     let mut trailing = Vec::new();
-    for &byte in content {
+    let mut append = |byte: u8| {
         if (options.ignore_trailing_space || options.ignore_space_change)
             && byte.is_ascii_whitespace()
         {
             trailing.push(byte);
-            continue;
+            return;
         }
         if !trailing.is_empty() {
             for byte in trailing.drain(..) {
@@ -877,10 +877,28 @@ fn comparison_key(line: &[u8], options: &DiffOptions) -> Vec<u8> {
             }
         }
         append_comparison_byte(&mut key, byte, options, &mut column, &mut whitespace);
-    }
-    if !options.ignore_trailing_space && !options.ignore_space_change {
-        for byte in trailing {
-            append_comparison_byte(&mut key, byte, options, &mut column, &mut whitespace);
+    };
+    if options.ignore_case && matches!(locale, SideLocale::Utf8) {
+        for chunk in content.utf8_chunks() {
+            for character in chunk.valid().chars() {
+                let mut buffer = [0; 4];
+                for &byte in lowercase_character(character).encode_utf8(&mut buffer).as_bytes() {
+                    append(byte);
+                }
+            }
+            for &byte in chunk.invalid() {
+                // Keep malformed bytes distinct from UTF-8 joined by -w.
+                append(0xff);
+                append(byte);
+            }
+        }
+    } else {
+        for &byte in content {
+            append(if options.ignore_case {
+                lowercase_byte(byte)
+            } else {
+                byte
+            });
         }
     }
     if has_newline
@@ -920,12 +938,47 @@ fn append_comparison_byte(
         return;
     }
     *whitespace = false;
-    key.push(if options.ignore_case {
-        byte.to_ascii_lowercase()
-    } else {
-        byte
-    });
+    key.push(byte);
     *column += 1;
+}
+
+fn lowercase_byte(byte: u8) -> u8 {
+    #[cfg(unix)]
+    {
+        // SAFETY: every u8 is representable as an unsigned char for tolower.
+        unsafe { libc::tolower(byte.into()) as u8 }
+    }
+    #[cfg(not(unix))]
+    {
+        byte.to_ascii_lowercase()
+    }
+}
+
+fn lowercase_character(character: char) -> char {
+    #[cfg(unix)]
+    {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        type Wint = libc::c_uint;
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        type Wint = libc::c_int;
+        unsafe extern "C" {
+            fn towlower(character: Wint) -> Wint;
+        }
+        // SAFETY: Unicode scalar values fit the target's wint_t. towlower
+        // returns one locale-mapped character, not a full Unicode expansion.
+        let folded = unsafe { towlower(character as Wint) };
+        char::from_u32(folded as u32).unwrap_or(character)
+    }
+    #[cfg(not(unix))]
+    {
+        let mut lowercase = character.to_lowercase();
+        let first = lowercase.next().unwrap();
+        if lowercase.next().is_none() {
+            first
+        } else {
+            character
+        }
+    }
 }
 
 fn line_is_ignored(line: &[u8], options: &DiffOptions) -> bool {
@@ -948,6 +1001,11 @@ fn line_is_ignored(line: &[u8], options: &DiffOptions) -> bool {
 }
 
 fn diff_changes(from: &[&[u8]], to: &[&[u8]], options: &DiffOptions) -> Vec<Change> {
+    let locale = if options.ignore_case {
+        side_locale()
+    } else {
+        SideLocale::Bytes
+    };
     let mut tokens = HashMap::<Vec<u8>, Token>::new();
     let mut intern = |key: Vec<u8>| {
         let next = tokens.len() as u32;
@@ -955,11 +1013,11 @@ fn diff_changes(from: &[&[u8]], to: &[&[u8]], options: &DiffOptions) -> Vec<Chan
     };
     let before = from
         .iter()
-        .map(|line| intern(comparison_key(line, options)))
+        .map(|line| intern(comparison_key(line, options, locale)))
         .collect::<Vec<_>>();
     let after = to
         .iter()
-        .map(|line| intern(comparison_key(line, options)))
+        .map(|line| intern(comparison_key(line, options, locale)))
         .collect::<Vec<_>>();
     let horizon = options.horizon_lines.max(match options.params.format {
         Format::Unified | Format::Context => options.params.context_count,

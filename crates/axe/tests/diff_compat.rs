@@ -180,6 +180,84 @@ fn diff_core_ignore_flags_preserve_actual_changed_line_bytes_and_numbers() {
 }
 
 #[test]
+fn ignore_case_obeys_the_locale_without_expanding_characters_or_losing_bytes() {
+    let scratch = Scratch::new("case-locale");
+    for (left, right, utf8_equal) in [
+        (b"hello\n".as_slice(), b"HELLO\n".as_slice(), true),
+        ("кек\n".as_bytes(), "КЕК\n".as_bytes(), true),
+        ("İ\n".as_bytes(), b"i\n".as_slice(), true),
+        ("ß\n".as_bytes(), "ẞ\n".as_bytes(), true),
+        ("ß\n".as_bytes(), b"SS\n".as_slice(), false),
+        ("ﬀ\n".as_bytes(), b"FF\n".as_slice(), false),
+        (b"a\xff\n".as_slice(), b"A\xff\n".as_slice(), true),
+        (b"a\xff\n".as_slice(), b"A\xfe\n".as_slice(), false),
+        (b"a\xff\n".as_slice(), "A�\n".as_bytes(), false),
+    ] {
+        scratch.write("a", left);
+        scratch.write("b", right);
+        for locale in ["C", "C.UTF-8"] {
+            let equal = if locale == "C" {
+                left.eq_ignore_ascii_case(right)
+            } else {
+                utf8_equal
+            };
+            let mut expected = b"1c1\n< ".to_vec();
+            expected.extend_from_slice(left);
+            expected.extend_from_slice(b"---\n> ");
+            expected.extend_from_slice(right);
+            assert_output(
+                run_locale(&scratch.0, "diff", &["-i", "a", "b"], b"", locale),
+                i32::from(!equal),
+                if equal { b"" } else { &expected },
+            );
+            let output = run_locale(&scratch.0, "sdiff", &["-si", "a", "b"], b"", locale);
+            assert_eq!(output.status.code(), Some(i32::from(!equal)), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            assert_eq!(output.stdout.is_empty(), equal, "{output:?}");
+        }
+    }
+}
+
+#[test]
+fn locale_case_comparison_preserves_scripts_and_other_ignore_options() {
+    let scratch = Scratch::new("case-scripts");
+    scratch.write("a", "кек\nold\n".as_bytes());
+    scratch.write("b", "КЕК\nnew\n".as_bytes());
+    for (flags, expected) in [
+        (&["-i"][..], b"2c2\n< old\n---\n> new\n".as_slice()),
+        (&["-ie"][..], b"2c\nnew\n.\n".as_slice()),
+    ] {
+        let mut args = flags.to_vec();
+        args.extend(["a", "b"]);
+        assert_output(
+            run_locale(&scratch.0, "diff", &args, b"", "C.UTF-8"),
+            1,
+            expected,
+        );
+    }
+    scratch.write("a", "к е к \r\n".as_bytes());
+    scratch.write("b", "КЕК\n".as_bytes());
+    assert_output(
+        run_locale(
+            &scratch.0,
+            "diff",
+            &["-iw", "--strip-trailing-cr", "a", "b"],
+            b"",
+            "C.UTF-8",
+        ),
+        0,
+        b"",
+    );
+    scratch.write("a", b"\xc3 \xa9\n");
+    scratch.write("b", "é\n".as_bytes());
+    assert_output(
+        run_locale(&scratch.0, "diff", &["-iw", "a", "b"], b"", "C.UTF-8"),
+        1,
+        b"1c1\n< \xc3 \xa9\n---\n> \xc3\xa9\n",
+    );
+}
+
+#[test]
 fn diff_binary_mode_and_forced_text_have_distinct_outputs() {
     let scratch = Scratch::new("binary");
     scratch.write("a", b"a\0b\n");
