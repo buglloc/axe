@@ -7,8 +7,8 @@ Source: the `uu_fmt` 0.12.0 crate from crates.io, upstream revision
 - Compute the default goal from GNU's 187/200 ratio and use GNU's fixed
   ten-column margin when only a goal is supplied, rather than the upstream
   integer 93% approximation.
-- Keep short candidate lines in the line-break search so a prefix consuming
-  width does not force a one-word final line, matching GNU fmt wrapping.
+- Score paragraph suffixes using GNU's line-length, raggedness, punctuation,
+  widow, and orphan costs instead of a different cubic line-break heuristic.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
 - Treat carriage returns and other nonblank control bytes as text instead of

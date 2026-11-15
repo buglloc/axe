@@ -252,3 +252,17 @@ fn fmt_tagged_paragraphs_use_the_secondary_indent() {
         b"1234567\x08\n   X\n",
     );
 }
+
+#[test]
+fn fmt_uniform_layout_uses_paragraph_suffix_costs() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(
+            scratch.path(),
+            "fmt",
+            &["-u", "-w15"],
+            b" one two three four five\nsix seven eight nine\n",
+        ),
+        b" one two three\n four five\nsix seven\neight nine\n",
+    );
+}
