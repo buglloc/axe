@@ -174,14 +174,17 @@ fn fold_respects_locale_and_keeps_multibyte_units_in_byte_mode() {
 #[test]
 fn csplit_suppresses_records_at_repeated_numeric_boundaries() {
     let scratch = Scratch::new();
-    assert_success(
-        run(
-            scratch.path(),
-            "csplit",
-            &["--suppress-matched", "-", "2", "2"],
-            b"a\nb\nc",
-        ),
-        b"2\n0\n0\n",
+    let output = run(
+        scratch.path(),
+        "csplit",
+        &["--suppress-matched", "-", "2", "2"],
+        b"a\nb\nc",
+    );
+    assert_eq!(output.status.code(), Some(0), "stderr: {:?}", output.stderr);
+    assert_eq!(output.stdout, b"2\n0\n0\n");
+    assert!(
+        !output.stderr.is_empty(),
+        "repeated boundaries warn without failing"
     );
     assert_eq!(fs::read(scratch.path().join("xx00")).unwrap(), b"a\n");
     assert_eq!(fs::read(scratch.path().join("xx01")).unwrap(), b"");
