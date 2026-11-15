@@ -217,3 +217,29 @@ fn cp_recursive_l_restores_umask_permissions_after_a_loop_error() {
     assert_eq!(fs::metadata(scratch.path().join("destination")).unwrap().permissions().mode() & 0o777, 0o755);
     assert_eq!(fs::read(scratch.path().join("source/file")).unwrap(), b"original");
 }
+
+#[test]
+fn ls_literal_quoting_preserves_tabs_but_explicit_q_hides_them() {
+    let scratch = Scratch::new("ls-literal-tab");
+    fs::write(scratch.path().join("tab\tname"), b"").unwrap();
+    for locale in ["C", "C.UTF-8"] {
+        for option in ["-1", "-N", "-F", "-X", "-S"] {
+            let output = command(scratch.path(), "ls")
+                .env("LC_ALL", locale)
+                .env("QUOTING_STYLE", "literal")
+                .args(["-1", option])
+                .output()
+                .unwrap();
+            success(&output);
+            assert_eq!(output.stdout, b"tab\tname\n");
+        }
+        let output = command(scratch.path(), "ls")
+            .env("LC_ALL", locale)
+            .env("QUOTING_STYLE", "literal")
+            .args(["-1", "-q"])
+            .output()
+            .unwrap();
+        success(&output);
+        assert_eq!(output.stdout, b"tab?name\n");
+    }
+}

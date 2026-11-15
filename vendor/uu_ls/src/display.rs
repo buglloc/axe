@@ -223,7 +223,7 @@ fn hide_implicit_controls(name: &OsStr) -> Cow<'_, OsStr> {
         let mut offset = 0;
         for chunk in bytes.utf8_chunks() {
             for (index, character) in chunk.valid().char_indices() {
-                if character.is_control() {
+                if character.is_control() && character != '\t' {
                     replace(offset + index, character.len_utf8());
                 }
             }
@@ -231,7 +231,7 @@ fn hide_implicit_controls(name: &OsStr) -> Cow<'_, OsStr> {
         }
     } else {
         for (index, byte) in bytes.iter().enumerate() {
-            if byte.is_ascii_control() {
+            if byte.is_ascii_control() && *byte != b'\t' {
                 replace(index, 1);
             }
         }

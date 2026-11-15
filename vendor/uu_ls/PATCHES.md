@@ -7,6 +7,7 @@ Source: the `uu_ls` 0.12.0 crate from crates.io, upstream revision
 - Preserve undecodable filename bytes while hiding control characters in the
   implicit display mode, and distinguish implicit control hiding from explicit
   `-q`/quoting styles.
+- Preserve tabs in implicit literal output; explicit `-q` still replaces them.
 - Keep the standalone manifest without the upstream benchmark and benchmark
   development dependencies; AXE owns dependency resolution and locales.
 
