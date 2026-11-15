@@ -1,8 +1,7 @@
 diff --git a/pkg/runner/fastsend.go b/pkg/runner/fastsend.go
-index d63d819..a78f754 100644
 --- a/pkg/runner/fastsend.go
 +++ b/pkg/runner/fastsend.go
-@@ -6,8 +6,8 @@ import (
+@@ -6,8 +6,8 @@
  	"fmt"
  	"net"
  
@@ -12,12 +11,60 @@ index d63d819..a78f754 100644
  	"github.com/projectdiscovery/naabu/v2/pkg/scan"
  )
  
-diff --git b/pkg/runner/internal/rawsend/batch_linux.go b/pkg/runner/internal/rawsend/batch_linux.go
+@@ -19,6 +19,7 @@
+ //
+ // NOT safe for concurrent use, reuses internal buffers.
+ type SYNSender struct {
++	scanner   *scan.Scanner
+ 	sender    *rawsend.Sender
+ 	batch     *rawsend.Batch
+ 	ownedConn *net.IPConn
+@@ -199,9 +200,17 @@
+ 	binary.BigEndian.PutUint16(s.pkt[16:18], synTCPChecksum(s.baseSum, srcSum, dstIP, dstPort, seq))
+ 
+ 	if s.batch != nil {
+-		return s.batch.Add(s.pkt[:], dstIP)
+-	}
+-	return s.sender.SendTo(s.pkt[:], dstIP)
++		s.batch.Add(s.pkt[:], dstIP)
++		if s.batch.Len() == synBatchSize {
++			return s.flush()
++		}
++		return nil
++	}
++	err := s.sender.SendTo(s.pkt[:], dstIP)
++	if s.scanner != nil {
++		s.scanner.RecordRawWrite(err)
++	}
++	return err
+ }
+ 
+ // effectiveSrcSum resolves the source pseudo-header checksum term for a packet:
+@@ -233,10 +242,15 @@
+ }
+ 
+ func (s *SYNSender) flush() error {
+-	if s.batch != nil {
+-		return s.batch.Flush()
+-	}
+-	return nil
++	if s.batch == nil {
++		return nil
++	}
++	pending := s.batch.Len()
++	sent, err := s.batch.Flush()
++	if s.scanner != nil {
++		s.scanner.RecordRawWrites(uint64(pending), uint64(pending-sent), err)
++	}
++	return err
+ }
+ 
+ func (s *SYNSender) close() {
+diff --git a/pkg/runner/internal/rawsend/batch_linux.go b/pkg/runner/internal/rawsend/batch_linux.go
 new file mode 100644
-index 0000000..1ef927f
 --- /dev/null
 +++ b/pkg/runner/internal/rawsend/batch_linux.go
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,109 @@
 +//go:build linux
 +
 +package rawsend
@@ -78,8 +125,8 @@ index 0000000..1ef927f
 +	return batch
 +}
 +
-+// Add queues pkt and flushes a full batch.
-+func (b *Batch) Add(pkt []byte, dstIP [4]byte) error {
++// Add queues pkt. The caller must flush before adding beyond batchSize.
++func (b *Batch) Add(pkt []byte, dstIP [4]byte) {
 +	i := b.count
 +	offset := i * b.maxPktLen
 +	n := copy(b.pkts[offset:offset+b.maxPktLen], pkt)
@@ -87,16 +134,12 @@ index 0000000..1ef927f
 +	b.iovs[i].SetLen(n)
 +	b.addrs[i].Addr = dstIP
 +	b.count++
-+	if b.count == b.batchSize {
-+		return b.Flush()
-+	}
-+	return nil
 +}
 +
-+// Flush sends every queued packet, retrying partial sendmmsg results.
-+func (b *Batch) Flush() error {
++// Flush returns the number sent, retrying partial sendmmsg results.
++func (b *Batch) Flush() (int, error) {
 +	if b.count == 0 {
-+		return nil
++		return 0, nil
 +	}
 +
 +	n := b.count
@@ -115,28 +158,27 @@ index 0000000..1ef927f
 +		)
 +		runtime.KeepAlive(b)
 +		if errno != 0 {
-+			return errno
++			return sent, errno
 +		}
 +
 +		count := int(r1)
 +		if count == 0 {
-+			return syscall.EAGAIN
++			return sent, syscall.EAGAIN
 +		}
 +		sent += count
 +	}
-+	return nil
++	return sent, nil
 +}
 +
 +// Len returns the number of queued packets.
 +func (b *Batch) Len() int {
 +	return b.count
 +}
-diff --git b/pkg/runner/internal/rawsend/batch_nonlinux.go b/pkg/runner/internal/rawsend/batch_nonlinux.go
+diff --git a/pkg/runner/internal/rawsend/batch_nonlinux.go b/pkg/runner/internal/rawsend/batch_nonlinux.go
 new file mode 100644
-index 0000000..a36c563
 --- /dev/null
 +++ b/pkg/runner/internal/rawsend/batch_nonlinux.go
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,21 @@
 +//go:build !linux
 +
 +package rawsend
@@ -149,20 +191,17 @@ index 0000000..a36c563
 +	return nil
 +}
 +
-+func (b *Batch) Add(_ []byte, _ [4]byte) error {
-+	return nil
-+}
++func (b *Batch) Add(_ []byte, _ [4]byte) {}
 +
-+func (b *Batch) Flush() error {
-+	return nil
++func (b *Batch) Flush() (int, error) {
++	return 0, nil
 +}
 +
 +func (b *Batch) Len() int {
 +	return 0
 +}
-diff --git b/pkg/runner/internal/rawsend/fd_unix.go b/pkg/runner/internal/rawsend/fd_unix.go
+diff --git a/pkg/runner/internal/rawsend/fd_unix.go b/pkg/runner/internal/rawsend/fd_unix.go
 new file mode 100644
-index 0000000..8efdc1e
 --- /dev/null
 +++ b/pkg/runner/internal/rawsend/fd_unix.go
 @@ -0,0 +1,5 @@
@@ -171,9 +210,8 @@ index 0000000..8efdc1e
 +package rawsend
 +
 +type sysSocketFD = int
-diff --git b/pkg/runner/internal/rawsend/fd_windows.go b/pkg/runner/internal/rawsend/fd_windows.go
+diff --git a/pkg/runner/internal/rawsend/fd_windows.go b/pkg/runner/internal/rawsend/fd_windows.go
 new file mode 100644
-index 0000000..5f35ee7
 --- /dev/null
 +++ b/pkg/runner/internal/rawsend/fd_windows.go
 @@ -0,0 +1,7 @@
@@ -184,9 +222,8 @@ index 0000000..5f35ee7
 +import "syscall"
 +
 +type sysSocketFD = syscall.Handle
-diff --git b/pkg/runner/internal/rawsend/sender.go b/pkg/runner/internal/rawsend/sender.go
+diff --git a/pkg/runner/internal/rawsend/sender.go b/pkg/runner/internal/rawsend/sender.go
 new file mode 100644
-index 0000000..417d67e
 --- /dev/null
 +++ b/pkg/runner/internal/rawsend/sender.go
 @@ -0,0 +1,47 @@
@@ -238,10 +275,9 @@ index 0000000..417d67e
 +	return syscall.Sendto(s.fd, pkt, 0, &s.sa)
 +}
 diff --git a/pkg/runner/runner.go b/pkg/runner/runner.go
-index 9006b0b..1237742 100644
 --- a/pkg/runner/runner.go
 +++ b/pkg/runner/runner.go
-@@ -5,21 +5,24 @@ import (
+@@ -5,10 +5,12 @@
  	"context"
  	"encoding/csv"
  	"encoding/json"
@@ -254,10 +290,10 @@ index 9006b0b..1237742 100644
  	"net/url"
  	"os"
  	"path/filepath"
- 	"strconv"
+@@ -16,11 +18,11 @@
  	"strings"
  	"sync"
-+	"sync/atomic"
+ 	"sync/atomic"
 +	"syscall"
  	"time"
  
@@ -267,7 +303,7 @@ index 9006b0b..1237742 100644
  	"github.com/projectdiscovery/blackrock"
  	"github.com/projectdiscovery/clistats"
  	"github.com/projectdiscovery/dnsx/libs/dnsx"
-@@ -56,6 +59,14 @@ type Runner struct {
+@@ -65,6 +67,14 @@
  	streamChannel  chan Target
  	excludedIpsNP  *networkpolicy.NetworkPolicy
  
@@ -280,37 +316,39 @@ index 9006b0b..1237742 100644
 +	firstConnectError error
 +
  	unique gcache.Cache[string, struct{}]
- }
  
-@@ -214,7 +225,7 @@ func (r *Runner) onReceive(hostResult *result.HostResult) {
- 		return
+ 	// hasHostnames is set when at least one target resolves from a hostname
+@@ -276,6 +286,9 @@
+ // are pure IPs/CIDRs (no hostnames), it returns the IP directly and avoids the
+ // disk-backed Hosts lookup entirely.
+ func (r *Runner) hostsForIP(ip string) ([]string, error) {
++	if addr, err := netip.ParseAddr(ip); err == nil && addr.Zone() != "" {
++		return []string{ip}, nil
++	}
+ 	if !r.hasHostnames.Load() {
+ 		return []string{ip}, nil
  	}
- 
--	dt, err := r.scanner.IPRanger.GetHostsByIP(hostResult.IP)
-+	dt, err := r.hostsForIP(hostResult.IP)
- 	if err != nil {
- 		return
- 	}
-@@ -356,6 +367,8 @@ func (r *Runner) RunEnumeration(pctx context.Context) error {
+@@ -515,6 +528,8 @@
  
  	shouldDiscoverHosts := r.options.shouldDiscoverHosts()
  	shouldUseRawPackets := r.options.shouldUseRawPackets()
 +	r.resetConnectErrors()
 +	r.scanner.ResetRawWriteStats()
  
- 	if shouldDiscoverHosts && shouldUseRawPackets {
- 		// perform host discovery
-@@ -386,6 +399,9 @@ func (r *Runner) RunEnumeration(pctx context.Context) error {
- 		if r.options.WarmUpTime > 0 {
+ 	// Scan workers
+ 	scanConcurrency := r.options.Rate
+@@ -562,6 +577,10 @@
  			time.Sleep(time.Duration(r.options.WarmUpTime) * time.Second)
  		}
+ 
 +		if err := r.checkRawWriteErrors("host discovery"); err != nil {
 +			return err
 +		}
- 
- 		// check if we should stop here or continue with full scan
- 		if r.options.OnlyHostDiscovery {
-@@ -397,6 +413,7 @@ func (r *Runner) RunEnumeration(pctx context.Context) error {
++
+ 		if r.options.ShowDeadHosts {
+ 			// re-stream the same targets instead of holding every probed ip in
+ 			// memory; dead hosts are the streamed targets that never responded.
+@@ -578,6 +597,7 @@
  	switch {
  	case r.options.Stream && !r.options.Passive: // stream active
  		showNetworkCapabilities(r.options)
@@ -318,7 +356,7 @@ index 9006b0b..1237742 100644
  		r.scanner.ListenHandler.Phase.Set(scan.Scan)
  
  		handleStreamIp := func(target string, port *port.Port) bool {
-@@ -419,23 +436,39 @@ func (r *Runner) RunEnumeration(pctx context.Context) error {
+@@ -603,23 +623,39 @@
  		}
  
  		for target := range r.streamChannel {
@@ -330,6 +368,10 @@ index 9006b0b..1237742 100644
 -					for _, port := range r.scanner.Ports {
 -						if !handleStreamIp(ip, port) {
 -							break
+-						}
+-					}
+-				}
+-			} else if target.Ip != "" && target.Port != "" {
 +			if target.Cidr != "" {
 +				if err := r.scanner.IPRanger.Add(target.Cidr); err != nil {
 +					gologger.Warning().Msgf("Couldn't track %s in scan results: %s\n", target, err)
@@ -340,10 +382,9 @@ index 9006b0b..1237742 100644
 +							if !handleStreamIp(ip, port) {
 +								break
 +							}
- 						}
- 					}
- 				}
--			} else if target.Ip != "" && target.Port != "" {
++						}
++					}
++				}
 +				continue
 +			}
 +			if target.Ip == "" {
@@ -367,7 +408,7 @@ index 9006b0b..1237742 100644
  
  		time.Sleep(time.Duration(r.options.WarmUpTime) * time.Second)
  
-@@ -535,6 +568,7 @@ func (r *Runner) RunEnumeration(pctx context.Context) error {
+@@ -726,6 +762,7 @@
  
  		// shrinks the ips to the minimum amount of cidr
  		targets, targetsV4, targetsv6, targetsWithPort, err := r.GetTargetIps(ipsCallback)
@@ -375,7 +416,15 @@ index 9006b0b..1237742 100644
  		if err != nil {
  			return err
  		}
-@@ -683,6 +717,9 @@ func (r *Runner) RunEnumeration(pctx context.Context) error {
+@@ -758,6 +795,7 @@
+ 					gologger.Debug().Msgf("fast SYN sender unavailable (%s), using standard path\n", err)
+ 				} else {
+ 					synSender = s
++					synSender.scanner = r.scanner
+ 					synPacer = newPacer(r.options.Rate)
+ 					gologger.Info().Msgf("fast SYN sender active (direct raw socket)")
+ 				}
+@@ -1013,6 +1051,9 @@
  				r.options.ResumeCfg.Unlock()
  			}
  		}
@@ -385,7 +434,7 @@ index 9006b0b..1237742 100644
  
  		warmUpTime := 2 * time.Second
  		if r.options.WarmUpTime > 0 {
-@@ -721,6 +758,9 @@ func (r *Runner) getHostDiscoveryIps() (ips []*net.IPNet, ipsWithPort []string)
+@@ -1053,6 +1094,9 @@
  		}
  		return nil
  	})
@@ -395,7 +444,7 @@ index 9006b0b..1237742 100644
  
  	return
  }
-@@ -735,6 +775,9 @@ func (r *Runner) getPreprocessedIps() (cidrs []*net.IPNet, ipsWithPort []string)
+@@ -1067,6 +1111,9 @@
  
  		return nil
  	})
@@ -405,7 +454,7 @@ index 9006b0b..1237742 100644
  	return
  }
  
-@@ -892,6 +935,63 @@ func (r *Runner) RawSocketEnumeration(ctx context.Context, ip string, p *port.Po
+@@ -1231,6 +1278,63 @@
  	}
  }
  
@@ -469,15 +518,7 @@ index 9006b0b..1237742 100644
  // check if an ip can be scanned in case CDN/WAF exclusions are enabled
  func (r *Runner) canIScanIfCDN(host string, port *port.Port) bool {
  	// if CDN ips are not excluded all scans are allowed
-@@ -907,7 +1007,6 @@ func (r *Runner) canIScanIfCDN(host string, port *port.Port) bool {
- 	// If the cdn is part of the CDN ips range - only ports 80 and 443 are allowed
- 	return port.Port == 80 || port.Port == 443
- }
--
- func (r *Runner) handleHostPort(ctx context.Context, host, payload string, p *port.Port) {
- 	defer r.wgscan.Done()
- 
-@@ -927,6 +1026,7 @@ func (r *Runner) handleHostPort(ctx context.Context, host, payload string, p *po
+@@ -1266,6 +1370,7 @@
  
  		r.limiter.Take()
  		open, err := r.scanner.ConnectPort(host, payload, p, r.options.GetTimeout())
@@ -485,7 +526,7 @@ index 9006b0b..1237742 100644
  		if open && err == nil {
  			r.scanner.ScanResults.AddPort(host, p)
  			// ignore OnReceive when verification is enabled
-@@ -1016,6 +1116,7 @@ func (r *Runner) SetInterface(interfaceName string) error {
+@@ -1409,6 +1514,7 @@
  	}
  
  	r.scanner.NetworkInterface = networkInterface
@@ -493,25 +534,7 @@ index 9006b0b..1237742 100644
  	r.scanner.ListenHandler.SourceHW = networkInterface.HardwareAddr
  	return nil
  }
-@@ -1064,7 +1165,7 @@ func (r *Runner) handleOutput(scanResults *result.Result) {
- 	switch {
- 	case scanResults.HasIPsPorts():
- 		for hostResult := range scanResults.GetIPsPorts() {
--			dt, err := r.scanner.IPRanger.GetHostsByIP(hostResult.IP)
-+			dt, err := r.hostsForIP(hostResult.IP)
- 			if err != nil {
- 				continue
- 			}
-@@ -1180,7 +1281,7 @@ func (r *Runner) handleOutput(scanResults *result.Result) {
- 		}
- 	case scanResults.HasIPS():
- 		for hostIP := range scanResults.GetIPs() {
--			dt, err := r.scanner.IPRanger.GetHostsByIP(hostIP)
-+			dt, err := r.hostsForIP(hostIP)
- 			if err != nil {
- 				continue
- 			}
-@@ -1260,11 +1361,15 @@ func (r *Runner) handleOutput(scanResults *result.Result) {
+@@ -1896,11 +2002,15 @@
  }
  
  func ipMatchesIpVersions(ip string, ipVersions ...string) bool {
@@ -530,21 +553,21 @@ index 9006b0b..1237742 100644
  		}
  	}
 diff --git a/pkg/runner/runner_test.go b/pkg/runner/runner_test.go
-index 455ddef..ceb250c 100644
 --- a/pkg/runner/runner_test.go
 +++ b/pkg/runner/runner_test.go
-@@ -9,6 +9,7 @@ import (
- 	"runtime"
+@@ -12,6 +12,7 @@
+ 	"strconv"
  	"strings"
  	"sync"
 +	"syscall"
  	"testing"
  	"time"
  
-@@ -1051,3 +1052,31 @@ func TestNewRunner_ScanTypeSyncMatchesScanner(t *testing.T) {
+@@ -1266,6 +1267,34 @@
+ 
  	assert.Equal(t, runner.scanner.ScanType, runner.options.ScanType,
  		"runner options and scanner scan type should always match")
- }
++}
 +
 +func TestCheckConnectErrorsFailsWhenNothingWasScannable(t *testing.T) {
 +	r := &Runner{}
@@ -572,39 +595,62 @@ index 455ddef..ceb250c 100644
 +	require.Error(t, err)
 +	assert.Contains(t, err.Error(), "scan sent no raw packets")
 +	assert.ErrorIs(t, err, syscall.ENETUNREACH)
+ }
+ 
+ // TestStreamSkipsExcludedIps verifies that both stream code paths drop the ips
+@@ -1343,3 +1372,26 @@
+ 			"excluded ips must not be looked up")
+ 	})
+ }
++
++func TestCheckRawWriteErrorsFailsWhenBatchNothingWasSent(t *testing.T) {
++	scanner := &scan.Scanner{}
++	scanner.RecordRawWrites(1024, 1024, fmt.Errorf("sendmmsg: %w", syscall.ENETUNREACH))
++	r := &Runner{scanner: scanner}
++
++	err := r.checkRawWriteErrors("scan")
++	require.Error(t, err)
++	assert.Contains(t, err.Error(), "all 1024 writes failed")
++	assert.ErrorIs(t, err, syscall.ENETUNREACH)
++}
++
++func TestCheckRawWriteErrorsAllowsPartialBatch(t *testing.T) {
++	scanner := &scan.Scanner{}
++	scanner.RecordRawWrites(1024, 7, syscall.ENOBUFS)
++	r := &Runner{scanner: scanner}
++
++	stats := scanner.WaitRawWrites()
++	assert.Equal(t, uint64(1024), stats.Attempts)
++	assert.Equal(t, uint64(7), stats.ErrorCount)
++	assert.ErrorIs(t, stats.FirstError, syscall.ENOBUFS)
++	require.NoError(t, r.checkRawWriteErrors("scan"))
 +}
 diff --git a/pkg/runner/smartscan.go b/pkg/runner/smartscan.go
-index 90c1305..4ba37f0 100644
 --- a/pkg/runner/smartscan.go
 +++ b/pkg/runner/smartscan.go
-@@ -108,7 +108,9 @@ func (r *Runner) runPredictiveScan(ctx context.Context, targets []*net.IPNet, ta
+@@ -50,6 +50,7 @@
+ 		if err != nil {
+ 			gologger.Debug().Msgf("Fast sender unavailable (%s), using standard path\n", err)
+ 		} else {
++			sender.scanner = r.scanner
+ 			gologger.Info().Msgf("Smart scan: fast SYN sender active (direct raw socket, zero-copy template)")
+ 		}
+ 	}
+@@ -124,7 +125,9 @@
  			brSeed++
  			r.scanSinglePortOnTargets(ctx, targets, tgtIdx, p, targetsCount, shouldUseRawPackets, sender, brSeed)
  			if sender != nil {
--				sender.flush()
+-				_ = sender.flush()
 +				if err := sender.flush(); err != nil {
-+					r.scanner.RecordRawWrite(err)
++					gologger.Debug().Msgf("final flush failed: %s\n", err)
 +				}
  			}
  		}
  
-@@ -200,9 +202,8 @@ func (r *Runner) scanSinglePortOnTargets(ctx context.Context, targets []*net.IPN
- 			}
- 
- 			r.limiter.Take()
--			if err := sender.send(dstIP, uint16(p.Port)); err != nil {
--				gologger.Debug().Msgf("fast send error %s:%d: %s\n", ip, p.Port, err)
--			}
-+			err := sender.send(dstIP, uint16(p.Port))
-+			r.scanner.RecordRawWrite(err)
- 			if r.options.EnableProgressBar {
- 				r.stats.IncrementCounter("packets", 1)
- 			}
 diff --git a/pkg/runner/targets.go b/pkg/runner/targets.go
-index f15697a..60121e3 100644
 --- a/pkg/runner/targets.go
 +++ b/pkg/runner/targets.go
-@@ -6,6 +6,7 @@ import (
+@@ -6,6 +6,7 @@
  	"fmt"
  	"io"
  	"net"
@@ -612,18 +658,18 @@ index f15697a..60121e3 100644
  	"os"
  	"strings"
  
-@@ -123,6 +124,10 @@ func (r *Runner) AddTarget(target string) error {
+@@ -122,6 +123,10 @@
+ 	target = strings.TrimSpace(target)
  	if target == "" {
  		return nil
- 	}
++	}
 +	host, targetPort, hasPort := getPort(target)
 +	if addr, err := netip.ParseAddr(host); err == nil && addr.Zone() != "" {
 +		return r.addScopedTarget(addr.String(), targetPort, hasPort)
-+	}
+ 	}
  	if asn.IsASN(target) {
  		// Get CIDRs for ASN
- 		cidrs, err := asn.GetCIDRsForASNNum(target)
-@@ -217,6 +222,56 @@ func (r *Runner) AddTarget(target string) error {
+@@ -227,6 +232,49 @@
  	return nil
  }
  
@@ -670,21 +716,13 @@ index f15697a..60121e3 100644
 +	return targets
 +}
 +
-+func (r *Runner) hostsForIP(ip string) ([]string, error) {
-+	if addr, err := netip.ParseAddr(ip); err == nil && addr.Zone() != "" {
-+		return []string{"ip"}, nil
-+	}
-+	return r.scanner.IPRanger.GetHostsByIP(ip)
-+}
-+
  func joinHostPort(host, port string) string {
  	if port == "" {
  		return host
 diff --git a/pkg/runner/targets_test.go b/pkg/runner/targets_test.go
-index d298079..62867a6 100644
 --- a/pkg/runner/targets_test.go
 +++ b/pkg/runner/targets_test.go
-@@ -5,6 +5,8 @@ import (
+@@ -5,6 +5,8 @@
  	"testing"
  
  	"github.com/projectdiscovery/ipranger"
@@ -693,7 +731,7 @@ index d298079..62867a6 100644
  	"github.com/projectdiscovery/naabu/v2/pkg/scan"
  	"github.com/stretchr/testify/require"
  )
-@@ -46,3 +48,54 @@ func Test_AddTarget(t *testing.T) {
+@@ -46,3 +48,54 @@
  	// err = r.AddTarget("AS14421")
  	// require.Nil(t, err, "ASN incorrectly parsed")
  }
@@ -748,17 +786,17 @@ index d298079..62867a6 100644
 +	require.NoError(t, err)
 +	require.Equal(t, []string{"[fe80::1%eth0]:18083"}, targetsWithPort)
 +}
-diff --git b/pkg/scan/capture_linux.go b/pkg/scan/capture_linux.go
+diff --git a/pkg/scan/capture_linux.go b/pkg/scan/capture_linux.go
 new file mode 100644
-index 0000000..f736c48
 --- /dev/null
 +++ b/pkg/scan/capture_linux.go
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,90 @@
 +//go:build linux
 +
 +package scan
 +
 +import (
++	"errors"
 +	"fmt"
 +	"time"
 +
@@ -776,21 +814,24 @@ index 0000000..f736c48
 +	return layers.LinkTypeEthernet
 +}
 +
++func (h *linuxCaptureHandle) IsTimeout(err error) bool {
++	return errors.Is(err, afpacket.ErrTimeout)
++}
++
 +func openCaptureHandle(interfaceName, _ string, proto protocol.Protocol) (packetHandle, error) {
-+	ports := make([]uint32, len(ListenHandlers))
-+	for i, listenHandler := range ListenHandlers {
-+		ports[i] = uint32(listenHandler.Port)
-+	}
-+	filter, err := linuxCaptureFilter(proto, ports)
++	filter, err := linuxCaptureFilter(proto)
 +	if err != nil {
 +		return nil, err
 +	}
 +
++	// Blocks must be page-aligned even though captured packets are much smaller.
++	const blockSize = 1 << 20
 +	handle, err := afpacket.NewTPacket(
 +		afpacket.OptInterface(interfaceName),
 +		afpacket.OptFrameSize(snaplen),
-+		afpacket.OptBlockSize(snaplen),
-+		afpacket.OptNumBlocks(2),
++		afpacket.OptBlockSize(blockSize),
++		afpacket.OptNumBlocks(pcapBufferSize/blockSize),
++		afpacket.OptBlockTimeout(time.Millisecond),
 +		afpacket.OptPollTimeout(time.Duration(readtimeout)*time.Millisecond),
 +	)
 +	if err != nil {
@@ -804,7 +845,7 @@ index 0000000..f736c48
 +	return &linuxCaptureHandle{TPacket: handle}, nil
 +}
 +
-+func linuxCaptureFilter(proto protocol.Protocol, ports []uint32) ([]bpf.RawInstruction, error) {
++func linuxCaptureFilter(proto protocol.Protocol) ([]bpf.RawInstruction, error) {
 +	var instructions []bpf.Instruction
 +	switch proto {
 +	case protocol.ARP:
@@ -815,95 +856,43 @@ index 0000000..f736c48
 +			bpf.RetConstant{Val: 0},
 +		}
 +	case protocol.TCP, protocol.UDP:
-+		if len(ports) == 0 {
-+			return nil, fmt.Errorf("no transport capture ports configured")
++		// Handlers acquire source ports after capture starts. Match IPv4 ACK/RST,
++		// IPv6 TCP and UDP here; the reader demultiplexes by the live handler port.
++		instructions = []bpf.Instruction{
++			bpf.LoadAbsolute{Off: 12, Size: 2},
++			bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0x0800, SkipTrue: 1},
++			bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0x86dd, SkipTrue: 8, SkipFalse: 12},
++			bpf.LoadAbsolute{Off: 23, Size: 1},
++			bpf.JumpIf{Cond: bpf.JumpEqual, Val: 17, SkipTrue: 9},
++			bpf.JumpIf{Cond: bpf.JumpEqual, Val: 6, SkipFalse: 9},
++			bpf.LoadAbsolute{Off: 20, Size: 2},
++			bpf.JumpIf{Cond: bpf.JumpBitsSet, Val: 0x1fff, SkipTrue: 7},
++			bpf.LoadMemShift{Off: 14},
++			bpf.LoadIndirect{Off: 27, Size: 1},
++			bpf.JumpIf{Cond: bpf.JumpBitsSet, Val: 0x14, SkipTrue: 3, SkipFalse: 4},
++			bpf.LoadAbsolute{Off: 20, Size: 1},
++			bpf.JumpIf{Cond: bpf.JumpEqual, Val: 6, SkipTrue: 1},
++			bpf.JumpIf{Cond: bpf.JumpEqual, Val: 17, SkipFalse: 1},
++			bpf.RetConstant{Val: snaplen},
++			bpf.RetConstant{Val: 0},
 +		}
-+		if len(ports) > 120 {
-+			return nil, fmt.Errorf("too many transport capture ports: %d", len(ports))
-+		}
-+		instructions = linuxTransportCaptureFilter(ports)
 +	default:
 +		return nil, fmt.Errorf("unsupported capture protocol %q", proto)
 +	}
-+
 +	return bpf.Assemble(instructions)
 +}
-+
-+func linuxTransportCaptureFilter(ports []uint32) []bpf.Instruction {
-+	ipv6Start := 8 + len(ports)
-+	accept := ipv6Start + 4 + len(ports)
-+	reject := accept + 1
-+	skip := func(from, to int) uint8 {
-+		return uint8(to - from - 1)
-+	}
-+
-+	instructions := make([]bpf.Instruction, 0, reject+1)
-+	instructions = append(instructions,
-+		bpf.LoadAbsolute{Off: 12, Size: 2},
-+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0x0800, SkipTrue: 1},
-+		bpf.JumpIf{
-+			Cond:      bpf.JumpEqual,
-+			Val:       0x86dd,
-+			SkipTrue:  skip(2, ipv6Start),
-+			SkipFalse: skip(2, reject),
-+		},
-+		bpf.LoadAbsolute{Off: 23, Size: 1},
-+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 6, SkipTrue: 1},
-+		bpf.JumpIf{
-+			Cond:      bpf.JumpEqual,
-+			Val:       17,
-+			SkipFalse: skip(5, reject),
-+		},
-+		bpf.LoadMemShift{Off: 14},
-+		bpf.LoadIndirect{Off: 16, Size: 2},
-+	)
-+	instructions = appendPortChecks(instructions, ports, accept, reject)
-+
-+	instructions = append(instructions,
-+		bpf.LoadAbsolute{Off: 20, Size: 1},
-+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 6, SkipTrue: 1},
-+		bpf.JumpIf{
-+			Cond:      bpf.JumpEqual,
-+			Val:       17,
-+			SkipFalse: skip(ipv6Start+2, reject),
-+		},
-+		bpf.LoadAbsolute{Off: 56, Size: 2},
-+	)
-+	instructions = appendPortChecks(instructions, ports, accept, reject)
-+	return append(instructions,
-+		bpf.RetConstant{Val: snaplen},
-+		bpf.RetConstant{Val: 0},
-+	)
-+}
-+
-+func appendPortChecks(instructions []bpf.Instruction, ports []uint32, accept, reject int) []bpf.Instruction {
-+	for i, port := range ports {
-+		index := len(instructions)
-+		skipFalse := uint8(0)
-+		if i == len(ports)-1 {
-+			skipFalse = uint8(reject - index - 1)
-+		}
-+		instructions = append(instructions, bpf.JumpIf{
-+			Cond:      bpf.JumpEqual,
-+			Val:       port,
-+			SkipTrue:  uint8(accept - index - 1),
-+			SkipFalse: skipFalse,
-+		})
-+	}
-+	return instructions
-+}
-diff --git b/pkg/scan/capture_linux_test.go b/pkg/scan/capture_linux_test.go
+diff --git a/pkg/scan/capture_linux_test.go b/pkg/scan/capture_linux_test.go
 new file mode 100644
-index 0000000..ac43b19
 --- /dev/null
 +++ b/pkg/scan/capture_linux_test.go
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,80 @@
 +//go:build linux
 +
 +package scan
 +
 +import (
 +	"encoding/binary"
++	"fmt"
 +	"testing"
 +
 +	"github.com/projectdiscovery/naabu/v2/pkg/protocol"
@@ -916,72 +905,83 @@ index 0000000..ac43b19
 +		filter    protocol.Protocol
 +		etherType uint16
 +		ipProto   byte
-+		dstPort   uint16
++		flags     byte
++		fragment  uint16
 +		want      bool
 +	}{
 +		{name: "arp", filter: protocol.ARP, etherType: 0x0806, want: true},
 +		{name: "arp rejects IPv4", filter: protocol.ARP, etherType: 0x0800},
-+		{name: "IPv4 TCP", filter: protocol.TCP, etherType: 0x0800, ipProto: 6, dstPort: 4242, want: true},
-+		{name: "IPv4 UDP", filter: protocol.TCP, etherType: 0x0800, ipProto: 17, dstPort: 4242, want: true},
-+		{name: "IPv4 wrong port", filter: protocol.TCP, etherType: 0x0800, ipProto: 6, dstPort: 53},
-+		{name: "IPv4 ICMP", filter: protocol.TCP, etherType: 0x0800, ipProto: 1, dstPort: 4242},
-+		{name: "IPv6 TCP", filter: protocol.TCP, etherType: 0x86dd, ipProto: 6, dstPort: 4242, want: true},
-+		{name: "IPv6 UDP", filter: protocol.TCP, etherType: 0x86dd, ipProto: 17, dstPort: 4242, want: true},
-+		{name: "IPv6 wrong port", filter: protocol.TCP, etherType: 0x86dd, ipProto: 17, dstPort: 53},
-+		{name: "unrelated EtherType", filter: protocol.TCP, etherType: 0x0806, ipProto: 6, dstPort: 4242},
++		{name: "IPv4 SYN-ACK", filter: protocol.TCP, etherType: 0x0800, ipProto: 6, flags: 0x12, want: true},
++		{name: "IPv4 ACK", filter: protocol.TCP, etherType: 0x0800, ipProto: 6, flags: 0x10, want: true},
++		{name: "IPv4 RST", filter: protocol.TCP, etherType: 0x0800, ipProto: 6, flags: 0x04, want: true},
++		{name: "IPv4 pure SYN", filter: protocol.TCP, etherType: 0x0800, ipProto: 6, flags: 0x02},
++		{name: "IPv4 noninitial TCP fragment", filter: protocol.TCP, etherType: 0x0800, ipProto: 6, flags: 0x12, fragment: 1},
++		{name: "IPv4 UDP", filter: protocol.TCP, etherType: 0x0800, ipProto: 17, want: true},
++		{name: "IPv4 ICMP", filter: protocol.TCP, etherType: 0x0800, ipProto: 1},
++		{name: "IPv6 TCP", filter: protocol.TCP, etherType: 0x86dd, ipProto: 6, want: true},
++		{name: "IPv6 UDP", filter: protocol.TCP, etherType: 0x86dd, ipProto: 17, want: true},
++		{name: "IPv6 ICMP", filter: protocol.TCP, etherType: 0x86dd, ipProto: 58},
++		{name: "unrelated EtherType", filter: protocol.TCP, etherType: 0x0806, ipProto: 6, flags: 0x12},
 +	}
 +
 +	for _, test := range tests {
-+		t.Run(test.name, func(t *testing.T) {
-+			raw, err := linuxCaptureFilter(test.filter, []uint32{4242})
-+			if err != nil {
-+				t.Fatalf("build filter: %v", err)
-+			}
-+			instructions, allDecoded := bpf.Disassemble(raw)
-+			if !allDecoded {
-+				t.Fatal("filter contains undecodable instructions")
-+			}
-+			vm, err := bpf.NewVM(instructions)
-+			if err != nil {
-+				t.Fatalf("create BPF VM: %v", err)
-+			}
++		// Exercise ports unavailable at capture initialization, including zero.
++		for _, dstPort := range []uint16{0, 53, 4242, 65535} {
++			t.Run(fmt.Sprintf("%s/port-%d", test.name, dstPort), func(t *testing.T) {
++				raw, err := linuxCaptureFilter(test.filter)
++				if err != nil {
++					t.Fatalf("build filter: %v", err)
++				}
++				instructions, allDecoded := bpf.Disassemble(raw)
++				if !allDecoded {
++					t.Fatal("filter contains undecodable instructions")
++				}
++				vm, err := bpf.NewVM(instructions)
++				if err != nil {
++					t.Fatalf("create BPF VM: %v", err)
++				}
 +
-+			packet := make([]byte, 64)
-+			binary.BigEndian.PutUint16(packet[12:14], test.etherType)
-+			switch test.etherType {
-+			case 0x0800:
-+				packet[14] = 0x45
-+				packet[23] = test.ipProto
-+				binary.BigEndian.PutUint16(packet[36:38], test.dstPort)
-+			case 0x86dd:
-+				packet[20] = test.ipProto
-+				binary.BigEndian.PutUint16(packet[56:58], test.dstPort)
-+			}
++				packet := make([]byte, 80)
++				binary.BigEndian.PutUint16(packet[12:14], test.etherType)
++				switch test.etherType {
++				case 0x0800:
++					packet[14] = 0x45
++					packet[23] = test.ipProto
++					binary.BigEndian.PutUint16(packet[20:22], test.fragment)
++					binary.BigEndian.PutUint16(packet[36:38], dstPort)
++					packet[47] = test.flags
++				case 0x86dd:
++					packet[20] = test.ipProto
++					binary.BigEndian.PutUint16(packet[56:58], dstPort)
++				}
 +
-+			accepted, err := vm.Run(packet)
-+			if err != nil {
-+				t.Fatalf("run BPF VM: %v", err)
-+			}
-+			if got := accepted > 0; got != test.want {
-+				t.Fatalf("accepted = %t, want %t", got, test.want)
-+			}
-+		})
++				accepted, err := vm.Run(packet)
++				if err != nil {
++					t.Fatalf("run BPF VM: %v", err)
++				}
++				if got := accepted > 0; got != test.want {
++					t.Fatalf("accepted = %t, want %t", got, test.want)
++				}
++			})
++		}
 +	}
 +}
-diff --git b/pkg/scan/capture_pcap.go b/pkg/scan/capture_pcap.go
+diff --git a/pkg/scan/capture_pcap.go b/pkg/scan/capture_pcap.go
 new file mode 100644
-index 0000000..e298ba8
 --- /dev/null
 +++ b/pkg/scan/capture_pcap.go
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,71 @@
 +//go:build darwin || windows
 +
 +package scan
 +
 +import (
++	"errors"
++	"net"
 +	"time"
 +
 +	"github.com/Mzack9999/gopacket/pcap"
++	"github.com/projectdiscovery/gologger"
 +	"github.com/projectdiscovery/naabu/v2/pkg/protocol"
 +)
 +
@@ -995,8 +995,16 @@ index 0000000..e298ba8
 +	h.inactive.CleanUp()
 +}
 +
++func (h *pcapCaptureHandle) IsTimeout(err error) bool {
++	return errors.Is(err, pcap.NextErrorTimeoutExpired)
++}
++
 +func openCaptureHandle(interfaceName, bpfFilter string, _ protocol.Protocol) (packetHandle, error) {
-+	inactive, err := pcap.NewInactiveHandle(interfaceName)
++	iface, err := net.InterfaceByName(interfaceName)
++	if err != nil {
++		return nil, err
++	}
++	inactive, err := pcap.NewInactiveHandle(pcapDeviceForInterface(iface))
 +	if err != nil {
 +		return nil, err
 +	}
@@ -1012,6 +1020,10 @@ index 0000000..e298ba8
 +	if err := inactive.SetImmediateMode(true); err != nil {
 +		inactive.CleanUp()
 +		return nil, err
++	}
++
++	if err := inactive.SetBufferSize(pcapBufferSize); err != nil {
++		gologger.Debug().Msgf("could not set pcap buffer size on %s: %s", interfaceName, err)
 +	}
 +
 +	handle, err := inactive.Activate()
@@ -1031,10 +1043,9 @@ index 0000000..e298ba8
 +	}, nil
 +}
 diff --git a/pkg/scan/connect.go b/pkg/scan/connect.go
-index da7e931..bf4bf4f 100644
 --- a/pkg/scan/connect.go
 +++ b/pkg/scan/connect.go
-@@ -12,7 +12,7 @@ import (
+@@ -12,7 +12,7 @@
  func (s *Scanner) ConnectVerify(host string, ports []*port.Port) []*port.Port {
  	var verifiedPorts []*port.Port
  	for _, p := range ports {
@@ -1044,10 +1055,9 @@ index da7e931..bf4bf4f 100644
  		if err != nil {
  			continue
 diff --git a/pkg/scan/connect_test.go b/pkg/scan/connect_test.go
-index c44155f..bcf9551 100644
 --- a/pkg/scan/connect_test.go
 +++ b/pkg/scan/connect_test.go
-@@ -46,3 +46,13 @@ func TestConnectVerify(t *testing.T) {
+@@ -46,3 +46,13 @@
  	got := s.ConnectVerify("localhost", targetPorts)
  	assert.EqualValues(t, wanted, got)
  }
@@ -1062,10 +1072,9 @@ index c44155f..bcf9551 100644
 +	assert.Equal(t, "2001:db8::1", s.connectHost("2001:db8::1"))
 +}
 diff --git a/pkg/scan/scan.go b/pkg/scan/scan.go
-index 8d1f002..9e616df 100644
 --- a/pkg/scan/scan.go
 +++ b/pkg/scan/scan.go
-@@ -6,9 +6,11 @@ import (
+@@ -6,9 +6,11 @@
  	"fmt"
  	"io"
  	"net"
@@ -1077,17 +1086,21 @@ index 8d1f002..9e616df 100644
  	"time"
  
  	"github.com/projectdiscovery/cdncheck"
-@@ -96,11 +98,17 @@ type Scanner struct {
+@@ -113,7 +115,12 @@
+ 	ScanType             string
  	ListenHandler        *ListenHandler
  	OnReceive            result.ResultFn
- 	workersWg            sync.WaitGroup
-+	rawWritesWg          sync.WaitGroup
-+	rawAttempts          atomic.Uint64
-+	rawErrors            atomic.Uint64
-+	rawErrorMu           sync.Mutex
-+	firstRawError        error
- }
- 
+-	workersWg sync.WaitGroup
++	workersWg     sync.WaitGroup
++	rawWritesWg   sync.WaitGroup
++	rawAttempts   atomic.Uint64
++	rawErrors     atomic.Uint64
++	rawErrorMu    sync.Mutex
++	firstRawError error
+ 	// cancelWorkers cancels the context that drives the result workers so that
+ 	// Close can release them even when the scan context has not been cancelled
+ 	// yet (e.g. Close called out of order or on early teardown). Without it
+@@ -134,6 +141,7 @@
  // PkgSend is a TCP package
  type PkgSend struct {
  	ListenHandler *ListenHandler
@@ -1095,7 +1108,7 @@ index 8d1f002..9e616df 100644
  	ip            string
  	port          *port.Port
  	flag          PkgFlag
-@@ -241,11 +249,74 @@ func (s *Scanner) EnqueueEthernet(ip string, pkgtype PkgFlag) {
+@@ -283,11 +291,83 @@
  	}
  }
  
@@ -1136,11 +1149,20 @@ index 8d1f002..9e616df 100644
 +
 +// RecordRawWrite records a synchronous raw packet write.
 +func (s *Scanner) RecordRawWrite(err error) {
-+	s.rawAttempts.Add(1)
-+	if err == nil {
++	var failures uint64
++	if err != nil {
++		failures = 1
++	}
++	s.RecordRawWrites(1, failures, err)
++}
++
++// RecordRawWrites accounts for completed batches, including partial sends.
++func (s *Scanner) RecordRawWrites(attempts, failures uint64, err error) {
++	s.rawAttempts.Add(attempts)
++	if failures == 0 {
 +		return
 +	}
-+	s.rawErrors.Add(1)
++	s.rawErrors.Add(failures)
 +	s.rawErrorMu.Lock()
 +	if s.firstRawError == nil {
 +		s.firstRawError = err
@@ -1171,7 +1193,7 @@ index 8d1f002..9e616df 100644
  			ip:            ip,
  			port:          port,
  			flag:          pkgtype,
-@@ -253,11 +324,13 @@ func (s *Scanner) EnqueueTCP(ip string, pkgtype PkgFlag, ports ...*port.Port) {
+@@ -295,11 +375,13 @@
  	}
  }
  
@@ -1186,7 +1208,7 @@ index 8d1f002..9e616df 100644
  			ip:            ip,
  			port:          port,
  		}
-@@ -404,9 +477,17 @@ func GetInterfaceFromIP(ip net.IP) (*net.Interface, error) {
+@@ -448,9 +530,17 @@
  	return nil, fmt.Errorf("no interface found for ip %s", address)
  }
  
@@ -1206,10 +1228,9 @@ index 8d1f002..9e616df 100644
  		err  error
  		conn net.Conn
 diff --git a/pkg/scan/scan_common.go b/pkg/scan/scan_common.go
-index 9d19dc3..af069b5 100644
 --- a/pkg/scan/scan_common.go
 +++ b/pkg/scan/scan_common.go
-@@ -8,6 +8,7 @@ import (
+@@ -9,6 +9,7 @@
  	"github.com/projectdiscovery/naabu/v2/pkg/privileges"
  	"github.com/projectdiscovery/naabu/v2/pkg/routing"
  	"golang.org/x/net/icmp"
@@ -1217,32 +1238,34 @@ index 9d19dc3..af069b5 100644
  )
  
  const (
-@@ -33,11 +34,13 @@ var (
+@@ -46,6 +47,7 @@
  type ListenHandler struct {
- 	Busy                                   bool
- 	Phase                                  *Phase
-+	NetworkInterface                       *net.Interface
- 	SourceHW                               net.HardwareAddr
- 	SourceIp4                              net.IP
- 	SourceIP6                              net.IP
+ 	Busy      bool
+ 	Phase     *Phase
++	NetworkInterface *net.Interface
+ 	SourceHW  net.HardwareAddr
+ 	SourceIp4 net.IP
+ 	SourceIP6 net.IP
+@@ -56,6 +58,7 @@
+ 	SourceBound4, SourceBound6              bool
  	Port                                   int
  	TcpConn4, UdpConn4, TcpConn6, UdpConn6 *net.IPConn
 +	TcpPacketConn6, UdpPacketConn6         *ipv6.PacketConn
  	TcpChan, UdpChan, HostDiscoveryChan    chan *PkgResult
- }
- 
+ 	// done is closed by teardown so the shared reader can deliver replies with a
+ 	// blocking send (no result dropped while the handler is alive) yet abandon the
 diff --git a/pkg/scan/scan_raw.go b/pkg/scan/scan_raw.go
-index c8e0e20..1017ab9 100644
 --- a/pkg/scan/scan_raw.go
 +++ b/pkg/scan/scan_raw.go
-@@ -7,20 +7,19 @@ import (
+@@ -7,6 +7,7 @@
  	"errors"
  	"fmt"
  	"net"
 +	"net/netip"
+ 	"runtime"
  	"strings"
  	"sync"
- 	"time"
+@@ -14,14 +15,12 @@
  
  	"github.com/Mzack9999/gopacket"
  	"github.com/Mzack9999/gopacket/layers"
@@ -1257,16 +1280,18 @@ index c8e0e20..1017ab9 100644
  	"golang.org/x/net/icmp"
  	"golang.org/x/net/ipv4"
  	"golang.org/x/net/ipv6"
-@@ -30,14 +29,20 @@ var (
+@@ -31,14 +30,22 @@
  	handlers *Handlers
  )
  
 -// Handlers contains the list of pcap handlers
-+// packetHandle is the live-capture surface needed by the scanner.
++// packetHandle borrows zero-copy data until the next read on that handle.
 +type packetHandle interface {
 +	gopacket.PacketDataSource
++	gopacket.ZeroCopyPacketDataSource
 +	LinkType() layers.LinkType
 +	WritePacketData([]byte) error
++	IsTimeout(error) bool
 +	Close()
 +}
 +
@@ -1285,8 +1310,8 @@ index c8e0e20..1017ab9 100644
  }
  
  func init() {
-@@ -72,7 +77,7 @@ func init() {
- 	}
+@@ -91,7 +98,7 @@
+ 	ethernetPacketSend = make(chan *PkgSend, packetSendSize)
  
  	handlers = &Handlers{
 -		InterfaceHandle: make(map[string]*pcap.Handle),
@@ -1294,7 +1319,7 @@ index c8e0e20..1017ab9 100644
  	}
  	if err := SetupHandlers(); err != nil {
  		gologger.Error().Msgf("could not setup handlers: %s\n", err)
-@@ -107,8 +112,14 @@ func buildListenHandler() (*ListenHandler, error) {
+@@ -177,8 +184,14 @@
  	}
  
  	listenHandler.TcpConn6, _ = net.ListenIP("ip6:tcp", &net.IPAddr{IP: net.ParseIP("::")})
@@ -1307,37 +1332,35 @@ index c8e0e20..1017ab9 100644
 +		listenHandler.UdpPacketConn6 = ipv6.NewPacketConn(listenHandler.UdpConn6)
 +	}
  
- 	go listenHandler.ICMPReadWorker4()
- 	go listenHandler.ICMPReadWorker6()
-@@ -145,33 +156,40 @@ func EthernetWriteWorker(ch <-chan *PkgSend) {
- 	}
- }
- 
--// TCPWriteWorker that sends out TCP|UDP packets
-+// TransportWriteWorker sends queued TCP and UDP packets.
+ 	// icmp replies are handled by the process-global icmpReadWorker4/6; these
+ 	// per-handler workers only drain the raw transport sockets so their kernel
+@@ -223,29 +236,34 @@
+ // TCPWriteWorker that sends out TCP|UDP packets
  func TransportWriteWorker() {
  	for pkg := range transportPacketSend {
 -		SendAsyncPkg(pkg.ListenHandler, pkg.ip, pkg.port, pkg.flag)
-+		err := SendAsyncPkg(pkg.ListenHandler, pkg.ip, pkg.port, pkg.flag)
-+		if pkg.Scanner != nil {
-+			pkg.Scanner.finishRawWrite(err)
-+		}
- 	}
- }
- 
+-	}
+-}
+-
 -// SendAsyncPkg sends a single packet to a port
 -func SendAsyncPkg(listenHandler *ListenHandler, ip string, p *port.Port, pkgFlag PkgFlag) {
 -	isIP4 := iputil.IsIPv4(ip)
 -	isIP6 := iputil.IsIPv6(ip)
+-	isTCP := p.Protocol == protocol.TCP
+-	isUDP := p.Protocol == protocol.UDP
++		err := SendAsyncPkg(pkg.ListenHandler, pkg.ip, pkg.port, pkg.flag)
++		if pkg.Scanner != nil {
++			pkg.Scanner.finishRawWrite(err)
++		}
++	}
++}
++
 +// SendAsyncPkg sends a single packet to a port.
 +func SendAsyncPkg(listenHandler *ListenHandler, ip string, p *port.Port, pkgFlag PkgFlag) error {
 +	addr, err := netip.ParseAddr(ip)
 +	if err != nil {
 +		return fmt.Errorf("invalid destination IP %q: %w", ip, err)
 +	}
-+
- 	isTCP := p.Protocol == protocol.TCP
- 	isUDP := p.Protocol == protocol.UDP
  	switch {
 -	case isIP4 && isTCP:
 -		sendAsyncTCP4(listenHandler, ip, p, pkgFlag)
@@ -1347,132 +1370,115 @@ index c8e0e20..1017ab9 100644
 -		sendAsyncTCP6(listenHandler, ip, p, pkgFlag)
 -	case isIP6 && isUDP:
 -		sendAsyncUDP6(listenHandler, ip, p, pkgFlag)
-+	case addr.Is4() && isTCP:
-+		return sendAsyncTCP4(listenHandler, addr.String(), p, pkgFlag)
-+	case addr.Is4() && isUDP:
-+		return sendAsyncUDP4(listenHandler, addr.String(), p, pkgFlag)
-+	case addr.Is6() && isTCP:
+-	}
+-}
+-
+-func sendAsyncTCP4(listenHandler *ListenHandler, ip string, p *port.Port, pkgFlag PkgFlag) {
++	case addr.Is4() && p.Protocol == protocol.TCP:
++		return sendAsyncTCP4(listenHandler, ip, p, pkgFlag)
++	case addr.Is4() && p.Protocol == protocol.UDP:
++		return sendAsyncUDP4(listenHandler, ip, p, pkgFlag)
++	case addr.Is6() && p.Protocol == protocol.TCP:
 +		return sendAsyncTCP6(listenHandler, addr, p, pkgFlag)
-+	case addr.Is6() && isUDP:
++	case addr.Is6() && p.Protocol == protocol.UDP:
 +		return sendAsyncUDP6(listenHandler, addr, p, pkgFlag)
 +	default:
 +		return fmt.Errorf("unsupported protocol %s for %s", p.Protocol, ip)
- 	}
- }
- 
--func sendAsyncTCP4(listenHandler *ListenHandler, ip string, p *port.Port, pkgFlag PkgFlag) {
--	// Construct all the network layers we need.
++	}
++}
++
 +func sendAsyncTCP4(listenHandler *ListenHandler, ip string, p *port.Port, pkgFlag PkgFlag) error {
+ 	// Construct all the network layers we need.
  	var eth layers.Ethernet
  	ip4 := layers.IPv4{
- 		DstIP:    net.ParseIP(ip),
-@@ -180,45 +198,35 @@ func sendAsyncTCP4(listenHandler *ListenHandler, ip string, p *port.Port, pkgFla
- 		Protocol: layers.IPProtocolTCP,
- 	}
- 
--	hasSourceIp := listenHandler.SourceIp4 != nil
-+	hasSourceIP := listenHandler.SourceIp4 != nil
- 	var iface *net.Interface
--	if hasSourceIp && listenHandler.SourceHW != nil {
--		// NOTE(dwisiswant0): Only attempt to use ethernet framing if we have
--		// both source IP and HW.
-+	if hasSourceIP && listenHandler.SourceHW != nil {
+@@ -267,13 +285,11 @@
+ 		// both source IP and HW.
  		itf, gateway, _, err := PkgRouter.RouteWithSrc(listenHandler.SourceHW, listenHandler.SourceIp4, ip4.DstIP)
  		if err != nil {
 -			gologger.Debug().Msgf("could not find route to host %s:%d: %s\n", ip, p.Port, err)
 -			return
 +			return fmt.Errorf("route to %s:%d: %w", ip, p.Port, err)
  		}
--		gatewayMac, err := routing.GetGatewayMac(gateway.String())
-+		gatewayMAC, err := routing.GetGatewayMac(gateway.String())
+ 		dstMAC, err := linkDestinationMAC(gateway, ip4.DstIP)
  		if err != nil {
 -			gologger.Debug().Msgf("could not find gateway MAC %s:%d: %s\n", ip, p.Port, err)
 -			return
 +			return fmt.Errorf("gateway MAC for %s:%d: %w", ip, p.Port, err)
  		}
--
+ 
+ 		eth = layers.Ethernet{
+@@ -295,24 +311,20 @@
+ 			itf, gateway, sourceIP, err = PkgRouter.Route(ip4.DstIP)
+ 		}
+ 		if err != nil {
+-			gologger.Debug().Msgf("could not find route to host %s:%d: %s\n", ip, p.Port, err)
+-			return
++			return fmt.Errorf("route to %s:%d: %w", ip, p.Port, err)
+ 		} else if sourceIP == nil || itf == nil {
+-			gologger.Debug().Msgf("could not find correct source ipv4 for %s:%d\n", ip, p.Port)
+-			return
++			return fmt.Errorf("route to %s:%d has no IPv4 source or interface", ip, p.Port)
+ 		}
+ 		srcHW := listenHandler.SourceHW
+ 		if len(srcHW) == 0 {
+ 			srcHW = itf.HardwareAddr
+ 		}
+ 		if len(srcHW) == 0 {
+-			gologger.Debug().Msgf("could not find source MAC for %s:%d\n", ip, p.Port)
+-			return
++			return fmt.Errorf("no source MAC for %s:%d", ip, p.Port)
+ 		}
+ 		dstMAC, err := linkDestinationMAC(gateway, ip4.DstIP)
+ 		if err != nil {
+-			gologger.Debug().Msgf("could not find gateway MAC %s:%d: %s\n", ip, p.Port, err)
+-			return
++			return fmt.Errorf("gateway MAC for %s:%d: %w", ip, p.Port, err)
+ 		}
  		eth = layers.Ethernet{
  			EthernetType: layers.EthernetTypeIPv4,
- 			SrcMAC:       listenHandler.SourceHW,
--			DstMAC:       gatewayMac,
-+			DstMAC:       gatewayMAC,
- 		}
- 		ip4.SrcIP = listenHandler.SourceIp4
- 		iface = itf
-+	} else if hasSourceIP {
-+		ip4.SrcIP = listenHandler.SourceIp4
- 	} else {
--		if hasSourceIp {
--			// NOTE(dwisiswant0): We have source IP but no HW, so use it
--			// regular raw socket
--			ip4.SrcIP = listenHandler.SourceIp4
--		} else {
--			_, _, sourceIP, err := PkgRouter.Route(ip4.DstIP)
--			if err != nil {
+@@ -329,11 +341,9 @@
+ 		} else {
+ 			_, _, sourceIP, err := PkgRouter.Route(ip4.DstIP)
+ 			if err != nil {
 -				gologger.Debug().Msgf("could not find route to host %s:%d: %s\n", ip, p.Port, err)
 -				return
--			} else if sourceIP == nil {
++				return fmt.Errorf("route to %s:%d: %w", ip, p.Port, err)
+ 			} else if sourceIP == nil {
 -				gologger.Debug().Msgf("could not find correct source ipv4 for %s:%d\n", ip, p.Port)
 -				return
--			}
--			ip4.SrcIP = sourceIP
-+		_, _, sourceIP, err := PkgRouter.Route(ip4.DstIP)
-+		if err != nil {
-+			return fmt.Errorf("route to %s:%d: %w", ip, p.Port, err)
-+		}
-+		if sourceIP == nil {
-+			return fmt.Errorf("route to %s:%d has no IPv4 source address", ip, p.Port)
++				return fmt.Errorf("route to %s:%d has no IPv4 source or interface", ip, p.Port)
+ 			}
+ 			ip4.SrcIP = sourceIP
  		}
-+		ip4.SrcIP = sourceIP
- 	}
+@@ -368,23 +378,20 @@
  
- 	tcpOption := layers.TCPOption{
-@@ -226,7 +234,6 @@ func sendAsyncTCP4(listenHandler *ListenHandler, ip string, p *port.Port, pkgFla
- 		OptionLength: 4,
- 		OptionData:   []byte{0x05, 0xB4},
- 	}
--
- 	tcp := layers.TCP{
- 		SrcPort: layers.TCPPort(listenHandler.Port),
- 		DstPort: layers.TCPPort(p.Port),
-@@ -234,37 +241,26 @@ func sendAsyncTCP4(listenHandler *ListenHandler, ip string, p *port.Port, pkgFla
- 		Seq:     tcpsequencer.Next(),
- 		Options: []layers.TCPOption{tcpOption},
- 	}
--
- 	switch pkgFlag {
- 	case Syn:
- 		tcp.SYN = true
- 	case Ack:
- 		tcp.ACK = true
- 	}
--
--	err := tcp.SetNetworkLayerForChecksum(&ip4)
--	if err != nil {
+ 	err := tcp.SetNetworkLayerForChecksum(&ip4)
+ 	if err != nil {
 -		gologger.Debug().Msgf("Can not set network layer for %s:%d port: %s\n", ip, p.Port, err)
-+	if err := tcp.SetNetworkLayerForChecksum(&ip4); err != nil {
 +		return fmt.Errorf("set TCP checksum network layer for %s:%d: %w", ip, p.Port, err)
  	}
  
--	if hasSourceIp && listenHandler.SourceHW != nil && iface != nil {
--		err = sendWithHandler(ip, iface, &eth, &ip4, &tcp)
--	} else {
--		if listenHandler.TcpConn4 == nil {
+ 	if usePcap && iface != nil && len(eth.DstMAC) > 0 {
+ 		err = sendWithHandler(ip, iface, &eth, &ip4, &tcp)
+ 	} else {
+ 		if listenHandler.TcpConn4 == nil {
 -			gologger.Debug().Msgf("TcpConn4 is nil, cannot send packet to %s:%d\n", ip, p.Port)
 -			return
--		}
--
--		err = sendWithConn(ip, listenHandler.TcpConn4, &tcp)
-+	if hasSourceIP && listenHandler.SourceHW != nil && iface != nil {
-+		return sendWithHandler(ip, iface, &eth, &ip4, &tcp)
++			return errors.New("raw IPv4 TCP socket is unavailable")
+ 		}
+ 
+ 		err = sendWithConn(ip, listenHandler.TcpConn4, &tcp)
  	}
--
+ 
 -	if err != nil {
 -		gologger.Debug().Msgf("Can not send packet to %s:%d port: %s\n", ip, p.Port, err)
-+	if listenHandler.TcpConn4 == nil {
-+		return errors.New("raw IPv4 TCP socket is unavailable")
- 	}
-+	return sendWithConn(ip, listenHandler.TcpConn4, &tcp)
+-	}
++	return err
+ }
+ 
+ // linkDestinationMAC resolves the next-hop Ethernet address: the gateway when
+@@ -400,68 +407,50 @@
+ 	return routing.GetGatewayMac(target.String())
  }
  
 -func sendAsyncUDP4(listenHandler *ListenHandler, ip string, p *port.Port, pkgFlag PkgFlag) {
@@ -1481,42 +1487,38 @@ index c8e0e20..1017ab9 100644
  	ip4 := layers.IPv4{
  		DstIP:    net.ParseIP(ip),
  		Version:  4,
-@@ -273,13 +269,11 @@ func sendAsyncUDP4(listenHandler *ListenHandler, ip string, p *port.Port, pkgFla
+ 		TTL:      255,
+ 		Protocol: layers.IPProtocolUDP,
  	}
- 	_, _, sourceIP, err := PkgRouter.Route(ip4.DstIP)
- 	if err != nil {
+-	_, _, sourceIP, err := PkgRouter.Route(ip4.DstIP)
+-	if err != nil {
 -		gologger.Debug().Msgf("could not find route to host %s:%d: %s\n", ip, p.Port, err)
 -		return
 -	} else if sourceIP == nil {
 -		gologger.Debug().Msgf("could not find correct source ipv4 for %s:%d\n", ip, p.Port)
 -		return
-+		return fmt.Errorf("route to %s:%d: %w", ip, p.Port, err)
-+	}
-+	if sourceIP == nil {
-+		return fmt.Errorf("route to %s:%d has no IPv4 source address", ip, p.Port)
- 	}
+-	}
 -
  	if listenHandler.SourceIp4 != nil {
  		ip4.SrcIP = listenHandler.SourceIp4
  	} else {
-@@ -290,53 +284,34 @@ func sendAsyncUDP4(listenHandler *ListenHandler, ip string, p *port.Port, pkgFla
++		_, _, sourceIP, err := PkgRouter.Route(ip4.DstIP)
++		if err != nil {
++			return fmt.Errorf("route to %s:%d: %w", ip, p.Port, err)
++		}
++		if sourceIP == nil {
++			return fmt.Errorf("route to %s:%d has no IPv4 source address", ip, p.Port)
++		}
+ 		ip4.SrcIP = sourceIP
+ 	}
+-
+ 	udp := layers.UDP{
  		SrcPort: layers.UDPPort(listenHandler.Port),
  		DstPort: layers.UDPPort(p.Port),
  	}
-+	if err := udp.SetNetworkLayerForChecksum(&ip4); err != nil {
-+		return fmt.Errorf("set UDP checksum network layer for %s:%d: %w", ip, p.Port, err)
-+	}
-+	if listenHandler.UdpConn4 == nil {
-+		return errors.New("raw IPv4 UDP socket is unavailable")
-+	}
-+	return sendWithConn(ip, listenHandler.UdpConn4, &udp)
-+}
- 
+-
 -	err = udp.SetNetworkLayerForChecksum(&ip4)
-+func sendAsyncTCP6(listenHandler *ListenHandler, addr netip.Addr, p *port.Port, pkgFlag PkgFlag) error {
-+	destination := net.IP(addr.WithZone("").AsSlice())
-+	iface, sourceIP, err := routeIPv6(listenHandler, destination, addr.Zone())
- 	if err != nil {
+-	if err != nil {
 -		gologger.Debug().Msgf("Can not set network layer for %s:%d port: %s\n", ip, p.Port, err)
 -	} else {
 -		if listenHandler.UdpConn4 == nil {
@@ -1524,16 +1526,30 @@ index c8e0e20..1017ab9 100644
 -			return
 -		}
 -
--		err = sendWithConn(ip, listenHandler.UdpConn4, &udp)
+-		err = sendWithConn(ip, listenHandler.UdpConn4, listenHandler.udpLayersWithProbe(&udp, p.Port)...)
 -		if err != nil {
 -			gologger.Debug().Msgf("Can not send packet to %s:%d port: %s\n", ip, p.Port, err)
 -		}
-+		return fmt.Errorf("route to %s:%d: %w", addr, p.Port, err)
- 	}
+-	}
 -}
- 
+-
 -func sendAsyncTCP6(listenHandler *ListenHandler, ip string, p *port.Port, pkgFlag PkgFlag) {
 -	// Construct all the network layers we need.
++	if err := udp.SetNetworkLayerForChecksum(&ip4); err != nil {
++		return fmt.Errorf("set UDP checksum network layer for %s:%d: %w", ip, p.Port, err)
++	}
++	if listenHandler.UdpConn4 == nil {
++		return errors.New("raw IPv4 UDP socket is unavailable")
++	}
++	return sendWithConn(ip, listenHandler.UdpConn4, listenHandler.udpLayersWithProbe(&udp, p.Port)...)
++}
++
++func sendAsyncTCP6(listenHandler *ListenHandler, addr netip.Addr, p *port.Port, pkgFlag PkgFlag) error {
++	destination := net.IP(addr.WithZone("").AsSlice())
++	iface, sourceIP, err := routeIPv6(listenHandler, destination, addr.Zone())
++	if err != nil {
++		return fmt.Errorf("route to %s:%d: %w", addr, p.Port, err)
++	}
  	ip6 := layers.IPv6{
 -		DstIP:      net.ParseIP(ip),
 +		DstIP:      destination,
@@ -1541,57 +1557,24 @@ index c8e0e20..1017ab9 100644
  		Version:    6,
  		HopLimit:   255,
  		NextHeader: layers.IPProtocolTCP,
- 	}
--
--	_, _, sourceIP, err := PkgRouter.Route(ip6.DstIP)
--	if err != nil {
--		gologger.Debug().Msgf("could not find route to host %s:%d: %s\n", ip, p.Port, err)
--		return
--	} else if sourceIP == nil {
--		gologger.Debug().Msgf("could not find correct source ipv6 for %s:%d\n", ip, p.Port)
--		return
 -	}
 -
 -	if listenHandler.SourceIP6 != nil {
 -		ip6.SrcIP = listenHandler.SourceIP6
 -	} else {
+-		sourceIP := sourceIP6For(ip6.DstIP)
+-		if sourceIP == nil {
+-			gologger.Debug().Msgf("could not find correct source ipv6 for %s:%d\n", ip, p.Port)
+-			return
+-		}
 -		ip6.SrcIP = sourceIP
--	}
--
- 	tcpOption := layers.TCPOption{
- 		OptionType:   layers.TCPOptionKindMSS,
- 		OptionLength: 4,
- 		OptionData:   []byte{0x05, 0xB4},
  	}
--
- 	tcp := layers.TCP{
- 		SrcPort: layers.TCPPort(listenHandler.Port),
- 		DstPort: layers.TCPPort(p.Port),
-@@ -344,73 +319,99 @@ func sendAsyncTCP6(listenHandler *ListenHandler, ip string, p *port.Port, pkgFla
- 		Seq:     tcpsequencer.Next(),
- 		Options: []layers.TCPOption{tcpOption},
- 	}
--
- 	switch pkgFlag {
- 	case Syn:
- 		tcp.SYN = true
- 	case Ack:
- 		tcp.ACK = true
- 	}
-+	if err := tcp.SetNetworkLayerForChecksum(&ip6); err != nil {
-+		return fmt.Errorf("set TCP checksum network layer for %s:%d: %w", addr, p.Port, err)
-+	}
-+	if listenHandler.TcpPacketConn6 == nil {
-+		return errors.New("raw IPv6 TCP socket is unavailable")
-+	}
-+	return sendWithConn6(addr.String(), listenHandler.TcpPacketConn6, sourceIP, iface, addr.Zone(), &tcp)
-+}
  
--	err = tcp.SetNetworkLayerForChecksum(&ip6)
-+func sendAsyncUDP6(listenHandler *ListenHandler, addr netip.Addr, p *port.Port, _ PkgFlag) error {
-+	destination := net.IP(addr.WithZone("").AsSlice())
-+	iface, sourceIP, err := routeIPv6(listenHandler, destination, addr.Zone())
- 	if err != nil {
+ 	tcpOption := layers.TCPOption{
+@@ -496,56 +485,96 @@
+ 	}
+ 
+ 	if err := tcp.SetNetworkLayerForChecksum(&ip6); err != nil {
 -		gologger.Debug().Msgf("Can not set network layer for %s:%d port: %s\n", ip, p.Port, err)
 -	} else {
 -		if listenHandler.TcpConn6 == nil {
@@ -1599,16 +1582,28 @@ index c8e0e20..1017ab9 100644
 -			return
 -		}
 -
--		err = sendWithConn(ip, listenHandler.TcpConn6, &tcp)
--		if err != nil {
+-		if err := sendWithConnAddr(&net.IPAddr{IP: ip6.DstIP}, listenHandler.TcpConn6, &tcp); err != nil {
 -			gologger.Debug().Msgf("Can not send packet to %s:%d port: %s\n", ip, p.Port, err)
 -		}
-+		return fmt.Errorf("route to %s:%d: %w", addr, p.Port, err)
- 	}
+-	}
 -}
- 
+-
 -func sendAsyncUDP6(listenHandler *ListenHandler, ip string, p *port.Port, pkgFlag PkgFlag) {
 -	// Construct all the network layers we need.
++		return fmt.Errorf("set TCP checksum network layer for %s:%d: %w", addr, p.Port, err)
++	}
++	if listenHandler.TcpPacketConn6 == nil {
++		return errors.New("raw IPv6 TCP socket is unavailable")
++	}
++	return sendWithConn6(&net.IPAddr{IP: destination, Zone: addr.Zone()}, listenHandler.TcpPacketConn6, sourceIP, iface, &tcp)
++}
++
++func sendAsyncUDP6(listenHandler *ListenHandler, addr netip.Addr, p *port.Port, _ PkgFlag) error {
++	destination := net.IP(addr.WithZone("").AsSlice())
++	iface, sourceIP, err := routeIPv6(listenHandler, destination, addr.Zone())
++	if err != nil {
++		return fmt.Errorf("route to %s:%d: %w", addr, p.Port, err)
++	}
  	ip6 := layers.IPv6{
 -		DstIP:      net.ParseIP(ip),
 +		DstIP:      destination,
@@ -1617,123 +1612,119 @@ index c8e0e20..1017ab9 100644
  		HopLimit:   255,
  		NextHeader: layers.IPProtocolUDP,
  	}
-+	udp := layers.UDP{
-+		SrcPort: layers.UDPPort(listenHandler.Port),
-+		DstPort: layers.UDPPort(p.Port),
-+	}
-+	if err := udp.SetNetworkLayerForChecksum(&ip6); err != nil {
-+		return fmt.Errorf("set UDP checksum network layer for %s:%d: %w", addr, p.Port, err)
-+	}
-+	if listenHandler.UdpPacketConn6 == nil {
-+		return errors.New("raw IPv6 UDP socket is unavailable")
-+	}
-+	return sendWithConn6(addr.String(), listenHandler.UdpPacketConn6, sourceIP, iface, addr.Zone(), &udp)
-+}
- 
--	_, _, sourceIP, err := PkgRouter.Route(ip6.DstIP)
-+func routeIPv6(listenHandler *ListenHandler, destination net.IP, zone string) (*net.Interface, net.IP, error) {
-+	if PkgRouter == nil {
-+		return nil, nil, errors.New("packet router is unavailable")
-+	}
-+	routeInterface, _, sourceIP, err := PkgRouter.Route(destination)
- 	if err != nil {
--		gologger.Debug().Msgf("could not find route to host %s:%d: %s\n", ip, p.Port, err)
--		return
--	} else if sourceIP == nil {
--		gologger.Debug().Msgf("could not find correct source ipv6 for %s:%d\n", ip, p.Port)
--		return
-+		return nil, nil, err
- 	}
- 
+-
 -	if listenHandler.SourceIP6 != nil {
 -		ip6.SrcIP = listenHandler.SourceIP6
 -	} else {
+-		sourceIP := sourceIP6For(ip6.DstIP)
+-		if sourceIP == nil {
+-			gologger.Debug().Msgf("could not find correct source ipv6 for %s:%d\n", ip, p.Port)
+-			return
+-		}
 -		ip6.SrcIP = sourceIP
-+	iface := routeInterface
-+	if zone != "" {
-+		iface, err = net.InterfaceByName(zone)
-+		if err != nil {
-+			return nil, nil, fmt.Errorf("interface %q: %w", zone, err)
-+		}
-+	} else if listenHandler.NetworkInterface != nil {
-+		iface = listenHandler.NetworkInterface
-+	}
-+	if iface == nil {
-+		return nil, nil, errors.New("route has no network interface")
+-	}
+-
+ 	udp := layers.UDP{
+ 		SrcPort: layers.UDPPort(listenHandler.Port),
+ 		DstPort: layers.UDPPort(p.Port),
  	}
- 
--	udp := layers.UDP{
--		SrcPort: layers.UDPPort(listenHandler.Port),
--		DstPort: layers.UDPPort(p.Port),
-+	if listenHandler.SourceIP6 != nil {
-+		sourceIP = listenHandler.SourceIP6
-+	} else if zone != "" || listenHandler.NetworkInterface != nil {
-+		sourceIP, err = sourceIPv6ForInterface(iface, destination.IsLinkLocalUnicast())
-+		if err != nil {
-+			return nil, nil, err
-+		}
- 	}
-+	if sourceIP == nil {
-+		return nil, nil, errors.New("route has no IPv6 source address")
-+	}
-+	return iface, sourceIP, nil
-+}
- 
--	err = udp.SetNetworkLayerForChecksum(&ip6)
-+func sourceIPv6ForInterface(iface *net.Interface, linkLocal bool) (net.IP, error) {
-+	addresses, err := iface.Addrs()
- 	if err != nil {
+-
+ 	if err := udp.SetNetworkLayerForChecksum(&ip6); err != nil {
 -		gologger.Debug().Msgf("Can not set network layer for %s:%d port: %s\n", ip, p.Port, err)
 -	} else {
 -		if listenHandler.UdpConn6 == nil {
 -			gologger.Debug().Msgf("UdpConn6 is nil, cannot send packet to %s:%d\n", ip, p.Port)
 -			return
+-		}
+-
+-		if err := sendWithConnAddr(&net.IPAddr{IP: ip6.DstIP}, listenHandler.UdpConn6, listenHandler.udpLayersWithProbe(&udp, p.Port)...); err != nil {
+-			gologger.Debug().Msgf("Can not send packet to %s:%d port: %s\n", ip, p.Port, err)
+-		}
+-	}
++		return fmt.Errorf("set UDP checksum network layer for %s:%d: %w", addr, p.Port, err)
++	}
++	if listenHandler.UdpPacketConn6 == nil {
++		return errors.New("raw IPv6 UDP socket is unavailable")
++	}
++	return sendWithConn6(&net.IPAddr{IP: destination, Zone: addr.Zone()}, listenHandler.UdpPacketConn6, sourceIP, iface, listenHandler.udpLayersWithProbe(&udp, p.Port)...)
++}
++
++func routeIPv6(listenHandler *ListenHandler, destination net.IP, zone string) (*net.Interface, net.IP, error) {
++	iface := listenHandler.NetworkInterface
++	if zone != "" {
++		var err error
++		iface, err = net.InterfaceByName(zone)
++		if err != nil {
++			return nil, nil, fmt.Errorf("interface %q: %w", zone, err)
++		}
++	}
++	if iface == nil && destination.IsLinkLocalUnicast() {
++		if PkgRouter == nil {
++			return nil, nil, errors.New("packet router is unavailable")
++		}
++		var err error
++		iface, _, _, err = PkgRouter.Route(destination)
++		if err != nil {
++			return nil, nil, err
++		}
++		if iface == nil {
++			return nil, nil, errors.New("link-local route has no network interface")
++		}
++	}
++
++	sourceIP := listenHandler.SourceIP6
++	if sourceIP == nil {
++		if iface != nil {
++			var err error
++			sourceIP, err = sourceIPv6ForInterface(iface, destination.IsLinkLocalUnicast())
++			if err != nil {
++				return nil, nil, err
++			}
++		} else {
++			sourceIP = sourceIP6For(destination)
++		}
++	}
++	if sourceIP == nil {
++		return nil, nil, errors.New("route has no IPv6 source address")
++	}
++	return iface, sourceIP, nil
++}
++
++func sourceIPv6ForInterface(iface *net.Interface, linkLocal bool) (net.IP, error) {
++	addresses, err := iface.Addrs()
++	if err != nil {
 +		return nil, err
 +	}
 +	for _, address := range addresses {
 +		ipNet, ok := address.(*net.IPNet)
 +		if !ok || ipNet.IP.To4() != nil {
 +			continue
- 		}
--
--		err = sendWithConn(ip, listenHandler.UdpConn6, &udp)
--		if err != nil {
--			gologger.Debug().Msgf("Can not send packet to %s:%d port: %s\n", ip, p.Port, err)
++		}
 +		if ipNet.IP.IsLinkLocalUnicast() == linkLocal {
 +			return ipNet.IP, nil
- 		}
- 	}
++		}
++	}
 +	return nil, fmt.Errorf("interface %s has no suitable IPv6 source address", iface.Name)
  }
  
- // ICMPReadWorker4 reads packets from the network layer
-@@ -501,6 +502,42 @@ func sendWithConn(destIP string, conn net.PacketConn, l ...gopacket.Serializable
- 
+ // dispatchHostDiscovery delivers a host-discovery result (icmp/arp reply) to
+@@ -672,6 +701,33 @@
  	return nil
  }
-+func sendWithConn6(destIP string, conn *ipv6.PacketConn, sourceIP net.IP, iface *net.Interface, zone string, l ...gopacket.SerializableLayer) error {
+ 
++func sendWithConn6(destination *net.IPAddr, conn *ipv6.PacketConn, sourceIP net.IP, iface *net.Interface, l ...gopacket.SerializableLayer) error {
 +	buf := gopacket.NewSerializeBuffer()
 +	if err := gopacket.SerializeLayers(buf, defaultSerializeOptions, l...); err != nil {
 +		return err
 +	}
-+	data := buf.Bytes()
-+	addr, err := netip.ParseAddr(destIP)
-+	if err != nil {
-+		return fmt.Errorf("invalid IPv6 destination %q: %w", destIP, err)
++	control := &ipv6.ControlMessage{Src: sourceIP}
++	if iface != nil {
++		control.IfIndex = iface.Index
++		if destination.Zone == "" && destination.IP.IsLinkLocalUnicast() {
++			destination.Zone = iface.Name
++		}
 +	}
-+	if zone == "" && addr.IsLinkLocalUnicast() {
-+		zone = iface.Name
-+	}
-+	destination := &net.IPAddr{
-+		IP:   net.IP(addr.WithZone("").AsSlice()),
-+		Zone: zone,
-+	}
-+	control := &ipv6.ControlMessage{
-+		Src:     sourceIP,
-+		IfIndex: iface.Index,
-+	}
-+
-+	return writeWithConn6(conn, data, control, destination)
++	return writeWithConn6(conn, buf.Bytes(), control, destination)
 +}
 +
 +func writeWithConn6(conn *ipv6.PacketConn, data []byte, control *ipv6.ControlMessage, destination net.Addr) error {
@@ -1747,16 +1738,28 @@ index c8e0e20..1017ab9 100644
 +	}
 +	return fmt.Errorf("could not send packet to %s: %w", destination, err)
 +}
++
+ // src6CacheCap bounds the IPv6 source-route cache so a scan over many distinct
+ // destinations cannot grow it without limit.
+ const src6CacheCap = 1 << 16
+@@ -806,6 +862,8 @@
+ 	}
+ 	l.TcpConn6 = tcp
+ 	l.UdpConn6 = udp
++	l.TcpPacketConn6 = ipv6.NewPacketConn(tcp)
++	l.UdpPacketConn6 = ipv6.NewPacketConn(udp)
+ 	go l.TcpReadWorker6()
+ 	go l.UdpReadWorker6()
+ 	return true
+@@ -873,51 +931,9 @@
+ 	if err != nil {
+ 		return err
+ 	}
+-	pcapName := pcapDeviceForInterface(iface)
  
- func sendWithHandler(destIP string, iface *net.Interface, l ...gopacket.SerializableLayer) error {
- 	var err error
-@@ -569,49 +606,15 @@ func (l *ListenHandler) UdpReadWorker6() {
- // SetupHandlerUnix on unix OS
- func SetupHandlerUnix(interfaceName, bpfFilter string, protocols ...protocol.Protocol) error {
  	for _, proto := range protocols {
--		inactive, err := pcap.NewInactiveHandle(interfaceName)
-+		handle, err := openCaptureHandle(interfaceName, bpfFilter, proto)
- 		if err != nil {
+-		inactive, err := pcap.NewInactiveHandle(pcapName)
+-		if err != nil {
 -			return err
 -		}
 -
@@ -1767,14 +1770,20 @@ index c8e0e20..1017ab9 100644
 -
 -		readTimeout := time.Duration(readtimeout) * time.Millisecond
 -		if err = inactive.SetTimeout(readTimeout); err != nil {
- 			CleanupHandlersUnix()
- 			return err
- 		}
+-			CleanupHandlersUnix()
+-			return err
+-		}
 -		err = inactive.SetImmediateMode(true)
 -		if err != nil {
 -			return err
 -		}
- 
+-		// Best-effort: a large capture buffer keeps reply bursts from large port
+-		// ranges from overflowing the kernel ring and silently dropping
+-		// SYN-ACKs. Failure is non-fatal; the handle keeps the OS default.
+-		if err = inactive.SetBufferSize(pcapBufferSize); err != nil {
+-			gologger.Debug().Msgf("could not set pcap buffer size on %s: %s", interfaceName, err)
+-		}
+-
 -		switch proto {
 -		case protocol.TCP, protocol.UDP:
 -			handlers.TransportInactive = append(handlers.TransportInactive, inactive)
@@ -1790,27 +1799,12 @@ index c8e0e20..1017ab9 100644
 -			return err
 -		}
 -
--		// Strict BPF filter
--		// + Destination port equals to sender socket source port
 -		err = handle.SetBPFFilter(bpfFilter)
--		if err != nil {
--			return err
--		}
- 		iface, err := net.InterfaceByName(interfaceName)
++		handle, err := openCaptureHandle(interfaceName, bpfFilter, proto)
  		if err != nil {
-+			handle.Close()
  			return err
  		}
- 		switch proto {
-@@ -625,6 +628,7 @@ func SetupHandlerUnix(interfaceName, bpfFilter string, protocols ...protocol.Pro
- 		case protocol.ARP:
- 			handlers.EthernetActive = append(handlers.EthernetActive, handle)
- 		default:
-+			handle.Close()
- 			panic("protocol not supported")
- 		}
- 	}
-@@ -662,7 +666,7 @@ func TransportReadWorker() {
+@@ -1005,7 +1021,7 @@
  	// always get [Ethernet] layer only.
  	// with the help of data received from packetSource.Packets() we can
  	// extract the high level layers like [IPv4, IPv6, TCP, UDP]
@@ -1819,7 +1813,7 @@ index c8e0e20..1017ab9 100644
  		defer wg.Done()
  		packetSource := gopacket.NewPacketSource(handler, handler.LinkType())
  		for packet := range packetSource.Packets() {
-@@ -715,7 +719,7 @@ func TransportReadWorker() {
+@@ -1058,7 +1074,7 @@
  	// Transport Readers (TCP|UDP)
  	for _, handler := range handlers.TransportActive {
  		wgread.Add(1)
@@ -1828,7 +1822,16 @@ index c8e0e20..1017ab9 100644
  			defer wgread.Done()
  
  			var (
-@@ -782,7 +786,7 @@ func TransportReadWorker() {
+@@ -1099,7 +1115,7 @@
+ 			for {
+ 				data, _, err := handler.ZeroCopyReadPacketData()
+ 				if err != nil {
+-					if errors.Is(err, pcap.NextErrorTimeoutExpired) {
++					if handler.IsTimeout(err) {
+ 						continue
+ 					}
+ 					// EOF or a closed handle ends the reader; any other error is
+@@ -1149,7 +1165,7 @@
  	// Ethernet Readers
  	for _, handler := range handlers.EthernetActive {
  		wgread.Add(1)
@@ -1837,15 +1840,7 @@ index c8e0e20..1017ab9 100644
  			defer wgread.Done()
  
  			var (
-@@ -836,17 +840,13 @@ func TransportReadWorker() {
- 	wgread.Wait()
- }
- 
--// CleanupHandlers for all interfaces
-+// CleanupHandlersUnix closes every active packet capture handle.
- func CleanupHandlersUnix() {
- 	allActive := append(handlers.TransportActive, handlers.EthernetActive...)
- 	allActive = append(allActive, handlers.LoopbackHandlers...)
+@@ -1209,10 +1225,6 @@
  	for _, handler := range allActive {
  		handler.Close()
  	}
@@ -1856,9 +1851,8 @@ index c8e0e20..1017ab9 100644
  }
  
  func SetupHandlers() error {
-diff --git b/pkg/scan/scan_raw_ipv6_linux_test.go b/pkg/scan/scan_raw_ipv6_linux_test.go
+diff --git a/pkg/scan/scan_raw_ipv6_linux_test.go b/pkg/scan/scan_raw_ipv6_linux_test.go
 new file mode 100644
-index 0000000..5fcbe20
 --- /dev/null
 +++ b/pkg/scan/scan_raw_ipv6_linux_test.go
 @@ -0,0 +1,45 @@
@@ -1907,3 +1901,23 @@ index 0000000..5fcbe20
 +	require.Equal(t, payload, buffer[:n])
 +	require.True(t, source.IP.Equal(net.ParseIP("::1")))
 +}
+diff --git a/pkg/runner/multitx.go b/pkg/runner/multitx.go
+--- a/pkg/runner/multitx.go
++++ b/pkg/runner/multitx.go
+@@ -41,6 +41,7 @@
+ 			gologger.Debug().Msgf("tx worker %d sender unavailable (%s), reducing fan-out to %d\n", i, err, i)
+ 			break
+ 		}
++		s.scanner = r.scanner
+ 		senders = append(senders, s)
+ 	}
+ 	return senders
+diff --git a/pkg/scan/pcap_device.go b/pkg/scan/pcap_device.go
+--- a/pkg/scan/pcap_device.go
++++ b/pkg/scan/pcap_device.go
+@@ -1,4 +1,4 @@
+-//go:build linux || darwin || windows
++//go:build darwin || windows
+ 
+ package scan
+ 

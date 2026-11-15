@@ -282,17 +282,33 @@
     then opensshClientMinimal buildPkgs.pkgsCross.aarch64-multiplatform-musl.pkgsStatic
     else opensshClientMinimal targetPkgs.pkgsStatic;
 
+  naabuVersion = "2.7.0";
+  naabuSource = buildPkgs.fetchFromGitHub {
+    owner = "projectdiscovery";
+    repo = "naabu";
+    tag = "v${naabuVersion}";
+    hash = "sha256-Xd1mFbEogXboTIj3cLj+BM97hZNgWd1sUoWPZHSpp3Q=";
+  };
   naabuPatches = [
     ../patches/naabu-disable-updates.patch
     ../patches/naabu-fully-static.patch
   ];
-  naabuVendorHash = "sha256-+7oSwkFvnkmP8VLsQqHASktY8AS7bgyGO1IJoIjnNgY=";
+  naabuVendorHash = "sha256-ZC5yzuGTPSVnY40BYBau9yEaLIBjqRHvrsYhhvtEGBw=";
   naabuMinimal = staticSet:
     disableCdncheckIPv6Probe (
       staticSet.naabu.overrideAttrs (old: {
+        version = naabuVersion;
+        src = naabuSource;
         patches = (old.patches or []) ++ naabuPatches;
         vendorHash = naabuVendorHash;
         ldflags = (old.ldflags or []) ++ ["-w"];
+        doCheck = staticSet.stdenv.buildPlatform.canExecute staticSet.stdenv.hostPlatform;
+        checkPhase =
+          (old.checkPhase or "")
+          + ''
+            go test ./pkg/runner ./pkg/scan \
+              -run '^(TestCheckConnectErrors.*|TestCheckRawWriteErrors.*|TestAddTargetScopedIPv6.*|TestLinuxCaptureFilter|TestConnectHostAddsLinkLocalZoneFromInterface|TestWriteWithConn6UsesSourceAndInterface)$'
+          '';
       })
     );
 
@@ -304,6 +320,8 @@
       subPackage = "./cmd/naabu";
     }).overrideAttrs
     (old: {
+      version = naabuVersion;
+      src = naabuSource;
       patches = (old.patches or []) ++ naabuPatches;
       vendorHash = naabuVendorHash;
     })

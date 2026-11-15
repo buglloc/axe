@@ -1,8 +1,7 @@
 diff --git a/pkg/runner/banners.go b/pkg/runner/banners.go
-index 7fea4eb..f089c15 100644
 --- a/pkg/runner/banners.go
 +++ b/pkg/runner/banners.go
-@@ -9,7 +9,6 @@ import (
+@@ -9,7 +9,6 @@
  	"github.com/projectdiscovery/naabu/v2/pkg/scan"
  	"github.com/projectdiscovery/utils/auth/pdcp"
  	osutil "github.com/projectdiscovery/utils/os"
@@ -10,7 +9,7 @@ index 7fea4eb..f089c15 100644
  )
  
  const banner = `
-@@ -91,12 +90,9 @@ func showNetworkInterfaces() error {
+@@ -93,12 +92,9 @@
  	return nil
  }
  
@@ -26,10 +25,9 @@ index 7fea4eb..f089c15 100644
  
  // AuthWithPDCP is used to authenticate with PDCP
 diff --git a/pkg/runner/options.go b/pkg/runner/options.go
-index 9f5b708..1f99041 100644
 --- a/pkg/runner/options.go
 +++ b/pkg/runner/options.go
-@@ -18,7 +18,6 @@ import (
+@@ -20,7 +20,6 @@
  	"github.com/projectdiscovery/goflags"
  	"github.com/projectdiscovery/gologger"
  	pdcpauth "github.com/projectdiscovery/utils/auth/pdcp"
@@ -37,18 +35,7 @@ index 9f5b708..1f99041 100644
  )
  
  var (
-@@ -79,8 +78,8 @@ type Options struct {
- 	ProxyAuth         string              // Socks5 proxy authentication (username:password)
- 	Resolvers         string              // Resolvers (comma separated or file)
- 	baseResolvers     []string
--	DnsOrder          string              // DNS resolution order (p/l/lp/pl)
--	SystemResolver    bool                // Use system DNS resolver as fallback
-+	DnsOrder          string          // DNS resolution order (p/l/lp/pl)
-+	SystemResolver    bool            // Use system DNS resolver as fallback
- 	OnResult          result.ResultFn // callback on final host result
- 	OnReceive         result.ResultFn // callback on response receive
- 	CSV               bool
-@@ -337,15 +336,6 @@ func ParseOptions() *Options {
+@@ -409,15 +408,6 @@
  		os.Exit(0)
  	}
  
