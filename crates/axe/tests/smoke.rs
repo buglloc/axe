@@ -2569,15 +2569,12 @@ fn sshd_daemon_is_ready_on_return_and_stops_with_supervisor() {
 #[cfg(unix)]
 #[test]
 fn sshd_starts_without_writable_storage() {
-    use std::net::TcpListener;
     use std::os::unix::fs::PermissionsExt;
 
     let scratch = Scratch::new("sshd-readonly");
     let store = Scratch::new("sshd-readonly-store");
     fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o555))
         .expect("make sshd workdir read-only");
-    let reservation = TcpListener::bind("127.0.0.1:0").expect("reserve SSH port");
-    let address = reservation.local_addr().expect("read reserved address");
 
     let child = Command::new(env!("CARGO_BIN_EXE_axe"))
         .env_clear()
@@ -2589,23 +2586,23 @@ fn sshd_starts_without_writable_storage() {
             "sshd",
             "--",
             "--listen",
-            &address.to_string(),
+            "127.0.0.1:0",
             "--workdir",
         ])
         .arg(scratch.path())
         .args(["--store-mode", "off", "--no-relay"])
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("start sshd");
-    drop(reservation);
-    let output = stop_process_after_ready(child, address);
+    let output = stop_sshd_after_listen_announcement(child);
     fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o755))
         .expect("restore workdir permissions");
 
     assert!(
         output.status.success(),
-        "stderr: {}",
+        "status: {}; stderr: {}",
+        output.status,
         String::from_utf8_lossy(&output.stderr)
     );
     // sshd may publish its applet bridge when the filesystem still allows it
