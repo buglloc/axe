@@ -113,3 +113,22 @@ fn fmt_missing_operand_does_not_suppress_later_files() {
     assert_eq!(output.stdout, b"abc\tdef\n");
     assert!(String::from_utf8_lossy(&output.stderr).contains("missing"));
 }
+
+#[test]
+fn csplit_suppressed_numeric_boundary_may_follow_the_final_record() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(scratch.path(), "csplit", &["--suppress-matched", "-", "2"], b"a"),
+        b"1\n0\n",
+    );
+    assert_eq!(fs::read(scratch.path().join("xx00")).unwrap(), b"a");
+    assert_eq!(fs::read(scratch.path().join("xx01")).unwrap(), b"");
+    let output = run(
+        scratch.path(),
+        "csplit",
+        &["--suppress-matched", "-f", "bad", "-", "3"],
+        b"a",
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!scratch.path().join("bad00").exists());
+}

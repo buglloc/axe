@@ -396,6 +396,10 @@ impl SplitWriter<'_> {
                 Ordering::Greater => (),
             }
             self.writeln(&line)?;
+            if self.options.suppress_matched && ln.checked_add(2) == Some(n) {
+                // The suppressed boundary record may be just beyond EOF.
+                ret = Ok(());
+            }
         }
         self.finish_split()?;
         ret

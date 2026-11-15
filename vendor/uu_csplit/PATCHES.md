@@ -10,8 +10,11 @@ Source: the `uu_csplit` 0.12.0 crate from crates.io, upstream revision
   a split boundary (except for the repeating pattern case).
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
+- Accept a numeric boundary immediately after the final record when suppressing
+  the boundary record; an absent suppressed record is not an out-of-range split.
 
 Upstreamability: byte-preserving records and final-split behavior are intended
 for upstream; no upstream issue or commit is recorded in AXE.
 
-AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs`.
+AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs` and
+`crates/axe/tests/layout_repair.rs`.
