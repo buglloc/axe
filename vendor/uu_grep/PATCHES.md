@@ -16,6 +16,8 @@ upstream packaging provenance, not a local AXE edit.
 - Treat invalid UTF-8 bytes as unmatchable in UTF-8 locales rather than letting
   regex wildcards consume them; retain original line and buffer anchors across
   valid spans and advance empty matches by characters.
+  Each valid-span search retains the original left context so an invalid byte
+  cannot invent a word-start assertion in UTF-8 mode.
 - With `-o`, classify only emitted matches for encoding errors: unmatched
   invalid bytes do not suppress valid UTF-8 spans or fabricate a binary notice.
 - Treat NUL as a record boundary in binary mode for anchors, inversion and

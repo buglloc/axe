@@ -325,3 +325,27 @@ fn echo_keeps_permissive_escapes_while_printf_rejects_them() {
         assert!(!strict.stderr.is_empty(), "{strict:?}");
     }
 }
+
+#[test]
+fn grep_invalid_utf8_does_not_create_a_regex_word_start() {
+    assert_output(
+        run("grep", &["-a", "-o", r"\<a"], b"\xffa\xfe\n", "C.UTF-8"),
+        1,
+        b"",
+    );
+    assert_output(
+        run("grep", &["-c", r"\<a"], b"\xffa\xfe\n", "C.UTF-8"),
+        1,
+        b"0\n",
+    );
+    assert_output(
+        run("grep", &["-q", r"\<a"], b"\xffa\xfe\n", "C.UTF-8"),
+        1,
+        b"",
+    );
+    assert_output(
+        run("grep", &["-a", "-v", r"\<a"], b"\xffa\xfe\n", "C.UTF-8"),
+        0,
+        b"\xffa\xfe\n",
+    );
+}

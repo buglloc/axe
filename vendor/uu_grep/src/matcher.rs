@@ -225,8 +225,10 @@ impl Cursor<'_> {
                 return;
             };
             let options = span_options(span, self.line.len());
-            let offset = self.offset.max(span.start) - span.start;
-            let text = &self.line[span.clone()];
+            let offset = self.offset.max(span.start);
+            // Preserve original left context for assertions such as \<. An
+            // invalid byte is not an invented beginning of the input string.
+            let text = &self.line[..span.end];
             let Some((start, leftmost_end)) =
                 self.pattern.search_leftmost(text, offset, options)
             else {
@@ -234,8 +236,6 @@ impl Cursor<'_> {
                 continue;
             };
             let end = self.pattern.longest_end_at(text, start, options).unwrap_or(leftmost_end);
-            let start = span.start + start;
-            let end = span.start + end;
             self.offset = if start == end {
                 let mut next = start + 1;
                 if self.pattern.utf8 {
@@ -439,7 +439,7 @@ impl CompiledPattern {
     /// True if any match exists in `line` (including zero-length).
     fn is_match(&self, line: &[u8]) -> bool {
         ValidSpans::new(line, self.utf8).any(|span| {
-            self.leftmost.search(&line[span.clone()], 0, span_options(&span, line.len()), None).is_some()
+            self.leftmost.search(&line[..span.end], span.start, span_options(&span, line.len()), None).is_some()
         })
     }
 }
