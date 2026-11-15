@@ -89,6 +89,74 @@ fn optimal_breaks(words: &[Word<'_>], opts: &FmtOptions, first: usize, indent: u
     breaks
 }
 
+fn write_spaces(
+    ostream: &mut BufWriter<Stdout>,
+    column: &mut usize,
+    count: usize,
+    tabs: bool,
+    tabwidth: usize,
+) -> std::io::Result<()> {
+    let goal = column.saturating_add(count);
+    let tab_goal = goal / tabwidth * tabwidth;
+    if tabs && column.saturating_add(1) < tab_goal {
+        while *column < tab_goal {
+            ostream.write_all(b"\t")?;
+            *column = (*column / tabwidth + 1) * tabwidth;
+        }
+    }
+    let spaces = [b' '; 64];
+    while *column < goal {
+        let count = (goal - *column).min(spaces.len());
+        ostream.write_all(&spaces[..count])?;
+        *column += count;
+    }
+    Ok(())
+}
+
+fn write_indent(
+    ostream: &mut BufWriter<Stdout>,
+    indent: &[u8],
+    tabs: bool,
+    tabwidth: usize,
+) -> std::io::Result<usize> {
+    let mut column = 0;
+    let mut position = 0;
+    while position < indent.len() {
+        let mut goal = column;
+        while let Some(&byte) = indent.get(position) {
+            match byte {
+                b' ' => goal += 1,
+                b'\t' => goal = (goal / tabwidth + 1) * tabwidth,
+                _ => break,
+            }
+            position += 1;
+        }
+        let count = goal - column;
+        write_spaces(ostream, &mut column, count, tabs, tabwidth)?;
+        let start = position;
+        while position < indent.len() && !matches!(indent[position], b' ' | b'\t') {
+            position += 1;
+        }
+        ostream.write_all(&indent[start..position])?;
+        column += position - start;
+    }
+    Ok(column)
+}
+
+pub fn write_unformatted(
+    bytes: &[u8],
+    tabs: bool,
+    tabwidth: usize,
+    ostream: &mut BufWriter<Stdout>,
+) -> std::io::Result<()> {
+    let indent = bytes
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t'))
+        .unwrap_or(bytes.len());
+    write_indent(ostream, &bytes[..indent], tabs, tabwidth)?;
+    ostream.write_all(&bytes[indent..])
+}
+
 pub fn break_lines(
     para: &Paragraph,
     opts: &FmtOptions,
@@ -159,7 +227,7 @@ pub fn break_lines(
     let mut start = 0;
     while start < words.len() {
         let indent = if start == 0 { first_indent } else { &para.indent_str };
-        ostream.write_all(indent)?;
+        let mut column = write_indent(ostream, indent, para.tabs, opts.tabwidth)?;
         let end = if opts.quick || para.mail_header {
             let mut end = start + 1;
             let mut length = if start == 0 { first_length } else { para.indent_len }
@@ -175,17 +243,18 @@ pub fn break_lines(
             breaks[start].next
         };
         for (index, word) in words.iter().enumerate().take(end).skip(start) {
-            let info = word.info;
-            if index == start {
-                ostream.write_all(&info.word[info.word_start..])?;
-            } else {
-                if uniform || info.new_line {
-                    for _ in 0..word.space_before {
-                        ostream.write_all(b" ")?;
-                    }
-                }
-                ostream.write_all(info.word)?;
+            if index > start {
+                write_spaces(
+                    ostream,
+                    &mut column,
+                    word.space_before,
+                    para.tabs,
+                    opts.tabwidth,
+                )?;
             }
+            let info = word.info;
+            ostream.write_all(&info.word[info.word_start..])?;
+            column += info.word_nchars;
         }
         ostream.write_all(b"\n")?;
         start = end;

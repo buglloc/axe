@@ -284,3 +284,32 @@ fn fmt_uniform_spacing_retains_control_word_boundaries() {
         b"a\x08b \rc \x0b \x0cd \0e\n",
     );
 }
+
+#[test]
+fn fmt_measures_tabs_in_source_columns_and_normalizes_output_spacing() {
+    let scratch = Scratch::new();
+    for (args, input, expected) in [
+        (
+            &["-g10", "-w14"][..],
+            &b"a\tb\tc\n\tX\nlast\t"[..],
+            &b"a\tb\nc\n\tX\nlast\n"[..],
+        ),
+        (
+            &[][..],
+            &b"  alpha  beta\t gamma\n\t delta  epsilon\n"[..],
+            &b"  alpha  beta\t gamma\n\t delta\tepsilon\n"[..],
+        ),
+        (
+            &["-p", "> ", "-w12"][..],
+            &b" \tX\n\t   Y\nA \x08\tZ\n"[..],
+            &b"\tX\n\t   Y\nA \x08\tZ\n"[..],
+        ),
+        (
+            &["-w20"][..],
+            "界\t界\té\nab\u{301}cd\n".as_bytes(),
+            "界\t界\té\nab\u{301}cd\n".as_bytes(),
+        ),
+    ] {
+        assert_success(run(scratch.path(), "fmt", args, input), expected);
+    }
+}

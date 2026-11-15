@@ -333,6 +333,7 @@ pub struct Paragraph {
     indent_end: usize,
     /// we need to know if this is a mail header because we do word splitting differently in that case
     pub mail_header: bool,
+    pub tabs: bool,
 }
 
 /// An iterator producing a stream of paragraphs from a stream of lines
@@ -342,6 +343,7 @@ pub struct ParagraphStream<'a> {
     next_mail: bool,
     opts: &'a FmtOptions,
     tagged_indent: usize,
+    tabs: bool,
 }
 
 impl ParagraphStream<'_> {
@@ -353,6 +355,7 @@ impl ParagraphStream<'_> {
             next_mail: true,
             opts,
             tagged_indent: 0,
+            tabs: false,
         }
     }
 
@@ -386,10 +389,10 @@ impl ParagraphStream<'_> {
 }
 
 impl Iterator for ParagraphStream<'_> {
-    type Item = Result<Paragraph, Vec<u8>>;
+    type Item = Result<Paragraph, (Vec<u8>, bool)>;
 
     #[allow(clippy::cognitive_complexity)]
-    fn next(&mut self) -> Option<Result<Paragraph, Vec<u8>>> {
+    fn next(&mut self) -> Option<Self::Item> {
         // return a NoFormatLine in an Err; it should immediately be output
         let noformat = match self.lines.peek()? {
             Line::FormatLine(_) => false,
@@ -400,7 +403,11 @@ impl Iterator for ParagraphStream<'_> {
         if noformat {
             let (s, nm) = self.lines.next().unwrap().get_noformatline();
             self.next_mail = nm;
-            return Some(Err(s));
+            self.tabs |= s
+                .iter()
+                .take_while(|&&byte| matches!(byte, b' ' | b'\t'))
+                .any(|&byte| byte == b'\t');
+            return Some(Err((s, self.tabs)));
         }
 
         // found a FormatLine, now build a paragraph
@@ -517,6 +524,10 @@ impl Iterator for ParagraphStream<'_> {
         // NOTE next_mail is true at ParagraphStream instantiation, and is set to true after a blank
         // NoFormatLine.
         self.next_mail = in_mail;
+        self.tabs |= p_lines.iter().any(|line| line.contains(&b'\t'));
+        if let Some(Line::FormatLine(line)) = self.lines.peek() {
+            self.tabs |= line.line[..line.indent_end].contains(&b'\t');
+        }
 
         Some(Ok(Paragraph {
             lines: p_lines,
@@ -527,6 +538,7 @@ impl Iterator for ParagraphStream<'_> {
             indent_len,
             indent_end,
             mail_header: in_mail,
+            tabs: self.tabs,
         }))
     }
 }

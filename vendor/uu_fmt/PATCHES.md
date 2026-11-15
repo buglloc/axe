@@ -21,6 +21,9 @@ Source: the `uu_fmt` 0.12.0 crate from crates.io, upstream revision
   retaining a failing command status.
 - Use GNU's three-column secondary indent for an initial unindented tagged
   paragraph, and retain the secondary indent learned from earlier paragraphs.
+- Measure tab-separated word spacing in the original input columns and emit
+  equivalent tabs/spaces at the chosen output positions, including canonical
+  indentation on unformatted records.
 
 Upstreamability: width and line-break changes target GNU fmt and are
 upstreamable; no upstream issue or commit is recorded in AXE.
