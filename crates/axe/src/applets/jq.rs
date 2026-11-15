@@ -9,6 +9,9 @@ use jaq_all::jaq_std;
 use jaq_all::jaq_std::input::{HasInputs, Inputs, RcIter};
 use jaq_all::json::{self, Num, Val};
 
+#[path = "jq_stream.rs"]
+mod stream;
+
 const HELP: &str = "Usage: jq [OPTIONS] FILTER [FILE ...]\n\
 \n\
 Options:\n\
@@ -32,7 +35,9 @@ Options:\n\
       --argjson NAME JSON bind VALUE as JSON\n\
       --rawfile NAME FILE bind the complete file as a string\n\
       --slurpfile NAME FILE bind the file's JSON values as an array\n\
-      --stream           not supported by this applet\n\
+      --stream           read incremental path/value events\n\
+      --stream-errors    include parse errors as stream events\n\
+      --unbuffered       flush after each output value\n\
   -h, --help             show this help\n\
   -V, --version          show version";
 
@@ -50,6 +55,9 @@ struct Options {
     indent: Option<i8>,
     seq: bool,
     raw_output0: bool,
+    stream: bool,
+    stream_errors: bool,
+    unbuffered: bool,
     bindings: Vec<(String, Val)>,
     filter: Option<String>,
     positional: Vec<Val>,
@@ -201,9 +209,12 @@ fn parse_args(args: Vec<OsString>) -> Result<ParseOutcome, String> {
                     };
                     options.bindings.push((name, value));
                 }
-                "--stream" | "--stream-errors" => {
-                    return Err(format!("{text} is not supported by this applet"));
+                "--stream" => options.stream = true,
+                "--stream-errors" => {
+                    options.stream = true;
+                    options.stream_errors = true;
                 }
+                "--unbuffered" => options.unbuffered = true,
                 "--help" => {
                     println!("{HELP}");
                     return Ok(ParseOutcome::Exit(0));
@@ -369,6 +380,7 @@ fn run(options: Options) -> Result<i32, RunError> {
         indent: options.indent,
         seq: options.seq,
         raw_output0: options.raw_output0,
+        unbuffered: options.unbuffered,
     };
     let filename = RefCell::new(Val::Null);
     let inputs = FileInputs::new(
@@ -376,6 +388,8 @@ fn run(options: Options) -> Result<i32, RunError> {
         options.raw_input,
         options.slurp,
         options.seq,
+        options.stream,
+        options.stream_errors,
         &filename,
     );
     let stdout = io::stdout();
@@ -628,6 +642,9 @@ fn execute(
                     .write_all(if options.raw_output0 { b"\0" } else { b"\n" })
                     .map_err(RunError::Io)?;
             }
+            if options.unbuffered {
+                output.flush().map_err(RunError::Io)?;
+            }
             last = Some(value.as_bool());
         }
     }
@@ -645,6 +662,7 @@ struct InputStream<'a> {
     bom: Vec<u8>,
     buffer: Vec<u8>,
     offset: usize,
+    file_index: usize,
 }
 
 impl<'a> InputStream<'a> {
@@ -660,6 +678,7 @@ impl<'a> InputStream<'a> {
             bom: Vec::new(),
             buffer: Vec::new(),
             offset: 0,
+            file_index: 0,
         }
     }
 
@@ -679,6 +698,7 @@ impl<'a> InputStream<'a> {
                 String::from_utf8_lossy(path.as_os_str().as_encoded_bytes()).into_owned(),
             );
         }
+        self.file_index += 1;
         Ok(true)
     }
 
@@ -760,6 +780,7 @@ struct SharedBufRead<'a> {
     stream: std::rc::Rc<RefCell<InputStream<'a>>>,
     buffer: Vec<u8>,
     offset: usize,
+    file_index: usize,
 }
 
 impl<'a> SharedBufRead<'a> {
@@ -768,6 +789,7 @@ impl<'a> SharedBufRead<'a> {
             stream,
             buffer: Vec::new(),
             offset: 0,
+            file_index: 0,
         }
     }
 }
@@ -794,7 +816,9 @@ impl BufRead for SharedBufRead<'_> {
             self.buffer.clear();
             self.offset = 0;
             let mut chunk = [0_u8; 8192];
-            let length = self.stream.borrow_mut().read(&mut chunk)?;
+            let mut stream = self.stream.borrow_mut();
+            let length = stream.read(&mut chunk)?;
+            self.file_index = stream.file_index;
             self.buffer.extend_from_slice(&chunk[..length]);
         }
         Ok(&self.buffer[self.offset..])
@@ -805,12 +829,19 @@ impl BufRead for SharedBufRead<'_> {
     }
 }
 
+impl stream::Source for SharedBufRead<'_> {
+    fn file_index(&self) -> usize {
+        self.file_index
+    }
+}
+
 struct FileInputs<'a> {
     stream: std::rc::Rc<RefCell<InputStream<'a>>>,
     parser: Option<Box<dyn Iterator<Item = io::Result<Val>> + 'a>>,
     seq: bool,
     raw: bool,
     slurp: bool,
+    streaming: bool,
     finished: bool,
 }
 
@@ -820,11 +851,19 @@ impl<'a> FileInputs<'a> {
         raw: bool,
         slurp: bool,
         seq: bool,
+        streaming: bool,
+        stream_errors: bool,
         filename: &'a RefCell<Val>,
     ) -> Self {
         let stream = std::rc::Rc::new(RefCell::new(InputStream::new(files, filename, !raw)));
         let parser = (!raw).then(|| {
-            if seq {
+            if streaming {
+                Box::new(stream::Stream::new(
+                    SharedBufRead::new(stream.clone()),
+                    seq,
+                    stream_errors,
+                )) as Box<dyn Iterator<Item = io::Result<Val>> + 'a>
+            } else if seq {
                 Box::new(json::read::read_many_jq_seq(SharedBufRead::new(
                     stream.clone(),
                 ))) as Box<dyn Iterator<Item = io::Result<Val>> + 'a>
@@ -839,6 +878,7 @@ impl<'a> FileInputs<'a> {
             seq,
             raw,
             slurp,
+            streaming,
             finished: false,
         }
     }
@@ -866,9 +906,15 @@ impl<'a> FileInputs<'a> {
             match parser.next() {
                 None => return Ok(None),
                 Some(Ok(value)) => {
+                    if self.streaming {
+                        return Ok(Some(value));
+                    }
                     return normalize_input(value).map(Some).map_err(RunError::Input);
                 }
                 Some(Err(error)) if self.seq && error.kind() == io::ErrorKind::InvalidData => {
+                    if self.streaming {
+                        eprintln!("jq: ignoring parse error: {error}");
+                    }
                     continue;
                 }
                 Some(Err(error)) if error.kind() == io::ErrorKind::InvalidData => {
@@ -967,6 +1013,7 @@ struct OutputOptions {
     indent: Option<i8>,
     seq: bool,
     raw_output0: bool,
+    unbuffered: bool,
 }
 
 fn json_text(value: &Val) -> Result<Val, json::Error> {
