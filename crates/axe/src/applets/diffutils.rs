@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 #[cfg(unix)]
 use std::ffi::CStr;
@@ -12,7 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Local};
 use diffutilslib::params::{self, Format};
 use gix_imara_diff::{Algorithm, Diff, NoSliderHeuristic, Token};
-use regex::bytes::Regex;
+use onig::{
+    EncodedBytes, MatchParam, Regex, RegexOptions, SearchOptions, Syntax, SyntaxBehavior,
+    SyntaxOperator,
+};
 #[cfg(not(unix))]
 use unicode_width::UnicodeWidthChar;
 
@@ -135,7 +139,13 @@ pub fn sdiff(args: Vec<OsString>) -> i32 {
     }
     let from_lines = split_lines(&left);
     let to_lines = split_lines(&right);
-    let changes = diff_changes(&from_lines, &to_lines, &options.diff);
+    let changes = match diff_changes(&from_lines, &to_lines, &options.diff) {
+        Ok(changes) => changes,
+        Err(error) => {
+            eprintln!("sdiff: {error}");
+            return 2;
+        }
+    };
     if let Some(output) = options.output {
         return match sdiff_merge(
             &options.diff,
@@ -747,87 +757,73 @@ fn positive_number(value: &OsStr, name: &str) -> Result<usize, String> {
 }
 
 fn ignore_regex(pattern: &OsStr) -> Result<Regex, String> {
-    let pattern = pattern
-        .to_str()
-        .ok_or("invalid regular expression encoding")?;
-    // diff -I uses basic regular expressions; Rust's engine uses extended syntax.
-    let mut extended = String::new();
-    let mut characters = pattern.chars().peekable();
-    while let Some(character) = characters.next() {
-        match character {
-            '\\' => {
-                let next = characters
-                    .next()
-                    .ok_or("invalid regular expression: trailing backslash")?;
-                if !matches!(next, '(' | ')' | '+' | '?' | '{' | '}' | '|') {
-                    extended.push('\\');
-                }
-                extended.push(next);
-            }
-            '[' => translate_bre_bracket(&mut characters, &mut extended)?,
-            _ => {
-                if matches!(character, '(' | ')' | '+' | '?' | '{' | '}' | '|') {
-                    extended.push('\\');
-                }
-                extended.push(character);
-            }
-        }
-    }
-    Regex::new(&format!("(?m-u:{extended})"))
-        .map_err(|error| format!("invalid regular expression: {error}"))
+    let pattern = bre_backreferences(pattern.as_encoded_bytes());
+    let mut syntax = *Syntax::grep();
+    syntax.enable_operators(
+        SyntaxOperator::SYNTAX_OPERATOR_ESC_S_WHITE_SPACE
+            | SyntaxOperator::SYNTAX_OPERATOR_ESC_GNU_BUF_ANCHOR,
+    );
+    syntax.enable_behavior(SyntaxBehavior::SYNTAX_BEHAVIOR_STRICT_CHECK_BACKREF);
+    Regex::with_options_and_encoding(
+        EncodedBytes::ascii(&pattern),
+        RegexOptions::REGEX_OPTION_NONE,
+        &syntax,
+    )
+    .map_err(|error| format!("invalid regular expression: {error}"))
 }
 
-fn translate_bre_bracket(
-    characters: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    extended: &mut String,
-) -> Result<(), String> {
-    extended.push('[');
-    if characters.peek() == Some(&'^') {
-        characters.next();
-        extended.push('^');
+fn bre_backreferences(pattern: &[u8]) -> Cow<'_, [u8]> {
+    if !pattern.windows(3).any(|bytes| {
+        bytes[0] == b'\\' && matches!(bytes[1], b'1'..=b'9') && bytes[2].is_ascii_digit()
+    }) {
+        return Cow::Borrowed(pattern);
     }
-    let mut first = true;
-    while let Some(character) = characters.next() {
-        match character {
-            ']' if !first => {
-                extended.push(']');
-                return Ok(());
+    let mut normalized = Vec::with_capacity(pattern.len());
+    let mut offset = 0;
+    while offset < pattern.len() {
+        if pattern[offset] == b'[' {
+            let start = offset;
+            offset += 1;
+            if pattern.get(offset) == Some(&b'^') {
+                offset += 1;
             }
-            ']' => extended.push_str(r"\]"),
-            '\\' => extended.push_str(r"\\"),
-            '&' | '~' => {
-                extended.push('\\');
-                extended.push(character);
+            if pattern.get(offset) == Some(&b']') {
+                offset += 1;
             }
-            '[' if characters.peek() == Some(&':') => {
-                characters.next();
-                extended.push_str("[:");
-                loop {
-                    let character = characters
-                        .next()
-                        .ok_or("invalid regular expression: unterminated character class")?;
-                    extended.push(character);
-                    if character == ':' && characters.peek() == Some(&']') {
-                        characters.next();
-                        extended.push(']');
-                        break;
+            while offset < pattern.len() && pattern[offset] != b']' {
+                if pattern[offset] == b'['
+                    && let Some(&marker @ (b':' | b'.' | b'=')) = pattern.get(offset + 1)
+                {
+                    offset += 2;
+                    while offset + 1 < pattern.len()
+                        && pattern[offset..offset + 2] != [marker, b']']
+                    {
+                        offset += 1;
+                    }
+                    if offset + 1 < pattern.len() {
+                        offset += 1;
                     }
                 }
+                offset += 1;
             }
-            '[' if matches!(characters.peek(), Some('.' | '=')) => {
-                return Err(
-                    "unsupported regular expression: collating and equivalence classes".into(),
-                );
+            offset = (offset + 1).min(pattern.len());
+            normalized.extend_from_slice(&pattern[start..offset]);
+        } else if pattern[offset] == b'\\' && offset + 1 < pattern.len() {
+            normalized.extend_from_slice(&pattern[offset..offset + 2]);
+            if matches!(pattern[offset + 1], b'1'..=b'9')
+                && pattern.get(offset + 2).is_some_and(u8::is_ascii_digit)
+            {
+                // GNU BRE numbers backreferences with one digit; Oniguruma
+                // otherwise consumes subsequent literal digits as part of it.
+                normalized.extend_from_slice(br"\{1\}");
             }
-            '[' => extended.push_str(r"\["),
-            '-' if characters.peek() == Some(&'-') => {
-                return Err("unsupported regular expression: consecutive range operators".into());
-            }
-            _ => extended.push(character),
+            offset += 2;
+        } else {
+            normalized.push(pattern[offset]);
+            offset += 1;
         }
-        first = false;
     }
-    Err("invalid regular expression: unterminated bracket expression".into())
+    Cow::Owned(normalized)
 }
 
 fn read_diff_operand(path: &OsStr, new_file: bool) -> Result<Vec<u8>, String> {
@@ -981,7 +977,7 @@ fn lowercase_character(character: char) -> char {
     }
 }
 
-fn line_is_ignored(line: &[u8], options: &DiffOptions) -> bool {
+fn line_is_ignored(line: &[u8], options: &DiffOptions) -> Result<bool, String> {
     let content = line.strip_suffix(b"\n").unwrap_or(line);
     let content = if options.strip_trailing_cr {
         content.strip_suffix(b"\r").unwrap_or(content)
@@ -993,14 +989,33 @@ fn line_is_ignored(line: &[u8], options: &DiffOptions) -> bool {
             || options.ignore_space_change
             || options.ignore_trailing_space)
             && content.iter().all(u8::is_ascii_whitespace));
-    (options.ignore_blank_lines && blank)
-        || options
-            .ignore_matching
-            .iter()
-            .any(|pattern| pattern.is_match(content))
+    if options.ignore_blank_lines && blank {
+        return Ok(true);
+    }
+    for pattern in &options.ignore_matching {
+        if pattern
+            .search_with_param(
+                EncodedBytes::ascii(content),
+                0,
+                content.len(),
+                SearchOptions::SEARCH_OPTION_NONE,
+                None,
+                MatchParam::default(),
+            )
+            .map_err(|error| format!("regular expression match failed: {error}"))?
+            .is_some()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
-fn diff_changes(from: &[&[u8]], to: &[&[u8]], options: &DiffOptions) -> Vec<Change> {
+fn diff_changes(
+    from: &[&[u8]],
+    to: &[&[u8]],
+    options: &DiffOptions,
+) -> Result<Vec<Change>, String> {
     let locale = if options.ignore_case {
         side_locale()
     } else {
@@ -1062,11 +1077,14 @@ fn diff_changes(from: &[&[u8]], to: &[&[u8]], options: &DiffOptions) -> Vec<Chan
                 ..prefix_offset + hunk.before.end as usize;
             let new =
                 prefix_offset + hunk.after.start as usize..prefix_offset + hunk.after.end as usize;
-            let ignored = from[old.clone()]
-                .iter()
-                .chain(&to[new.clone()])
-                .all(|line| line_is_ignored(line, options));
-            Change { old, new, ignored }
+            let mut ignored = true;
+            for line in from[old.clone()].iter().chain(&to[new.clone()]) {
+                if !line_is_ignored(line, options)? {
+                    ignored = false;
+                    break;
+                }
+            }
+            Ok(Change { old, new, ignored })
         })
         .collect()
 }
@@ -1104,7 +1122,7 @@ fn compare_diff_files(
     }
     let from_lines = split_lines(&from);
     let to_lines = split_lines(to);
-    let changes = diff_changes(&from_lines, &to_lines, options);
+    let changes = diff_changes(&from_lines, &to_lines, options)?;
     let different = changes.iter().any(|change| !change.ignored);
     if !different && params.report_identical_files {
         output.extend_from_slice(b"Files ");

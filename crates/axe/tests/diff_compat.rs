@@ -465,6 +465,71 @@ fn ignore_matching_lines_preserves_basic_bracket_backslashes_and_named_classes()
 }
 
 #[test]
+fn ignore_matching_lines_supports_gnu_basic_backreferences() {
+    let scratch = Scratch::new("bre-backreferences");
+    for (pattern, left, right) in [
+        (r"^\(a\|b\)\1$", b"aa\n".as_slice(), b"bb\n".as_slice()),
+        (r"^\(a\|b\)\10$", b"aa0\n".as_slice(), b"bb0\n".as_slice()),
+        (r"^\\10$", b"\\10\n".as_slice(), b"".as_slice()),
+        (r"^[\10]$", b"1\n".as_slice(), b"0\n".as_slice()),
+        (
+            r"^[[:alpha:]\10]\(a\|b\)\10$",
+            b"xaa0\n".as_slice(),
+            b"0bb0\n".as_slice(),
+        ),
+        (
+            r"^\(.*\):\1$",
+            "кек:кек\n".as_bytes(),
+            "КЕК:КЕК\n".as_bytes(),
+        ),
+        (
+            r"^\(.\)\1$",
+            b"\xff\xff\n".as_slice(),
+            b"\xfe\xfe\n".as_slice(),
+        ),
+        (
+            r"^\(.*\)\1$",
+            b"a\0a\0\n".as_slice(),
+            b"b\0b\0\n".as_slice(),
+        ),
+    ] {
+        scratch.write("a", left);
+        scratch.write("b", right);
+        assert_output(
+            run(&scratch.0, "diff", &["-aI", pattern, "a", "b"], b""),
+            0,
+            b"",
+        );
+        assert_output(
+            run(&scratch.0, "sdiff", &["-asI", pattern, "a", "b"], b""),
+            0,
+            b"",
+        );
+    }
+    scratch.write("a", b"aa\n");
+    scratch.write("b", b"ab\n");
+    assert_output(
+        run(
+            &scratch.0,
+            "diff",
+            &["-I", r"^\(.\)\1$", "a", "b"],
+            b"",
+        ),
+        1,
+        b"1c1\n< aa\n---\n> ab\n",
+    );
+    for applet in ["diff", "sdiff"] {
+        let output = run(&scratch.0, applet, &["-I", r"\(a\)\2", "a", "b"], b"");
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("invalid regular expression"),
+            "{output:?}",
+        );
+    }
+}
+
+#[test]
 fn whitespace_modes_ignore_final_newline_presence_without_changing_default_comparison() {
     let scratch = Scratch::new("whitespace-final-newline");
     scratch.write("a", b"x\n");
