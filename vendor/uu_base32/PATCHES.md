@@ -9,10 +9,13 @@ Source: the `uu_base32` 0.12.0 crate from crates.io, upstream revision
   coreutils writes valid output before its non-zero invalid-input status.
 - Keep decoding and output streaming while flushing only the valid prefix, so an
   error does not discard bytes already accepted by the decoder.
+- Skip line feeds while decoding; carriage returns require `--ignore-garbage`,
+  matching GNU's byte-level alphabet validation.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
 
 Upstreamability: valid-prefix output is intended for upstream; no upstream issue
 or commit is recorded in AXE.
 
-AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs`.
+AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs` and
+`crates/axe/tests/archive_repair.rs`.
