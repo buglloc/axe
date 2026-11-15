@@ -27,3 +27,15 @@ upstreamable; no upstream issue or commit is recorded in AXE.
 
 AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs` and
 `crates/axe/tests/layout_repair.rs`.
+
+GNU differential exclusions:
+
+- GNU `src/pr.c` documents one number per merged output line and separators
+  for empty merged columns. Its `print_page` calls `align_column` after a
+  nonempty unterminated record closes a column, duplicating the number; an
+  earlier `cols_ready_to_print` check can instead skip trailing separators.
+  AXE keeps numbering and empty-column layout independent of EOF lookahead.
+- `-i` output-tab conversion remains an explicitly unsupported option.
+
+Primary source: <https://github.com/coreutils/coreutils/blob/master/src/pr.c>
+(`print_page`, `align_column`, and the option contracts).

@@ -22,3 +22,15 @@ upstreamable; no upstream issue or commit is recorded in AXE.
 
 AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs` and
 `crates/axe/tests/layout_repair.rs`.
+
+GNU differential exclusions:
+
+- GNU `scan_input_file` mistakes a zero return from `re_search` (a match at
+  offset zero) for a zero-length match, rejecting blank lines with `-r`.
+  AXE rejects only context matches that fail to advance.
+- GNU's conservative backward jump in `define_all_fields` can omit a prefix
+  that fits in the head field, notably with `-W`. AXE retains that context
+  instead of reproducing the heuristic's unnecessary truncation.
+
+Primary source: <https://github.com/coreutils/coreutils/blob/master/src/ptx.c>
+(`scan_input_file` and `define_all_fields`).

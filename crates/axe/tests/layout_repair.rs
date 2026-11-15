@@ -313,3 +313,35 @@ fn fmt_measures_tabs_in_source_columns_and_normalizes_output_spacing() {
         assert_success(run(scratch.path(), "fmt", args, input), expected);
     }
 }
+
+#[test]
+fn pr_merge_numbers_once_and_keeps_empty_columns_at_eof() {
+    let scratch = Scratch::new();
+    fs::write(scratch.path().join("a"), b"a\nb").unwrap();
+    fs::write(scratch.path().join("b"), b"x\n").unwrap();
+    assert_success(
+        run(
+            scratch.path(),
+            "pr",
+            &["-t", "-m", "-n:3", "-s|", "a", "b"],
+            b"",
+        ),
+        b"  1:a|x\n  2:b|\n",
+    );
+}
+
+#[test]
+fn ptx_reference_mode_accepts_nonempty_matches_at_offset_zero() {
+    let scratch = Scratch::new();
+    let output = run(
+        scratch.path(),
+        "ptx",
+        &["-r", "-w30"],
+        b"REF alpha\n\nSECOND beta\n",
+    );
+    assert_eq!(output.status.code(), Some(0), "stderr: {:?}", output.stderr);
+    assert!(output.stderr.is_empty());
+    assert_eq!(output.stdout.iter().filter(|&&byte| byte == b'\n').count(), 2);
+    assert!(output.stdout.windows(3).any(|bytes| bytes == b"REF"));
+    assert!(output.stdout.windows(6).any(|bytes| bytes == b"SECOND"));
+}
