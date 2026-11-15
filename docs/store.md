@@ -1,6 +1,6 @@
 # AXE Store
 
-AXE Store delivers tools on demand. Nix builds the packages; `axe-store` signs their metadata and publishes them. AXE verifies signatures, sizes, and SHA-256 hashes before execution. Previously cached tools can run offline. On Linux, supported single-file tools and static package entrypoints can run without an executable cache filesystem. Packages still need writable storage for their data.
+AXE Store delivers tools on demand. Nix builds the packages; `axe-store` signs their metadata and publishes them. AXE verifies signatures, sizes, and SHA-256 hashes before execution. Previously cached tools can run offline. On Linux, single-file tools and static package entrypoints run even when the cache filesystem does not permit execution. Packages still need writable storage for their data.
 
 `AXE_STORE_DIR` sets the preferred cache root. If it is unavailable, AXE tries configured roots, the platform cache, writable persistent mounts, tmpfs, and the temporary directory. Store metadata is isolated by URL, trust keys, and channel. Use separate roots for co-installed editions.
 
@@ -12,7 +12,7 @@ Set the mode with `AXE_STORE_MODE` or `sshd --store-mode`:
 
 In `auto` and `cache-only`, transient delivery failures or an unavailable tool can permit `PATH` fallback. Signature, integrity, and configuration errors do not. `sshd` passes its mode to shell and exec sessions; child sessions cannot relax an inherited restriction.
 
-`axe refresh-tools` fetches and verifies the current Index; it requires `auto` mode. `axe clean-tools` removes metadata for the current Store identity, not shared content-addressed objects. It skips inaccessible automatically discovered roots but reports permission errors for an explicit `AXE_STORE_DIR`.
+`axe refresh-tools` fetches and verifies the current Index; it requires `auto` mode. `axe clean-tools` removes metadata for the current Store identity but keeps tool payloads that other identities can share. It skips inaccessible automatically discovered roots but reports permission errors for an explicit `AXE_STORE_DIR`.
 
 ## Package inventory
 
@@ -117,7 +117,9 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 | `zellij` | `terminal/zellij` | Manage terminal sessions, panes, and embedded plugins | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `zgrab2` | `network/zgrab2` | Scan application-layer protocols and collect service metadata | `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` |
 
-`difft` is Difftastic's syntax-aware structural diff tool; it performs local comparisons without automatic update checks or telemetry.
+## Package notes
+
+`difft` (Difftastic) compares files locally and does not check for updates or send telemetry.
 
 Nmap NSE script threads are interrupted after five seconds without yielding; allocations beyond 400 MB fail. Long-running custom scripts must yield during computation.
 
@@ -131,7 +133,7 @@ Pass `--config FILE` for repository-specific Betterleaks rules. Automatic `.bett
 
 `yq --split-exp` confines output paths to the working directory unless `--security-allow-write-any-path` is explicitly enabled for trusted input. `--inplace` replaces a symbolic link instead of modifying its target and rejects direct updates to read-only files.
 
-`gix` is a low-level Git plumbing CLI, not a drop-in replacement for `git` and not a stable scripting interface. Local repository inspection, revision walking, status, diff, and HTTPS clone/fetch are supported workflows; push, merge orchestration, rebase, reset, hooks, and self-contained SSH transport remain incomplete. SSH uses an external `ssh` command, and some credential flows may invoke `git credential`.
+`gix` is a low-level Git CLI, not a drop-in `git` replacement or a stable scripting interface. Local repository inspection, revision walking, status, diff, and HTTPS clone and fetch work; push, merge, rebase, reset, hooks, and built-in SSH transport are incomplete. SSH uses an external `ssh` command, and some credential flows call `git credential`.
 
 `katana` performs standard crawling and JavaScript endpoint discovery without a browser. Automatic version checks and browser downloads are disabled. Headless and hybrid modes require an installed Chrome/Chromium, `-system-chrome-path`, or `-chrome-ws-url`; no browser is bundled. Katana can return status 0 after browser initialization or crawl failures, so check diagnostics and results rather than exit status alone. Use `-debug` to expose headless browser-launch errors.
 
@@ -149,23 +151,23 @@ The `interactsh-client` package removes automatic version checks and their machi
 
 The `gori` package disables startup update checks by default. Set `update.check_enabled` to `true` in its settings file to enable them.
 
-The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the pinned upstream universal binary; its archive version and SHA-256 must be updated together and match the Linux version.
+The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the upstream universal binary of the same version.
 
 `asciinema rec --return session.cast` records a new `$SHELL` session; exiting ends the recording, and `--return` preserves the session's exit status. `asciinema play session.cast` replays it locally. On Linux, `-c COMMAND` uses `$SHELL -c`, falling back to `/bin/sh` when `SHELL` is unset. Local recording and playback need no writable home directory; the recording's destination must be writable.
 
 Uploads and remote streams are explicit network operations and use host TLS trust. `ASCIINEMA_CONFIG_HOME` and `ASCIINEMA_STATE_HOME` select configuration and writable publishing state directories. Keyboard input capture is disabled by default; `--capture-input` also records sensitive input such as passwords. Terminal output can expose secrets even with input capture disabled.
 
-`tmux` embeds ncurses fallback records for modern terminals, including Ghostty, Kitty, Foot, Alacritty, and WezTerm. Ghostty and Kitty records come from their upstream sources pinned by `flake.lock`; updating the nixpkgs input refreshes them at build time. Host terminfo remains available for custom definitions, but no terminfo tree is shipped. AXE shell and SSH sessions preserve the client's `TERM`; panes default to `tmux-256color`.
+`tmux` embeds terminfo entries for modern terminals, including Ghostty, Kitty, Foot, Alacritty, and WezTerm, so it does not need a host terminfo database. Host terminfo still works for custom definitions. AXE shell and SSH sessions keep the client's `TERM`; panes default to `tmux-256color`.
 
 `zellij` embeds its terminal plugins and assets. Its Linux libcurl includes CA roots; explicit CA overrides still apply. The optional browser client loads Google Fonts.
 
 `dig` includes CA roots for certificate-verified DNS-over-TLS and HTTPS queries. Use `+tls-ca` to enable verification, or `+tls-ca=FILE` for an explicit CA file.
 
-`usql` includes PostgreSQL, MySQL, SQLite, and ClickHouse drivers in a CGO-free static profile. PostgreSQL connections using `sslmode=verify-full` use the selected edition's embedded CA bundle when `sslrootcert` is not specified; an explicit `sslrootcert` remains authoritative.
+`usql` includes PostgreSQL, MySQL, SQLite, and ClickHouse drivers. PostgreSQL connections using `sslmode=verify-full` use the edition's embedded CA bundle when `sslrootcert` is not set; an explicit `sslrootcert` takes precedence.
 
-`valkey-cli` is a Linux static build with OpenSSL TLS support. With `--tls`, it uses the selected edition's embedded CA bundle when neither `--cacert` nor `--cacertdir` is specified; explicit CA options remain authoritative.
+`valkey-cli` supports TLS. With `--tls`, it uses the edition's embedded CA bundle unless `--cacert` or `--cacertdir` is given.
 
-`rclone` embeds CA roots and timezone data. Release checks, self-update, the GUI downloader, and cloud SDK telemetry are disabled or removed. Azure Blob inherits disabled SDK telemetry from the shared Azure authentication client options while retaining its gzip request policy. The authenticated RC API and explicit `--rc-files` remain available. Cgo-based mounting is excluded; Go FUSE mounts require host FUSE support and its mount helper.
+`rclone` embeds CA roots and timezone data. Release checks, self-update, the GUI downloader, and cloud SDK telemetry are removed or disabled. The authenticated RC API and explicit `--rc-files` remain available. `rclone mount` needs host FUSE support and its mount helper; `cmount` is not included.
 
 `s5cmd` uses AWS credentials and profiles, supports custom S3 endpoints with `--endpoint-url`, and runs command files with `run`. It embeds Mozilla CA roots and additional CAs from the selected edition as a fallback when system roots are unavailable. System trust and `SSL_CERT_FILE` custom CA bundles remain available. S3-compatible providers may support only a subset of its operations.
 
@@ -197,11 +199,12 @@ Caddy rejects conflicting `client_auth` policies for the same hostname and ambig
         --verify_fatal=1 --unlink=1
 )
 ```
-`fsmon` is Linux-only. Its daemon requires `CAP_SYS_ADMIN` for process attribution and refuses to start without it unless `FSMON_ALLOW_UNPRIVILEGED=1` is set. The Store package provides the `fsmon` executable; use `fsmon init --service` to generate its user service configuration.
 
-`tracee` is Linux-only and requires a supported kernel with BTF, usually `/sys/kernel/btf/vmlinux`, plus the capabilities needed to load and attach eBPF programs. Some events also require `/proc/kallsyms`, kernel configuration data, or LSM BPF support. The Store package provides the static `tracee` executable for x86-64 and arm64; host kernel configuration and privileges determine which features are available.
+`fsmon` is Linux-only. Its daemon requires `CAP_SYS_ADMIN` for process attribution and refuses to start without it unless `FSMON_ALLOW_UNPRIVILEGED=1` is set. Use `fsmon init --service` to generate its user service configuration.
 
-`python` includes pinned pure-Python HTTP, WebSocket, and HTML libraries and a certifi CA bundle. The package excludes pip, ensurepip, and virtual-environment tooling; update its interpreter and wheels together in the package definition.
+`tracee` is Linux-only and requires a kernel with BTF, usually `/sys/kernel/btf/vmlinux`, plus the capabilities needed to load and attach eBPF programs. Some events also require `/proc/kallsyms`, kernel configuration data, or LSM BPF support. The host kernel and privileges determine which features work.
+
+`python` includes pinned pure-Python HTTP, WebSocket, and HTML libraries and a certifi CA bundle. It does not include pip, ensurepip, or virtual-environment tooling.
 
 ### Text editors
 
@@ -209,7 +212,7 @@ Caddy rejects conflicting `client_auth` policies for the same hostname and ambig
 
 `ox` embeds its default configuration, syntax highlighting, and the `autoindent`, `pairs`, and `quickcomment` plugins. It does not start the configuration assistant automatically; run `ox --config-assist` explicitly when setup is needed. The assistant needs a writable home directory to save its settings. Additional plugins can require external commands or network access.
 
-`vim` is a package with a static Linux executable and the standard runtime: syntax definitions, filetype and indent scripts, plugins, autoload functions, and help. It uses Vim's huge terminal build without GUI, X11, or embedded language interpreters. Store supplies the runtime location through `AXE_STORE_PACKAGE_DIR`; direct execution finds it beside the package's `bin` directory. When no home directory can be resolved, the default runtime paths omit personal directories. User vimrc files and Vim's swap, backup, undo, and viminfo settings retain their normal behavior.
+`vim` is a static Linux build with the standard runtime: syntax definitions, filetype and indent scripts, plugins, autoload functions, and help. It is Vim's huge terminal build without GUI, X11, or embedded language interpreters. When no home directory can be resolved, the default runtime paths omit personal directories. User vimrc files and Vim's swap, backup, undo, and viminfo settings work as usual.
 
 For an explicitly stateless session, use `vim -N -u NONE -i NONE -n FILE`. This skips vimrc files and startup plugins, disables viminfo, and disables swap recovery. Shell commands, filters, and plugins that invoke other programs still need those programs in the environment.
 
@@ -234,11 +237,11 @@ Without `/proc`, `spf` emits disk-discovery diagnostics but directory navigation
 
 Neither package bundles external commands. Editors, file openers, shell commands, and configured `broot` verbs require their programs on `PATH`. Optional `spf` integrations use `exiftool`, `zoxide`, `bat`/`batcat`, and clipboard tools; thumbnail converters use `pdftoppm`, `gs`, or `ffmpeg`. These are not needed for basic navigation or built-in text previews.
 
-Neither tool sends telemetry or checks for application updates automatically. Superfile's update client is removed from the Store build.
+Neither tool sends telemetry or checks for updates automatically.
 
 ## Security source updates
 
-OpenSSL and NSS CA data come from the nixpkgs revision pinned in `flake.lock`. Curl has an independent source pin in `store/nix/packages/network.nix`. Review package-specific overrides when updating nixpkgs, then regenerate and check the Store bootstrap metadata. The development shell retains the unmodified root pin.
+OpenSSL and NSS CA data come from the nixpkgs revision pinned in `flake.lock`. Curl has its own source pin in `store/nix/packages/network.nix`. Review package-specific overrides when updating nixpkgs, then regenerate and check the Store bootstrap metadata.
 
 Library and CA-bundle updates require rebuilding their consumers, including tools whose own version is unchanged. A new AXE executable does not replace published Store payloads. Build and publish the updated packages, then refresh the signed bootstrap snapshot through the publication workflow below.
 
@@ -246,7 +249,7 @@ Library and CA-bundle updates require rebuilding their consumers, including tool
 
 Package definitions live in [`store/nix/packages/`](../store/nix/packages/).
 
-Use a package artifact when a tool needs adjacent runtime files. Store sets `AXE_STORE_PACKAGE_DIR` to the absolute verified package tree for the entrypoint process without changing its working directory. Package entrypoints can use this path to locate their data when Linux runs a supported static executable through a sealed memfd. Single-file tools do not receive this variable.
+Use a package artifact when a tool needs adjacent runtime files. Store sets `AXE_STORE_PACKAGE_DIR` to the verified package directory for the entrypoint process; the working directory does not change. Single-file tools do not receive this variable.
 
 Each package belongs to one primary category, shared with bundled commands. Its Store ID is generated as `<category>/<name>`; command aliases use the same package and category. Choose the category by the tool's main purpose, not its implementation or transport:
 
@@ -268,7 +271,7 @@ Each package belongs to one primary category, shared with bundled commands. Its 
 
 For example, `restic`, `fio`, `findmnt`, `rclone`, `rsync`, and `s5cmd` belong to `storage`, while `binwalk` and `pspy` belong to `debugging`. Terminal multiplexers belong to `terminal`; Python belongs to `runtime`. Define only categories containing packages in the public Store inventory; do not add empty modules or compatibility category aliases. Changing a package's category changes its Store ID and requires regenerating the inventory and the signed snapshot before release.
 
-For CGO-free Go packages whose tests invoke `go build`, set `GO_EXTLINK_ENABLED=0` as well as `CGO_ENABLED=0`; package `ldflags` do not reach those helper builds. The musl Go compiler can otherwise default to external linking. Apply patches that only remove dependency imports after vendoring (`postConfigure`) to preserve the pinned upstream vendor hash.
+For CGO-free Go packages whose tests run `go build`, set `GO_EXTLINK_ENABLED=0` as well as `CGO_ENABLED=0`: package `ldflags` do not reach those builds, and the musl Go toolchain otherwise defaults to external linking. Apply patches that only remove dependency imports in `postConfigure`, after vendoring, so the pinned vendor hash still matches.
 
 After changing package definitions, regenerate and check the inventory:
 

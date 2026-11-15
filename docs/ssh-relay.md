@@ -8,7 +8,7 @@ axe sshd --listen '[::]:6969' --workdir .
 
 Interactive SSH sessions show a short welcome message. Remote exec, SFTP, and forwarding produce no welcome output.
 
-## SSH session environment
+## Session environment
 
 SSH shell and exec sessions start in the selected `workdir`. AXE sets:
 
@@ -16,7 +16,7 @@ SSH shell and exec sessions start in the selected `workdir`. AXE sets:
 HOME=<workdir>/.axe-home
 ```
 
-The directory is created with private permissions and persists with the workdir. It is used by tools for home-based configuration and state; the daemon's inherited home is not exposed to sessions.
+AXE creates this directory with private permissions, and it persists with the workdir. Sessions do not see the daemon's own home directory.
 
 If `PATH` is unset or empty when `sshd` starts, AXE uses:
 
@@ -24,35 +24,39 @@ If `PATH` is unset or empty when `sshd` starts, AXE uses:
 /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ```
 
-The AXE applet bridge remains at the front of `PATH` when it is available. A non-empty inherited `PATH` is preserved.
+A non-empty inherited `PATH` is kept. The AXE applet bridge, when available, comes first.
 
-After accepted client variables override the daemon's inherited environment, shell and exec sessions set `LANG=C.UTF-8` if `LC_ALL`, `LC_CTYPE`, and `LANG` are all unset or empty. Any non-empty value in those three variables, including `C`, suppresses the fallback. AXE does not set `LC_ALL` or change `TERM` to select UTF-8.
+If `LC_ALL`, `LC_CTYPE`, and `LANG` are all unset or empty after client variables are applied, shell and exec sessions set `LANG=C.UTF-8`. A non-empty value in any of them, including `C`, prevents this. AXE does not set `LC_ALL` or change `TERM`.
 
-SFTP resolves relative paths from `workdir` and `~` from the session home. The `expand-path@openssh.com` extension keeps `scp`'s default SFTP mode and `scp -O`'s legacy remote-shell mode consistent.
+SFTP resolves relative paths from `workdir` and `~` from the session home. `scp` resolves paths the same way in its default SFTP mode and in legacy `scp -O` mode.
 
-### Forwarding and session requests
+## Forwarding
 
-TCP and Unix-domain stream sockets support local (`ssh -L`) and reverse (`ssh -R`) forwarding, including TCP-to-Unix and Unix-to-TCP endpoints. Dynamic forwarding (`ssh -D`) supports SOCKS TCP connections, not UDP.
+Local (`ssh -L`) and reverse (`ssh -R`) forwarding work with TCP and Unix-domain stream sockets, including TCP-to-Unix and Unix-to-TCP. Dynamic forwarding (`ssh -D`) supports SOCKS TCP connections, not UDP.
 
-Agent forwarding requires an explicit client request (`ssh -A`). Each session channel receives its own `SSH_AUTH_SOCK`, backed by a mode-0600 socket in a mode-0700 temporary directory. Socket connections and the directory are removed when that session ends or the SSH connection closes. Sessions without forwarding do not inherit the daemon's agent socket. At most 16 agent connections run concurrently per session.
+Agent forwarding requires an explicit client request (`ssh -A`). Each session gets its own private `SSH_AUTH_SOCK`, removed when the session or SSH connection ends. Sessions without forwarding do not inherit the daemon's agent socket. A session can have at most 16 concurrent agent connections.
 
-Forward only to hosts trusted to request signatures with the agent's keys. Private keys stay in the client agent, but a process able to access the forwarded socket can request signatures while the session is open.
+Forward your agent only to hosts you trust to request signatures. Private keys stay in the client agent, but any process that can reach the forwarded socket can request signatures while the session is open.
 
-`SendEnv` and `SetEnv` requests are accepted before shell/exec/subsystem startup. The default allowlist is `LANG,LC_*`. Replace it with a comma-separated list such as `--accept-env='LANG,LC_*,TEST_?L*WED'`. Patterns are case-sensitive and follow OpenSSH matching: `*` matches zero or more bytes and `?` matches one byte, anywhere in the pattern. Other characters are literal; character classes, brace expansion, and `!` negation are not supported.
+## Client environment variables
 
-`--accept-env='*'` accepts every environment name without a denylist, including `LD_*`, `DYLD_*`, `SSH_*`, and `AXE*`. It only permits variables the client actually sends; it does not copy the client's entire environment. Accept-all permits loader and shell startup variables, so use it only with trusted clients.
+`sshd` accepts `SendEnv` and `SetEnv` requests sent before the shell, exec, or subsystem starts. The default allowlist is `LANG,LC_*`. Replace it with a comma-separated list such as `--accept-env='LANG,LC_*,TEST_?L*WED'`. Patterns are case-sensitive and follow OpenSSH matching: `*` matches zero or more bytes and `?` matches one byte, anywhere in the pattern. Other characters are literal; character classes, brace expansion, and `!` negation are not supported.
 
-Names must be nonempty, at most 128 bytes, and contain neither `=` nor NUL; values must contain no NUL and be at most 4096 bytes. Each session accepts at most 64 variables and 32 KiB of combined names and values.
+`--accept-env='*'` accepts every name the client sends, including `LD_*`, `DYLD_*`, `SSH_*`, and `AXE*`. It does not copy the client's whole environment. Because it admits loader and shell startup variables, use it only with trusted clients.
 
-As in OpenSSH, accepted values can be superseded by server-generated session state. AXE sets `HOME`, `AXE`, `AXE_WORK_DIR`, its Store policy, and any configured Store directory after client variables. A PTY supplies `TERM`; agent forwarding supplies the real `SSH_AUTH_SOCK` after any client-provided socket value. The managed applet bridge remains at the front of `PATH`.
+Names must be non-empty, at most 128 bytes, and contain neither `=` nor NUL. Values must not contain NUL and are limited to 4096 bytes. Each session accepts at most 64 variables and 32 KiB of names and values combined.
 
-On Unix, SSH signal requests target the session child's process group. Signal termination is reported through `exit-signal`; normal termination uses `exit-status`. Closing a session kills its process group and reaps the child. Remaining group members are also killed when the child exits, before its PID can be reused. Processes that deliberately create another session are outside this group.
+As in OpenSSH, the server overrides some accepted values. AXE sets `HOME`, `AXE`, `AXE_WORK_DIR`, its Store mode, and any configured Store directory after applying client variables. A PTY sets `TERM`, agent forwarding sets `SSH_AUTH_SOCK`, and the applet bridge stays first in `PATH`.
 
-PTY requests apply supported native terminal modes, including echo/canonical/flow-control flags, control characters, and baud rates. Window changes update the active terminal.
+## Signals and terminals
 
-### SFTP extensions
+On Unix, SSH signal requests go to the session's process group. A session killed by a signal reports `exit-signal`; otherwise it reports `exit-status`. Closing a session kills its process group, and remaining group members are also killed when the main process exits. Processes that start their own session are not affected.
 
-Alongside `expand-path@openssh.com`, SFTP implements:
+PTY sessions apply the client's terminal modes and follow window size changes.
+
+## SFTP extensions
+
+Besides `expand-path@openssh.com`, SFTP supports:
 
 | Extension | Version | Behavior |
 | --- | --- | --- |
@@ -63,25 +67,21 @@ Alongside `expand-path@openssh.com`, SFTP implements:
 | `fstatvfs@openssh.com` | 2 | Return statistics through an open file handle, including an unlinked file (Unix) |
 | `limits@openssh.com` | 1 | Advertise packet, read/write, and open-handle limits |
 
-Malformed extension payloads are rejected before mutation. Closed or non-file handles fail `fsync` and `fstatvfs`.
-
-
 ## Relay
 
-The target runs `axe sshd`; the separate `axe-relay` daemon assigns public TCP ports on a reachable host. Relay is disabled by default in the OSS edition. Use `--relay ENDPOINT` to enable it or `--no-relay` to override an edition's configured default.
+The target runs `axe sshd`; the separate `axe-relay` daemon assigns it a public TCP port on a reachable host. Relay is disabled by default in the OSS edition. Use `--relay ENDPOINT` to enable it or `--no-relay` to override an edition's configured default.
 
-TCP is the default transport. It uses a bearer token of at least 32 bytes, supplied by the edition or `AXE_RELAY_TOKEN`; keep its control traffic on a trusted network such as a VPN. QUIC uses mutual TLS over UDP. Supply target credentials through the edition or the `AXE_RELAY_QUIC_*_FILE` variables shown below.
+TCP is the default transport. It authenticates with a bearer token of at least 32 bytes, supplied by the edition or `AXE_RELAY_TOKEN`; keep its control traffic on a trusted network such as a VPN. QUIC uses mutual TLS over UDP. Supply target credentials through the edition or the `AXE_RELAY_QUIC_*_FILE` variables shown below.
 
-The relay daemon requires a TCP token and QUIC server credentials even when targets use only one transport. Generate credentials and configure endpoints as described in [`BOOTSTRAP.md`](../BOOTSTRAP.md#relay-endpoints-and-identities).
+The relay daemon needs both a TCP token and QUIC server credentials, even when targets use only one transport. Generate credentials and configure endpoints as described in [`BOOTSTRAP.md`](../BOOTSTRAP.md#relay-endpoints-and-identities).
 
-Each registration admits at most 128 active tunnels. Additional public connections wait in the listener backlog instead of overflowing the TCP stream multiplexer. Registration, including waiting for a public port, has a 10-second deadline; opening a tunnel also has a 10-second deadline.
+Each registration allows at most 128 active tunnels; further public connections queue in the listener backlog. Registration, including waiting for a public port, times out after 10 seconds, as does opening a tunnel.
 
-Clients reconnect with jittered exponential backoff capped at 30 seconds. The backoff resets after a registration remains established for 30 seconds, not after a briefly accepted connection. QUIC sends keepalives every 5 seconds and uses a 30-second idle timeout. TCP enables OS keepalive with 15-second idle and 5-second probe intervals; the retry count and total failure-detection time remain OS-dependent.
+Targets reconnect with jittered exponential backoff of up to 30 seconds. QUIC treats a connection as dead after 30 seconds without traffic. TCP uses OS keepalive with 15-second idle and 5-second probe intervals; the total detection time depends on the OS.
 
-Reconnection does not resume existing tunnels. Applications must reconnect, and the replacement registration may receive a different public port: query `wait` or the API again. Duplicate client IDs can coexist as independent registrations; use unique IDs to avoid ambiguous lookup. TCP tunnels share one TCP connection and therefore share transport head-of-line blocking.
+Reconnecting does not resume existing tunnels. Clients must reconnect, and the target may receive a different public port, so query `wait` or the API again. Registrations with the same client ID coexist, which makes lookups ambiguous; give each target a unique ID. All tunnels of a TCP registration share one TCP connection, so a stalled tunnel can delay the others.
 
-
-Assign a unique `--relay-id` to distinguish targets; the default ID can collide across hosts or containers. For a QUIC target, supply the certificate files unless the edition embeds them:
+Set a unique `--relay-id` for each target; the default ID can collide across hosts or containers. For a QUIC target, supply the certificate files unless the edition embeds them:
 
 ```bash
 AXE_RELAY_QUIC_SERVER_CERT_FILE=keys/relay/quic_server_cert.pem \
@@ -90,11 +90,11 @@ AXE_RELAY_QUIC_CLIENT_KEY_FILE=keys/relay/quic_client_key.pem \
 axe sshd --listen '[::]:6969' --workdir . --relay relay.example.org:11000 --relay-transport quic --relay-id target-01
 ```
 
-Keep the client private key restricted to the target's runtime user. For TCP, omit `--relay-transport quic`, use the protected TCP control endpoint (port 6999 below), and set `AXE_RELAY_TOKEN` to the relay's token. The target also needs an SSH host identity, user CA, and allowlist.
+Restrict the client private key to the target's runtime user. For TCP, omit `--relay-transport quic`, use the protected TCP control endpoint (port 6999 below), and set `AXE_RELAY_TOKEN` to the relay's token. The target also needs an SSH host identity, user CA, and allowlist.
 
 ### Linux relay service
 
-On the relay host, obtain an `axe-relay` binary for its architecture from the [release artifacts](../README.md#downloads) and compare its SHA-256 with the published value before installing it. Provision the deployment-specific `keys/relay/token`, `quic_server_key.pem`, `quic_server_cert.pem`, and `quic_client_cert.pem` from a controlled machine; transfer them securely to `keys/relay/` on the relay host for the installation commands below. **Do not** transfer `quic_client_key.pem` to the relay host; that key belongs to the target. Do not commit these credentials or put the token in unit arguments, shell history, or logs.
+On the relay host, download the `axe-relay` binary for its architecture from the [release artifacts](../README.md#downloads) and check its SHA-256 against the published value. Provision the deployment-specific `keys/relay/token`, `quic_server_key.pem`, `quic_server_cert.pem`, and `quic_client_cert.pem` on a controlled machine and transfer them securely to `keys/relay/` on the relay host. **Do not** copy `quic_client_key.pem` to the relay host; that key belongs to the target. Do not commit these credentials or put the token in unit arguments, shell history, or logs.
 
 ```bash
 sha256sum ./axe-relay  # compare with the SHA-256 for this architecture in README.md
@@ -104,7 +104,7 @@ sudo install -d -o root -g root -m 0700 /etc/axe-relay
 sudo install -o root -g root -m 0600 keys/relay/{token,quic_server_key.pem,quic_server_cert.pem,quic_client_cert.pem} /etc/axe-relay/
 ```
 
-Replace `relay.example.org` with the relay's public DNS name. Save this JSON as `config.json`; all fields are required. `public_bind` is a bare IP address, while listener addresses include a port and bracket IPv6.
+Replace `relay.example.org` with the relay's public DNS name and save this JSON as `config.json`. All fields are required. `public_bind` is a bare IP address; listener addresses include a port and bracket IPv6.
 
 ```json
 {
@@ -150,13 +150,13 @@ PrivateTmp=true
 WantedBy=multi-user.target
 ```
 
-The server requires `--config FILE`; `--token FILE` can override its `token_file`. Both accept file paths, whereas `AXE_RELAY_TOKEN` on the TCP target contains the token itself. The dashboard/API listener is plain HTTP and may bind a reachable private or VPN address. The dashboard asks for the bearer token; every JSON API request requires `Authorization: Bearer <token>` matching `token_file`.
+The server requires `--config FILE`; `--token FILE` overrides its `token_file`. Both take file paths, whereas `AXE_RELAY_TOKEN` on a TCP target holds the token itself. The dashboard and API listener speaks plain HTTP and can bind a private or VPN address. The dashboard asks for the bearer token, and every JSON API request needs `Authorization: Bearer <token>` matching `token_file`.
 
-For TCP targets, change the loopback-only `tcp_control` address to the relay's private/VPN address and restrict access to those targets. Never expose this bearer-token listener to an untrusted network. Allow UDP 11000 from QUIC targets and TCP 3000–6000 from SSH users; keep the public port range and firewall rules in sync.
+For TCP targets, change the loopback-only `tcp_control` address to the relay's private or VPN address and allow only those targets to reach it. Never expose this listener to an untrusted network. Allow UDP 11000 from QUIC targets and TCP 3000–6000 from SSH users, and keep the firewall rules in sync with the public port range.
 
-The CLI accepts both HTTPS and HTTP API origins. Set `AXE_RELAY_API_URL` and `AXE_RELAY_API_TOKEN` to let the environment select the relay, or pass `--api` and `--api-token` to override them. The default API URL is `http://127.0.0.1:7000`. Plain HTTP sends the bearer token without transport encryption; use it only on a trusted private network or put the API behind an HTTPS reverse proxy.
+The `axe-relay` client commands accept HTTPS and HTTP API URLs. Set `AXE_RELAY_API_URL` and `AXE_RELAY_API_TOKEN`, or pass `--api` and `--api-token`. The default API URL is `http://127.0.0.1:7000`. Over plain HTTP the bearer token travels unencrypted, so use it only on a trusted private network or put the API behind an HTTPS reverse proxy.
 
-After installing the unit, an operator can run:
+Start the service and wait for a target:
 
 ```bash
 sudo systemctl daemon-reload
@@ -169,11 +169,13 @@ export AXE_RELAY_API_TOKEN="$(sudo cat /etc/axe-relay/token)"
 /usr/local/sbin/axe-relay watch --client-id target-01
 ```
 
-`status` reports uptime and active registrations; `wait` prints the target's assigned SSH `HOST:PORT` once it connects, and `watch` follows connections and disconnections (stop it with Ctrl-C). `axe-relay clients` lists current IDs, transports, and addresses; `/api/v1/status` is available for JSON monitoring with the same bearer token. Use an SSH certificate issued by the configured user CA to verify actual login via the assigned port. If the service fails to start or the target does not register, inspect `journalctl -u axe-relay.service -b --no-pager` for missing credentials, bind errors, or control handshake failures, then check endpoint routing and the relevant TCP/UDP firewall rules without printing secret values.
+`status` reports uptime and active registrations. `wait` prints the target's SSH `HOST:PORT` once it connects. `watch` follows connections and disconnections until you press Ctrl-C. `axe-relay clients` lists current IDs, transports, and addresses, and `/api/v1/status` returns JSON for monitoring with the same bearer token. To confirm login, connect to the assigned port with an SSH certificate issued by the configured user CA.
+
+If the service fails to start or the target does not register, check `journalctl -u axe-relay.service -b --no-pager` for missing credentials, bind errors, or handshake failures, then check endpoint routing and the TCP/UDP firewall rules. Do not print secret values while debugging.
 
 ## Development checks
 
-Run `just smoke` inside the development shell (`just shell`). Relay tests use their own credentials, independent of the selected edition.
+Run `just smoke` inside the development shell (`just shell`). Relay tests use their own credentials and do not depend on the selected edition.
 
 To run only the relay tests:
 
@@ -181,15 +183,14 @@ To run only the relay tests:
 cargo test --locked -p axe-relay --all-features
 ```
 
-The local relay smoke verifies real SSH banners over TCP and QUIC, supervised-daemon registration, relay crash/re-registration, concurrent binary traffic, half-close, idle-stream isolation, and listener/target cleanup:
+The local relay smoke checks real SSH connections through TCP and QUIC relays, including relay restarts, re-registration, and concurrent traffic:
 
 ```bash
 cargo build --locked -p axe -p axe-relay
 bash scripts/relay-live-smoke.sh target/debug/axe target/debug/axe-relay
 ```
 
-
-The local SSH interoperability smoke uses the current certificate-bearing `SSH_AUTH_SOCK`. It creates an isolated edition containing only that certificate issuer's public trust and a disposable host key; it does not create another agent or copy authentication private keys. Run inside the development shell:
+The SSH interoperability smoke tests AXE against the OpenSSH client. It needs Linux `/proc` and an `SSH_AUTH_SOCK` holding a user certificate. It builds a throwaway edition that trusts only that certificate's CA; it does not start another agent or copy private keys. Run it inside the development shell:
 
 ```bash
 (
@@ -204,6 +205,3 @@ The local SSH interoperability smoke uses the current certificate-bearing `SSH_A
         --axe "$scratch/axe" --identity-config "$scratch/edition/smoke-identity.json"
 )
 ```
-
-The smoke covers OpenSSH forwarding, agent signing and isolation, environment policy, actual PTY settings/resize, signal exits, process cleanup, concurrent sessions, SFTP wire extensions, and OpenSSH SFTP transfers. It requires Linux `/proc`. Direct SSH signal requests and environment requests after exec are covered by the Rust tests because the OpenSSH CLI cannot issue them.
-

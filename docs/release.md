@@ -44,9 +44,9 @@ just release-publish
 
 `release-publish` checks formatting, the project and Store inventory, Clippy, and smoke tests. It builds `axe`, `axe-relay`, and `vzik` for all three supported targets, checks the runnable x86_64 `axe` binary's version, commit, and `oss` edition, generates `registry.json`, and stages the complete release. Existing staged assets are reused rather than rebuilt.
 
-Darwin builds use the development shell's patched `cargo-zigbuild` to deduplicate framework linker arguments. Repeated framework loads can make macOS `dyld` abort before the program starts. Rebuild affected binaries with `just build-darwin-arm64`; copying or re-signing an existing binary does not fix its load commands.
+Build Darwin binaries only inside the development shell; its `cargo-zigbuild` is patched so `dyld` does not abort them at startup. Rebuild an affected binary with `just build-darwin-arm64`; copying or re-signing it does not help.
 
-The optional local preflight is still available when the publisher wants to test both Store publication phases without touching remote systems:
+To test both Store publication phases without touching remote systems, run the optional local preflight:
 
 ```bash
 just release-check /path/outside/checkout/axe-release-check
@@ -57,8 +57,8 @@ Keep `dist/releases/vX.Y.Z/`, or `$AXE_RELEASE_DIR/releases/vX.Y.Z` when overrid
 `release-publish`:
 
 1. Creates and pushes the annotated `vX.Y.Z` tag and opens a draft GitHub Release with the reviewed notes.
-2. Uploads immutable S3 objects for the ordinary binaries, universal bootstrap assets (`b/sh`, `b/py`, `b/js`, `b/pl`) and Native loaders (`b/amd64-linux`, `b/aarch64-linux`), then downloads them without credentials and verifies their SHA-256. It also fetches each `axe` payload over plain HTTP, the bootstrap fallback transport, and fails on a redirect or a digest mismatch.
-3. Uploads `bootstrap.json`, `bootstrap-manifest.json`, `registry.json`, and `SHA256SUMS` to GitHub. The bootstrap metadata contains the immutable URLs and mutable stable aliases for the S3 assets; `bootstrap.json` also embeds every script and Native loader so the website can build paste commands. Every GitHub asset is downloaded and verified before publishing the draft.
+2. Uploads immutable S3 objects for the binaries, the universal bootstrap scripts (`b/sh`, `b/py`, `b/js`, `b/pl`), and the Native loaders (`b/amd64-linux`, `b/aarch64-linux`), then downloads them without credentials and checks their SHA-256. Each `axe` payload is also fetched over plain HTTP, the bootstrap fallback transport; a redirect or digest mismatch fails the release.
+3. Uploads `bootstrap.json`, `bootstrap-manifest.json`, `registry.json`, and `SHA256SUMS` to GitHub. The bootstrap metadata lists the immutable URLs and the stable aliases for the S3 assets. Every GitHub asset is downloaded and verified before the draft is published.
 4. Verifies remote immutable objects before updating stable S3 paths.
 5. Updates `nix/axe-releases.json`, `web/content/changelog.md`, and the README download table, then creates and pushes the metadata commit.
 
@@ -66,6 +66,6 @@ Publication is not atomic across GitHub, S3, and Git. If a remote step fails bef
 
 If the process stops after creating the local metadata commit but before pushing it, rerun `just release-publish`; it resumes that push instead of rebuilding or republishing.
 
-Check the published URLs, hashes, metadata, README table, and `/changelog/` after the workflow completes. The website workflow runs on main pushes and published releases. It uses that release's `registry.json` for release events and the latest release's registry for main pushes; without that asset, deployment is skipped.
+Check the published URLs, hashes, metadata, README table, and `/changelog/` after the workflow completes. The website deploys on pushes to `main` and on published releases, using the release's `registry.json`; it skips deployment when that asset is missing.
 
 This procedure accepts only the public OSS edition root. Other editions need their own publisher, destination, and release process.

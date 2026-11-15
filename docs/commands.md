@@ -13,8 +13,7 @@ axe doctor --json
 
 Each command has one primary `category`, shared by bundled and Store commands.
 Aliases inherit their target's category. Categories describe purpose; `source`
-separately identifies bundled or Store delivery. The website uses the same
-category IDs for filters and inventory rows.
+separately identifies bundled or Store delivery.
 
 ## Command resolution
 
@@ -26,7 +25,7 @@ alias/function → shell builtin → bundled applet → AXE Store → PATH
 
 Bundled applets take precedence over AXE Store and `PATH`. Commands not registered by AXE use normal `PATH` lookup. For a Store command, AXE tries a matching host executable only after a transient or unavailable delivery failure, excluding its own applet bridge and executable. If none is usable, the delivery failure exits with status 126. Signature, digest, schema, TLS, integrity, and configuration failures also exit with status 126, without falling back to `PATH`. An unresolved command exits with status 127.
 
-For an asynchronous command, `$!` holds the child PID. When Brush runs a list in the current process, there is no separate PID. Instead, AXE puts a `%N` job specification in `$!`; `wait` accepts it. The in-process job ends with the current shell.
+For an asynchronous command, `$!` holds the child PID. When the shell runs an asynchronous list in its own process, there is no child PID: `$!` holds a `%N` job specification instead, which `wait` accepts. Such a job ends with the current shell.
 
 A pipeline stage or background list running in a subshell returns only its exit status to the parent. `exit`, `return`, `break`, and expansion or builtin errors end that subshell alone; `errexit` and `pipefail` still determine how the parent handles a failing status. With `lastpipe` enabled, control flow in a final stage running in the parent applies to the parent.
 
@@ -40,7 +39,7 @@ axe -c 'jq -n "{ok: true}"; vzik capabilities'
 
 The first `--` after an applet name belongs to AXE. To pass an option terminator to the applet itself, use two: `axe tree -- -- -h` lists a path named `-h`. Applet symlinks and commands inside an AXE shell use the applet's ordinary argument syntax.
 
-A symlink named after a bundled applet also runs that applet; for example, a link named `jq` to the installed `axe` binary runs the bundled `jq`. Inside Brush, no `axe` prefix is needed. AXE-managed shells and SSH exec sessions export `AXE=true`.
+A symlink named after a bundled applet also runs that applet; for example, a link named `jq` to the installed `axe` binary runs the bundled `jq`. Inside the AXE shell, no `axe` prefix is needed. AXE-managed shells and SSH exec sessions export `AXE=true`.
 
 The applet PATH bridge is best-effort; bundled commands still resolve without it. See [Runtime survivability](runtime-survivability.md) for child execution and behavior when the executable is removed, and [AXE Store](store.md) for Store storage and delivery.
 
@@ -64,7 +63,7 @@ default startup policy.
 
 ## Bundled commands
 
-Bundled commands are built into `axe`; Store commands are signed on-demand artifacts. An inventory entry does not guarantee a reachable download. Linux-only commands are absent from Darwin builds.
+Bundled commands are built into `axe`; Store commands are signed on-demand artifacts. An inventory entry does not guarantee a reachable download.
 
 Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-style control flow. The inventory below groups bundled applets by their primary purpose.
 
@@ -106,9 +105,8 @@ temporarily missing. For a rotating symlink such as `server.log` pointing to
 ## Linux diagnostics
 
 `namei`, `fuser`, `lslocks`, `pstree`, and `lsblk` are Linux-only bundled
-applets. Their procfs, sysfs, mount, and process visibility follows the
-current namespace and the caller's permissions; inaccessible processes and
-devices are not synthesized.
+applets. They see only the processes, mounts, and devices that the current
+namespace exposes and the caller may read.
 
 The compatibility baseline is util-linux 2.41.2 for `namei`, `lslocks`, and
 `lsblk`, and psmisc 23.7 for `fuser` and `pstree`. `fuser` keeps process IDs on
@@ -118,43 +116,37 @@ the upstream signal and write-filter options; `-k` never signals AXE itself.
 `{"blockdevices": [...]}` and returns 32 when all explicit device operands are
 missing, or 64 when only some are missing.
 
-A process chooses its own name and arguments, so `pstree`, `fuser`, `lslocks`,
-and the `lsof` command field print `comm`, thread names, and `pstree -a`
-arguments in one locale-independent form: printable ASCII as is, `\` doubled,
-and every other byte, including UTF-8, as `\ooo`. This matches psmisc
-`pstree`. It intentionally differs from psmisc `fuser`, which prints bytes
-above 0x7f as sign-extended `\37777777777`, and from util-linux `lslocks` and
-`lsof`, which print `\xNN`; `lsof` file names keep the `lsof` escaping.
-`pstree -a` prints arguments after `comm`, omitting the executable's `argv[0]`.
-
+`pstree`, `fuser`, `lslocks`, and the `lsof` command field escape process
+names, thread names, and `pstree -a` arguments the same way in every locale:
+printable ASCII as is, `\` doubled, and every other byte, including UTF-8, as
+`\ooo`. This matches psmisc `pstree`; psmisc `fuser`, util-linux `lslocks`, and
+`lsof` escape such bytes differently. `lsof` file names keep the `lsof`
+escaping. `pstree -a` prints arguments after `comm`, without `argv[0]`.
 
 ## Filters and paths
 
 `sed` preserves input and script bytes, including invalid UTF-8, in stream and
 in-place operation. `y` is byte-oriented in single-byte locales and
-character-oriented in UTF-8 locales; locale encoding comes from the active C
-library rather than the locale variable name (musl treats unknown locale names
-as UTF-8 when its resolver reports that encoding). In-place output is
-published only after successful input and output completion; `-i[SUFFIX]`
-accepts clustered options and byte-oriented backup suffixes. `w` targets are
-created and truncated once at startup, and `addr1,+N`/`addr1,~N` ranges are
-supported. In-place publication preserves ordinary and sticky mode bits but
-clears set-ID bits. Script and missing-input errors exit with status 2; runtime
-stream or in-place I/O failures exit with status 4.
+character-oriented in UTF-8 locales; the C library, not the locale variable
+name, decides which applies. In-place edits replace the file only after the
+input has been read and the output written; `-i[SUFFIX]` accepts clustered
+options and byte-oriented backup suffixes. `w` targets are created and
+truncated once at startup, and `addr1,+N`/`addr1,~N` ranges are supported.
+In-place edits keep ordinary and sticky mode bits but clear set-ID bits. Script
+and missing-input errors exit with status 2; runtime stream or in-place I/O
+failures exit with status 4.
 
 `awk` preserves bytes in records, string values and file operands. Its program
-source must be UTF-8. Record separators, field splitting, assignments between
-files and `getline` share the same input lifecycle. `strtonum` accepts signed
-IEEE special-value strings such as `+inf` and `+nan`. Fatal input errors exit
-with status 2; stdout write or flush failures exit with status 1.
+source must be UTF-8. `strtonum` accepts signed IEEE special-value strings such
+as `+inf` and `+nan`. Fatal input errors exit with status 2; stdout write or
+flush failures exit with status 1.
 `RT` contains the matched input record separator, including separators read by
 `getline`, and is empty when a final record ends at EOF without a separator.
 
-Field counts and field indices are bounded at 10,000,000 to prevent unbounded
-allocation; negative, non-finite, or larger values are fatal runtime errors
-with status 2.
+Field counts and field indices are limited to 10,000,000; negative, non-finite,
+or larger values are fatal runtime errors with status 2.
 
-`jq` keeps one execution state across input files. `input_filename` is the current
+`jq` keeps its state across input files. `input_filename` is the current
 input file, `<stdin>` for standard input, and `null` before input is consumed in
 null-input mode. JSON input uses jq-compatible number spellings, invalid UTF-8 is
 replaced with U+FFFD, and output is valid JSON. `--tab`, `--indent`, `--seq`,
@@ -162,13 +154,13 @@ replaced with U+FFFD, and output is valid JSON. `--tab`, `--indent`, `--seq`,
 string payloads raw and terminates non-string JSON payloads with a newline.
 `--stream` reads path/value and container-end events without building the input
 document; `--stream-errors` emits parse errors as events. `--unbuffered` flushes
-each output value. The selected jaq library does not provide `fromstream`,
-`truncate_stream`, or `tostream`.
+each output value. `fromstream`, `truncate_stream`, and `tostream` are not
+available.
 Sequence mode ignores bytes before the first record separator and discards a
 final numeric record without a terminator, which may have been truncated.
 
-`diff` computes raw line edit scripts with Myers; `-d`/`--minimal` selects the
-minimal variant. It supports normal, unified (`-u`/`-U`), context (`-c`/`-C`),
+`diff` compares lines; `-d`/`--minimal` produces a minimal diff. It supports
+normal, unified (`-u`/`-U`), context (`-c`/`-C`),
 ed (`-e`), side-by-side (`-y`), and `--horizon-lines`, locale-aware case folding,
 whitespace modes (`-i`, `-w`, `-b`, `-E`, `-Z`), `-B`, `-I`,
 `--strip-trailing-cr`, labels, directory recursion, and
@@ -244,11 +236,10 @@ checksum validity; use `-t` for integrity checks.
 `zstd -dcf` copies non-frame plaintext to stdout, including a plaintext tail
 after complete frames. Recognized corrupt frame headers remain errors.
 
-File-to-file compression and decompression use private temporary output and
-publish it only after the codec and temporary-file finalization succeed. A failed
-decode retains an existing destination. This does not protect a file truncated
-by shell stdout redirection. ACL, extended-attribute and ownership preservation
-are not promised.
+File-to-file compression and decompression replace the destination only on
+success, so a failed decode leaves an existing destination intact. This does not
+protect a file truncated by shell stdout redirection. ACL, extended-attribute
+and ownership preservation are not promised.
 After a failed decode, the amount of partial stdout can differ from the original
 codec; always check the exit status.
 
@@ -260,7 +251,8 @@ gzip and XZ. Empty suffixes and suffixes containing `/` are rejected.
 Concatenated members are decoded in order; trailing non-gzip bytes produce status
 2 unless force-to-stdout mode copies them. XZ plaintext passthrough requires
 explicit stdout mode (`-c` or a cat alias), not merely stdin's default output.
-Bzip2 forced plaintext stdin is preserved even where the reference emits none.
+With force and stdout, `bzip2` copies plaintext stdin even in cases where the
+reference implementation prints nothing.
 File-to-file outputs preserve source ownership when the operating system permits
 it; ACL and extended-attribute preservation are not promised. Unsupported
 options include bzip2 `-s`/`-T` and XZ `-e`/`--check`/`--single-stream`;
@@ -286,8 +278,8 @@ USTAR and PAX metadata. `-a`, `-h`, `--wildcards`, `--zstd`, and `-m`/`--touch`
 are supported. Globs operate on bytes with ASCII character classes, not locale
 collation.
 
-The upstream tar provider's GNU creation path encodes pre-epoch modification
-times as unsigned values. PAX creation preserves signed and fractional times.
+GNU-format archives record pre-epoch modification times incorrectly. PAX
+creation preserves negative and fractional times.
 
 ## Storage reports
 
@@ -311,11 +303,9 @@ uses `/proc/self/mountinfo`, including bind mounts on the same filesystem.
 `inotifywait` and `inotifywatch` use inotify. `fsnotifywait` and
 `fsnotifywatch` use fanotify and support `-S`/`--filesystem` and `-M`/`--mount`
 scopes. All four are nonrecursive unless `-r` is requested. `@PATH` operands
-exclude paths. Recursive monitoring installs watches or marks on new
-directories using internal events without emitting or counting those events
-unless requested. Inaccessible or vanished subdirectories are skipped during
-recursive setup. Requested event filters also apply to unmount events where the
-backend provides them.
+exclude paths. Recursive monitoring also covers directories created later and
+skips inaccessible or vanished subdirectories during setup. Requested event
+filters also apply to unmount events where the backend provides them.
 
 ## Mounting filesystems
 
@@ -383,29 +373,25 @@ use procps-style headings and widths.
 
 `vmstat` uses memory values from `/proc/meminfo`, including reclaimable slab in
 cache, and scales swap rates to the selected unit. Its first context-switch rate
-uses elapsed uptime; it does not reproduce procps 4.0.7's CPU-tick divisor.
+is averaged over uptime, so it can differ from procps 4.0.7.
 `top` reports processes, not a `-H` thread view, and does not implement `-o`
 ordering. Its first CPU display is cumulative; later samples use interval deltas.
-Its `RES` and `%MEM` use resident KiB from `/proc/PID/status`; `SHR` is
-`RssFile + RssShmem` in KiB, without another page-size conversion.
+Its `RES` and `%MEM` use resident memory from `/proc/PID/status`; `SHR` is
+`RssFile + RssShmem`.
 `hugetop` has an AXE interface: `-b` selects batch mode and `-n COUNT`
 sets the sample count; it does not emulate procps NUMA, once or human-size modes.
 `tload` uses the current terminal, not a TTY pathname operand.
 
-`lsof` inspects visible `/proc` cwd, root, executable, memory-mapped file and
-descriptor entries. Like lsof, it lists each mapped file once per device and
-inode, skips the mapping whose device and inode match the executable's
-stat(2), reports a deleted mapped file as `DEL`, and appends `(stat: ...)` or
-`(path dev=...,inode=...)` to the name when the path no longer names the mapped
-file, so the executable can also appear as `mem` on file systems where those
-differ; unlike lsof, a mapped path keeps embedded whitespace.
-`-a` intersects requested selection classes; otherwise they are unioned. It
-supports
-the `-F` field subset `p`, `c`, `f`, `n`, `t`, `u`, `L`, `i`, `D`, `s`, `P`,
-`a`, `o`, `r` and the NUL terminator selector `0`; other fields are rejected.
-`+d` and `+D` select the current directory entries by device and inode, so
-hardlink aliases match and unlinked files do not. `+D` descends into real
-subdirectories on the same filesystem without following directory symlinks.
+`lsof` lists visible cwd, root, executable, memory-mapped file and descriptor
+entries. Like lsof, it lists each mapped file once, reports a deleted mapped
+file as `DEL`, and annotates the name when the path no longer refers to the
+mapped file; unlike lsof, a mapped path keeps embedded whitespace.
+`-a` intersects requested selection classes; otherwise they are combined. It
+supports the `-F` field subset `p`, `c`, `f`, `n`, `t`, `u`, `L`, `i`, `D`,
+`s`, `P`, `a`, `o`, `r` and the NUL terminator selector `0`; other fields are
+rejected. `+d` and `+D` match directory entries by device and inode, so
+hardlinks match and unlinked files do not. `+D` stays on the same filesystem
+and does not follow directory symlinks.
 
 `iostat` uses uptime for the first interval and interval deltas thereafter.
 Extended `-x` output is limited to device, `await`, `aqu-sz` and `%util` fields;
@@ -429,21 +415,20 @@ standard fields and layouts matter even when their numeric data agrees.
 Help/version identity, free-form diagnostics, vendor databases, terminal
 wrapping and generic CLI-error statuses can differ. In particular, awk/sed
 generic usage failures use status 2; tar CLI failures use 2 rather than GNU 64.
-The Linux musl artifact reports `Linux` for `uname -o`, not `GNU/Linux`.
+Linux builds report `Linux` for `uname -o`, not `GNU/Linux`.
 
-`logname` does not use `LOGNAME` or `USER` as login identity. Linux musl builds
-resolve the audit UID from `/proc/self/loginuid` through the passwd database;
-missing, unset or unresolved login identity exits with status 1. Other targets
-use the native login lookup.
+`logname` does not use `LOGNAME` or `USER` as login identity. On Linux it looks
+up the audit login UID in the passwd database; a missing, unset or unresolved
+login identity exits with status 1. Other targets use the native login lookup.
 
-`printf` floating-point conversion follows the target C `long double` ABI,
-including its precision and range; it is not arbitrary-precision decimal
-arithmetic. `more` copies input without a terminal; its interactive layout and
-`stty -a` wrapping are not exact replicas of the reference.
+`printf` floating-point conversion uses the platform's `long double` precision
+and range; it is not arbitrary-precision decimal arithmetic. `more` copies
+input without a terminal; its interactive layout and `stty -a` wrapping are not
+exact replicas of the reference.
 `stty -g` preserves active control characters and independent Linux baud rates.
-Linux `stty` accepts arbitrary decimal speeds through termios2/BOTHER, and
-recognizes the GNU `exta`/`extb` aliases. Other targets accept their standard
-baud-rate names and reject unsupported numeric rates.
+Linux `stty` accepts arbitrary decimal speeds and the GNU `exta`/`extb`
+aliases. Other targets accept their standard baud-rate names and reject
+unsupported numeric rates.
 
 Safe divergences are retained: compression preserves existing output after a
 failed decode, `strings` reports stdout failures, and valid JSON scalars remain

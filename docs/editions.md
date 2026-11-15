@@ -35,6 +35,7 @@ install -Dm755 "$AXE_EDITION_ROOT/dist/axe-x86_64-unknown-linux-musl" "$AXE_EDIT
 "$AXE_EDITION_ROOT/bin/axe" --version
 "$AXE_EDITION_ROOT/bin/axe" doctor --json
 ```
+
 Edit `config/bootstrap.json` in the edition root to set `default_args`, for
 example `["sshd"]`; an empty array keeps the normal `axe` invocation.
 

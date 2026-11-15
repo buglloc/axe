@@ -1,6 +1,6 @@
 # Vzik
 
-`vzik` collects bounded host and container evidence as a standalone binary or an AXE applet. Start with passive host context, then select a targeted command:
+`vzik` collects bounded host and container evidence. It runs as a standalone binary or as an AXE applet. Start with passive host context, then pick a targeted command:
 
 ```bash
 vzik --version
@@ -19,29 +19,48 @@ vzik validate baseline-evidence/capture.jsonl
 vzik summarize baseline-evidence/capture.jsonl
 ```
 
-`vzik capabilities` lists probes and global limits. Pass a probe ID, as in `vzik capabilities porto.list`, for its request schema and access requirements. A probe reports unavailable when it cannot access a host service; unsupported probes are reported rather than silently omitted.
+Field types, units, missing values, and encodings are specified in the [collection protocol reference](../skills/vzik/references/protocol-v5.md) and the [monitor stream reference](../skills/vzik/references/monitor-v2.md).
 
-`vzik --version` (or `-V`) prints the binary version without collecting evidence. Discovery, validation, summaries, capture stdout, and receipts are pretty-printed JSON documents. Collection and process diagnostics remain compact JSONL: one complete record per line.
+## Discovery and output
 
-`overview` emits one compact `host_overview` record: system identity, collector credentials and restrictions, visible memory/CPU/load/pressure, current cgroup limits, isolation evidence, and fixed subsystem markers. `overview --details` adds the full passive observations, including namespaces, capability sets, swap, kernel command line, and cgroup counters/pressure. The record's `detail` distinguishes `summary` from `full`; missing values remain explicit observation statuses. Neither mode executes programs or connects to services. Values describe the collector's view, not necessarily the physical host; a marker does not prove service reachability. `axe doctor` reuses the full passive observations and adds AXE-specific runtime and active execution/storage checks.
+`vzik capabilities` lists probes and global limits. Pass a probe ID, as in `vzik capabilities porto.list`, to see its request schema and access requirements. A probe that cannot reach a host service reports itself as unavailable; unsupported probes are reported, not silently omitted.
 
-`process inspect PID` reads one visible Linux process without enumerating processes. It adds memory, cumulative CPU ticks, threads, resource limits, I/O counters, bounded FD/fdinfo inventory with namespace-local socket and same-process pipe mappings, executable file metadata, LSM label, ancestry, session, and TTY data to the existing security context. Missing or denied optional sources produce partial evidence; an unreadable mandatory stat or detected PID reuse produces no process detail. It does not read environment variables, process memory, memory maps, or smaps. Command lines, executable paths, and FD targets can still contain secrets.
+`vzik --version` (or `-V`) prints the version without collecting evidence. Discovery, validation, summaries, capture stdout, and receipts are pretty-printed JSON. Collection and process diagnostics are compact JSONL, one complete record per line.
 
-Both commands are targeted capabilities, not additions to the security `collect` profile. Detailed field types, units, missing-value semantics, and scope are maintained in the [Vzik skill reference](../skills/vzik/references/protocol-v5.md); discovery remains compact and does not embed full result schemas.
+## Host overview and process inspection
 
-`monitor` is a Linux-only long-running command. Bare `vzik monitor` prints help without collecting. Use one explicit subcommand: `process [COMMON_OPTIONS]`, `files PATH... [--glob PATTERN] [COMMON_OPTIONS]`, `sockets [COMMON_OPTIONS]`, or `all --files PATH... [--glob PATTERN] [COMMON_OPTIONS]`. `--glob` is valid only for `files` and `all`; `files` takes one or more recursive roots as positional paths, while `all` takes one or more repeatable `--files PATH` options. File paths are recursive and symlinks are not followed. Process and socket classes remain host-wide within visible namespaces. The JSONL stream uses schema `raskop/vzik-monitor` version `2`, with `seq` on every record, `stream_start.classes`, snapshots, `event`, `gap`, `diagnostic`, and `stream_end` records. Events and gaps use `provider`; diagnostics carry `{provider, code, message, source?}`. `stream_end` has `stop_reason`, `collection_outcome`, and `classes`, with terminal status represented by `collection_outcome`. Process connector events are exact when available; `/proc` scanning is sampled. Files use fanotify filesystem marks with process attribution when privileged, and recursive inotify without attribution otherwise. Sockets use sampled `/proc/net` diffs. Process records always include bounded `executable` and `argv`; process output is sensitive, and `--full` adds bounded environment data. A selected sampled class, unavailable provider, gap, or eviction produces exit status `3`; a closed stdout returns `141`.
+`overview` emits one compact `host_overview` record: system identity, collector credentials and restrictions, visible memory, CPU, load and pressure, current cgroup limits, isolation evidence, and subsystem markers. `overview --details` adds namespaces, capability sets, swap, the kernel command line, and cgroup counters and pressure. Neither mode runs programs or connects to services. Values describe what the collector can see, which is not necessarily the physical host, and a subsystem marker does not prove that the service is reachable. `axe doctor` includes the detailed overview and adds AXE runtime, execution, and storage checks.
 
-Collection writes protocol-v5 JSONL. Every record carries `schema: "raskop/vzik-collection"` and `schema_version: 5`. A final `stream_end` closes the stream, but does not guarantee complete coverage: inspect its `collection_outcome`, `truncated`, capability coverage, and capabilities that were not started. A closed degraded collection exits with status `3`; complete collection exits with status `0`. A stream without `stream_end` is incomplete. Use `validate` to check saved streams and `summarize` to inspect coverage; both reject non-collection schemas.
+`process inspect PID` reads one visible Linux process: memory, CPU time, threads, resource limits, I/O counters, open descriptors, executable metadata, LSM label, ancestry, session, and TTY, alongside its security context. If optional sources are missing or denied, the result is partial. If the process stat file is unreadable or the PID has been reused, there is no result. It does not read environment variables, process memory, or memory maps, but command lines, executable paths, and descriptor targets can still contain secrets.
 
-`network interfaces` reads sysfs link metadata. If `/sys/class/net` cannot be enumerated, it reports the source failure and retains available `/proc/net/dev` traffic counters with `partial` coverage (exit `3`). Those counters do not establish missing link metadata. If the fallback source is also unreadable, the capability is `unavailable`.
+Neither command is part of the `collect` profile.
 
-`vzik capture COMMAND --output-dir DIR` creates a new mode-0700 directory containing `capture.jsonl`, `receipt.json`, and `stderr.jsonl`, each mode 0600. Its parent must already exist; an existing directory, file, or symlink is rejected. This destination cannot be combined with `--output`, `--receipt`, or `--stderr`. For custom filenames, use `--output FILE --receipt FILE [--stderr FILE]`; the default stderr path appends `.stderr` to the output path. Both modes refuse to overwrite artifacts. Capture writes evidence and stderr directly, then publishes and verifies a receipt after validating the stream. Interruption can leave a directory and file prefixes without a receipt. A receipt can describe degraded evidence; it does not mean every probe succeeded.
+## Monitoring
 
-Protocol v5 and `axe_doctor` schema v5 use sparse observations: missing values, reasons, errors, and empty evidence are omitted; observed zero, false, and empty values remain. Each isolation layer reports `indicator_present`, provider, confidence, and evidence, with a shared heuristic interpretation. UID/GID maps name the parent namespace; cgroup membership paths are plain strings for valid UTF-8 and `{display, base64}` objects for invalid UTF-8. AXE encoded OS values such as `argv0`, paths, and environment values use strings or `{base64}` objects. Pressure groups carry `visible_system` or `visible_current_cgroup` scope. Process credentials use `uids`; RSS is reported in bytes and I/O counter names distinguish read/write interfaces from accounted storage activity.
+`monitor` is Linux-only and runs until it is stopped or reaches a limit such as `--duration`. Bare `vzik monitor` prints help. Choose one subcommand:
 
-Capability coverage retains loss counts and `truncated`. The stream-level flag is `stream_end.truncated`, `summarize` exposes `stream.truncated`, and capture summaries and receipts use `stream_truncated`. There is no numeric stream-wide coverage aggregate. Record positions come from `seq`, while `counters.jsonl_bytes` counts bytes before the terminal line. The `baseline` profile has fixed membership and order.
+```text
+vzik monitor process [COMMON_OPTIONS]
+vzik monitor files PATH... [--glob PATTERN] [COMMON_OPTIONS]
+vzik monitor sockets [COMMON_OPTIONS]
+vzik monitor all --files PATH... [--glob PATTERN] [COMMON_OPTIONS]
+```
 
-Saved JSONL can be projected without changing its framing or recollecting data. Check the summary first, then use the JSONL reader's query selector or pretty `jq` output:
+File paths are watched recursively and symlinks are not followed. Process and socket monitoring covers everything visible in the collector's namespaces.
+
+Process events are exact when the kernel process connector is available and sampled from `/proc` otherwise. File events name the responsible process only when vzik has the privileges for fanotify; without them, inotify reports changes without attribution. Socket changes are always sampled.
+
+Process records include the executable and arguments, so treat the output as sensitive; `--full` also adds environment data. Monitoring exits with status `3` when a selected class is only sampled, a provider is unavailable, events were dropped, or tracked state was evicted, and with `141` when stdout closes.
+
+## Collection and capture
+
+`collect` and other collection commands write protocol-v5 JSONL. A final `stream_end` record closes the stream but does not guarantee full coverage: check its `collection_outcome`, `truncated`, and per-capability coverage. A complete collection exits with status `0`; a degraded one exits with `3`. A stream without `stream_end` is incomplete. Use `validate` to check a saved stream and `summarize` to see its coverage.
+
+`vzik capture COMMAND --output-dir DIR` creates a new private directory with `capture.jsonl`, `receipt.json`, and `stderr.jsonl`. The parent must exist and `DIR` must not. For custom file names, use `--output FILE --receipt FILE [--stderr FILE]` instead; stderr then defaults to the output path plus `.stderr`. Capture never overwrites existing files. It writes the receipt only after validating the stream, so an interrupted capture leaves files without a receipt. A receipt can describe degraded evidence; it does not mean every probe succeeded.
+
+## Reading saved evidence
+
+Check the summary first, then select records with `jq`:
 
 ```bash
 vzik capture overview --output-dir overview-evidence
@@ -49,6 +68,6 @@ vzik summarize overview-evidence/capture.jsonl
 jq 'select(.type == "data" and .data_kind == "host_overview") | .data | {scope, detail, host: .environment.host, uid_map: .environment.restrictions.uid_map}' overview-evidence/capture.jsonl
 ```
 
-For a process projection, retain `scope` and `pid` alongside the selected resource fields.
+When projecting process records, keep `scope` and `pid` alongside the selected fields.
 
-Evidence may contain sensitive host data. Keep capture, receipt, and stderr files together when sharing or archiving a collection.
+Evidence can contain sensitive host data. Keep the capture, receipt, and stderr files together when sharing or archiving a collection.
