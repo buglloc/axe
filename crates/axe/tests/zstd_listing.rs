@@ -144,7 +144,10 @@ fn known_sizes_ratios_totals_and_unknown_sizes_match_zstd() {
 fn skippable_frames_and_sparse_payloads_are_scanned_without_decoding() {
     let scratch = Scratch::new();
     let skip = b"\x5f\x2a\x4d\x18\x03\0\0\0abc";
-    scratch.put("skips.zst", &[skip.as_slice(), KNOWN, skip.as_slice()].concat());
+    scratch.put(
+        "skips.zst",
+        &[skip.as_slice(), KNOWN, skip.as_slice()].concat(),
+    );
     table(
         &scratch.list(&["-l", "skips.zst"]),
         0,
@@ -159,7 +162,8 @@ fn skippable_frames_and_sparse_payloads_are_scanned_without_decoding() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         output.stdout,
-        format!("{HEADER}     1      1    1.00 GiB         0   B  0.000   None  sparse.zst\n").as_bytes()
+        format!("{HEADER}     1      1    1.00 GiB         0   B  0.000   None  sparse.zst\n")
+            .as_bytes()
     );
 
     // A structurally complete compressed block need not contain a decodable payload.
@@ -237,6 +241,53 @@ fn invalid_structure_and_operands_report_failure_without_hiding_good_files() {
                 .contains("does not support reading from standard input")
         );
     }
+}
+
+#[test]
+fn end_of_options_preserves_literal_dash_operands() {
+    let scratch = Scratch::new();
+    scratch.put("-", KNOWN);
+    scratch.put("known.zst", KNOWN);
+    let dash_row = "     1      0      12   B         3   B  0.250   None  -\n";
+    let known_row = "     1      0      12   B         3   B  0.250   None  known.zst\n";
+    let totals = concat!(
+        "----------------------------------------------------------------- \n",
+        "     2      0      24   B         6   B  0.250         2 files\n"
+    );
+    table(&scratch.list(&["-l", "--", "-"]), 0, dash_row);
+    table(
+        &scratch.list(&["-l", "--", "-", "-"]),
+        0,
+        &format!("{dash_row}{dash_row}{totals}"),
+    );
+    table(
+        &scratch.list(&["-l", "known.zst", "--", "-"]),
+        0,
+        &format!("{known_row}{dash_row}{totals}"),
+    );
+    table(
+        &scratch.list(&["-l", "--", "-", "known.zst"]),
+        0,
+        &format!("{dash_row}{known_row}{totals}"),
+    );
+    for args in [
+        &["-l", "-"][..],
+        &["-l", "-", "--", "-"],
+        &["-l", "known.zst", "-", "--", "-"],
+    ] {
+        let output = scratch.list(args);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            b"zstd: --list does not support reading from standard input \n"
+        );
+    }
+
+    fs::remove_file(scratch.0.join("-")).unwrap();
+    let output = scratch.list(&["-l", "--", "-"]);
+    table(&output, 1, "");
+    assert_eq!(output.stderr, b"Error : - is not a file \n");
 }
 
 #[test]

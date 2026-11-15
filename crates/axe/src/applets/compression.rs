@@ -103,6 +103,7 @@ struct Options {
     quiet: bool,
     verbose: bool,
     zstd_display_level: i32,
+    zstd_stdin_operand: bool,
     recursive: bool,
     level: i32,
     threads: u32,
@@ -135,6 +136,7 @@ impl Options {
             quiet: false,
             verbose: false,
             zstd_display_level: 2,
+            zstd_stdin_operand: false,
             recursive: false,
             level: match format {
                 Format::Bzip2 => 9,
@@ -184,6 +186,9 @@ impl Options {
                     options.short_option(flag)?;
                 }
             } else {
+                if matches!(format, Format::Zstd) && text == "-" {
+                    options.zstd_stdin_operand = true;
+                }
                 options.files.push(argument);
             }
         }
@@ -1052,7 +1057,7 @@ impl Options {
         let level = self.zstd_display_level;
         let mut output = io::stdout().lock();
         let mut errors = io::stderr().lock();
-        if self.files.is_empty() || self.files.iter().any(|file| file == "-") {
+        if self.files.is_empty() || self.zstd_stdin_operand {
             if level >= 1 {
                 writeln!(
                     errors,
