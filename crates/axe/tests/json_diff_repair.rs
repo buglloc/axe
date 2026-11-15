@@ -149,3 +149,36 @@ fn jq_slicing_null_returns_null() {
         b"null\n",
     );
 }
+
+#[test]
+fn jq_global_regex_preserves_adjacent_and_trailing_empty_matches() {
+    let scratch = Scratch::new();
+    expect_output(
+        scratch.run(
+            "jq",
+            &["-cn", "[\"aa\" | match(\"a*\"; \"g\") | [.offset, .length, .string]]"],
+            b"",
+        ),
+        0,
+        b"[[0,2,\"aa\"],[2,0,\"\"]]\n",
+    );
+    expect_output(
+        scratch.run(
+            "jq",
+            &["-cn", "[\"a猫\" | match(\"a*\"; \"g\") | [.offset, .length, .string]]"],
+            b"",
+        ),
+        0,
+        b"[[0,1,\"a\"],[1,0,\"\"],[2,0,\"\"]]\n",
+    );
+    expect_output(
+        scratch.run("jq", &["-cn", "[\"aa\" | match(\"a*\"; \"gn\") | .string]"], b""),
+        0,
+        b"[\"aa\"]\n",
+    );
+    expect_output(
+        scratch.run("jq", &["-cn", "\"aa\" | gsub(\"a*\"; \"X\")"], b""),
+        0,
+        b"\"XX\"\n",
+    );
+}

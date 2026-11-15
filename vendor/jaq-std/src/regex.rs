@@ -150,8 +150,17 @@ pub fn regex<'a>(
     let mut bc = ByteChar::new(s);
     let mut out = Vec::new();
 
-    for c in re.captures_iter(s) {
+    let mut search_byte = Some(0);
+    while let Some(c) = search_byte.and_then(|start| re.captures_at(s, start)) {
         let whole = c.get(0).unwrap();
+        search_byte = if whole.is_empty() {
+            s[whole.end()..]
+                .char_indices()
+                .next()
+                .map(|(_, end, _)| whole.end() + end)
+        } else {
+            Some(whole.end())
+        };
         if flags.ignore_empty() && whole.as_bytes().is_empty() {
             continue;
         }
