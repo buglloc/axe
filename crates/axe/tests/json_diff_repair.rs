@@ -128,6 +128,42 @@ fn diff_labels_name_binary_and_brief_reports() {
 }
 
 #[test]
+fn sdiff_binary_comparisons_are_results_not_errors() {
+    let scratch = Scratch::new();
+    fs::write(scratch.0.join("left"), b"a\0b\n").unwrap();
+    for (right, status, expected) in [
+        (b"a\0b\n".as_slice(), 0, b"".as_slice()),
+        (
+            b"a\0c\n".as_slice(),
+            1,
+            b"Binary files left and right differ\n".as_slice(),
+        ),
+    ] {
+        fs::write(scratch.0.join("right"), right).unwrap();
+        expect_output(
+            scratch.run("sdiff", &["left", "right"], b""),
+            status,
+            expected,
+        );
+        fs::write(scratch.0.join("out"), b"old").unwrap();
+        expect_output(
+            scratch.run("sdiff", &["-o", "out", "left", "right"], b""),
+            status,
+            expected,
+        );
+        assert_eq!(fs::read(scratch.0.join("out")).unwrap(), b"");
+    }
+    let failure = scratch.run("sdiff", &["-o", "missing/out", "left", "right"], b"");
+    assert_eq!(failure.status.code(), Some(2));
+    assert!(failure.stdout.is_empty());
+    assert!(!failure.stderr.is_empty());
+    let text = scratch.run("sdiff", &["-a", "left", "right"], b"");
+    assert_eq!(text.status.code(), Some(1));
+    assert!(text.stderr.is_empty());
+    assert!(text.stdout.contains(&0));
+}
+
+#[test]
 fn jq_slicing_null_returns_null() {
     let scratch = Scratch::new();
     expect_output(

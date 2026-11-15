@@ -173,6 +173,9 @@ whitespace modes (`-i`, `-w`, `-b`, `-E`, `-Z`), `-B`, `-I`,
 and locale display columns in UTF-8 locales. `-x`, `-X`, `-D`, `-F`, `-l`, `-p`,
 `-H`, `--color`, and custom line-format options are rejected.
 `sdiff` prints side-by-side output and merges interactively with `-o FILE`.
+Without `-a`, differing binary inputs produce a stdout report and status 1;
+identical binary inputs produce no output. Binary merge output is empty unless
+`-a` forces text handling, matching GNU.
 `diff`, `cmp`, and `sdiff` distinguish differences or merge decisions from
 input errors. Case folding is ASCII-only. `diff -I` accepts a byte-oriented
 BRE subset and rejects unsupported constructs, including backreferences.

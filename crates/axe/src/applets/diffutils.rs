@@ -110,13 +110,28 @@ pub fn sdiff(args: Vec<OsString>) -> i32 {
             return 2;
         }
     };
-    if left != right && !options.diff.text && (left.contains(&0) || right.contains(&0)) {
-        eprintln!(
-            "sdiff: Binary files {} and {} differ",
-            options.diff.params.from.to_string_lossy(),
-            options.diff.params.to.to_string_lossy()
+    if !options.diff.text && (left.contains(&0) || right.contains(&0)) {
+        if let Some(output) = &options.output
+            && let Err(error) = fs::File::create(output)
+        {
+            eprintln!("sdiff: {}: {error}", Path::new(output).display());
+            return 2;
+        }
+        if left == right {
+            return 0;
+        }
+        let from = &options.diff.params.from;
+        let to = &options.diff.params.to;
+        let mut output = Vec::with_capacity(
+            b"Binary files ".len()
+                + from.as_encoded_bytes().len()
+                + b" and ".len()
+                + to.as_encoded_bytes().len()
+                + b" differ\n".len(),
         );
-        return 2;
+        output.extend_from_slice(b"Binary files ");
+        append_names(&mut output, from, to, b" differ\n");
+        return write_output("sdiff", &output, 1);
     }
     let from_lines = split_lines(&left);
     let to_lines = split_lines(&right);
