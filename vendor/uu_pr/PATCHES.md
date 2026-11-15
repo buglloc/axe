@@ -15,8 +15,12 @@ Source: the `uu_pr` 0.12.0 crate from crates.io, upstream revision
   now follow GNU pr.
 - Keep a standalone manifest without the upstream benchmark and benchmark
   dependencies; AXE owns dependency resolution and locales.
+- Preserve input form-feed page boundaries with omitted headers, including
+  empty pages, and keep record numbering continuous across those boundaries.
+- Do not double-space after an unterminated final record or a form-feed break.
 
 Upstreamability: byte output, option parsing, and layout target GNU pr and are
 upstreamable; no upstream issue or commit is recorded in AXE.
 
-AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs`.
+AXE consumer regressions are in `crates/axe/tests/core_text_compat.rs` and
+`crates/axe/tests/layout_repair.rs`.

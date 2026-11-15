@@ -94,6 +94,9 @@ struct FileLine {
     page_number: usize,
     line_number: usize,
     line_content: Vec<u8>,
+    terminated: bool,
+    form_feed: bool,
+    has_record: bool,
 }
 
 impl FileLine {
@@ -103,6 +106,9 @@ impl FileLine {
             page_number,
             line_number,
             line_content: buf.to_vec(),
+            terminated: true,
+            form_feed: false,
+            has_record: true,
         }
     }
 }
@@ -1221,13 +1227,19 @@ fn get_pages(
         if buf[i] == FF {
             // Treat everything up to (but not including) the form feed
             // character as the last line of the page.
-            if i > 0 && i == prev && buf[i - 1] == NL {
-                // If the file has the pattern `\n\f`, don't treat the
-                // `\f` as its own line; instead ignore the empty line.
-            } else {
-                let file_line = FileLine::from_buf(file_id, page_num, line_num, &buf[prev..i]);
+            if i > prev {
+                let mut file_line =
+                    FileLine::from_buf(file_id, page_num, line_num, &buf[prev..i]);
+                file_line.terminated = false;
                 page.push(file_line);
+                line_num += 1;
             }
+            if page.is_empty() {
+                let mut marker = FileLine::from_buf(file_id, page_num, line_num, b"");
+                marker.has_record = false;
+                page.push(marker);
+            }
+            page.last_mut().unwrap().form_feed = true;
 
             // Remember where the last line ended.
             prev = i + 1;
@@ -1272,7 +1284,8 @@ fn get_pages(
 
     // Consider all trailing bytes as the last line.
     if prev < buf.len() {
-        let file_line = FileLine::from_buf(file_id, page_num, line_num, &buf[prev..]);
+        let mut file_line = FileLine::from_buf(file_id, page_num, line_num, &buf[prev..]);
+        file_line.terminated = false;
         page.push(file_line);
     }
 
@@ -1404,6 +1417,8 @@ fn write_page(
     }
     if options.display_header_and_trailer || options.form_feed_used {
         writer.write_all(page_separator)?;
+    } else if lines.iter().any(|line| line.form_feed) {
+        writer.write_all(&[FF])?;
     }
     writer.flush()?;
     Ok(())
@@ -1430,6 +1445,9 @@ fn to_table_merged(
     let mut file_id = None;
     let mut row = 0;
     for line in lines {
+        if !line.has_record {
+            continue;
+        }
         if file_id != Some(line.file_id) {
             file_id = Some(line.file_id);
             row = 0;
@@ -1518,6 +1536,9 @@ fn write_columns(
     lines: &[FileLine],
     options: &OutputOptions,
 ) -> io::Result<()> {
+    if !lines.iter().any(|line| line.has_record) {
+        return Ok(());
+    }
     let line_separator = options.content_line_separator.as_bytes();
     let content_lines_per_page = if options.double_space {
         (options.content_lines_per_page / 2).max(1)
@@ -1605,7 +1626,16 @@ fn write_columns(
             }
         }
         // Pending spaces at the right edge are not column content.
-        output.writer.write_all(line_separator)?;
+        if options.double_space
+            && row
+                .iter()
+                .flatten()
+                .any(|line| !line.terminated || line.form_feed)
+        {
+            output.writer.write_all(b"\n")?;
+        } else {
+            output.writer.write_all(line_separator)?;
+        }
     }
     Ok(())
 }

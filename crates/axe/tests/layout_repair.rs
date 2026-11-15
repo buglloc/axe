@@ -187,3 +187,22 @@ fn csplit_suppresses_records_at_repeated_numeric_boundaries() {
     assert_eq!(fs::read(scratch.path().join("xx01")).unwrap(), b"");
     assert_eq!(fs::read(scratch.path().join("xx02")).unwrap(), b"");
 }
+
+#[test]
+fn pr_preserves_input_page_breaks_and_continuous_record_numbers() {
+    let scratch = Scratch::new();
+    for (args, expected) in [
+        (&["-t"][..], &b"a\n\x0cb\nc\n"[..]),
+        (&["-t", "-n:3"][..], &b"  1:a\n\x0c  2:b\n  3:c\n"[..]),
+        (&["-t", "-d"][..], &b"a\n\x0cb\n\nc\n\n"[..]),
+    ] {
+        assert_success(run(scratch.path(), "pr", args, b"a\x0cb\nc\n"), expected);
+    }
+    assert_success(run(scratch.path(), "pr", &["-t"], b"\x0c\x0ca"), b"\x0c\x0ca\n");
+}
+
+#[test]
+fn pr_does_not_double_space_after_an_unterminated_record() {
+    let scratch = Scratch::new();
+    assert_success(run(scratch.path(), "pr", &["-t", "-d"], b"a\nb"), b"a\n\nb\n");
+}
