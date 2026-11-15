@@ -13,6 +13,8 @@ Source: the `uu_fmt` 0.12.0 crate from crates.io, upstream revision
   dependencies; AXE owns dependency resolution and locales.
 - Treat carriage returns and other nonblank control bytes as text instead of
   stripping CRLF or consuming them as word separators.
+- Preserve control whitespace as word-leading text after it ends the preceding
+  word, so uniform spacing can separate it without deleting the byte.
 - Keep record terminators on unformatted lines, including nonmatching prefix
   records, rather than synthesizing a newline at EOF.
 - Diagnose failed file operands and continue formatting later files while

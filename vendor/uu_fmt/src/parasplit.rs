@@ -107,9 +107,9 @@ fn byte_width(bytes: &[u8]) -> usize {
     width
 }
 
-/// GNU fmt separates words at spaces, tabs, and record boundaries.
+/// Control whitespace ends a word but is retained at the start of the next word.
 fn is_fmt_whitespace(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n')
+    c.is_ascii_whitespace() || c == '\x0b'
 }
 
 fn is_fmt_whitespace_byte(b: u8) -> bool {
@@ -658,7 +658,7 @@ impl WordSplit<'_> {
         while idx < self.length {
             let info = decode_char_info(self.bytes, idx);
             let is_whitespace = info.is_ascii && info.ch.is_some_and(is_fmt_whitespace);
-            if is_whitespace {
+            if is_whitespace && idx > word_start {
                 break;
             }
             word_nchars += info.width;

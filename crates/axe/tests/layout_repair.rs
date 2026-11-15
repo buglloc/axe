@@ -266,3 +266,21 @@ fn fmt_uniform_layout_uses_paragraph_suffix_costs() {
         b" one two three\n four five\nsix seven\neight nine\n",
     );
 }
+
+#[test]
+fn fmt_uniform_spacing_retains_control_word_boundaries() {
+    let scratch = Scratch::new();
+    assert_success(
+        run(scratch.path(), "fmt", &["-u", "-w15"], b"a\r\nb\r\nlast\r"),
+        b"a \r b \r last \r\n",
+    );
+    assert_success(
+        run(
+            scratch.path(),
+            "fmt",
+            &["-u", "-w15"],
+            b"a\x08b\rc\x0b\x0cd\n\0e\n",
+        ),
+        b"a\x08b \rc \x0b \x0cd \0e\n",
+    );
+}
