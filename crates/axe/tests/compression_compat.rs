@@ -665,15 +665,20 @@ fn forced_stdout_plaintext_passthrough_never_hides_recognized_corrupt_members() 
         let output = run(scratch.path(), applet, &["-dcf"], &corrupted);
         assert!(!output.status.success(), "{applet}: {output:?}");
         assert_ne!(output.stdout, corrupted, "{applet}");
+        let magic_length = match format {
+            "xz" => 6,
+            "zstd" => 4,
+            _ => 3,
+        };
         let output = run(
             scratch.path(),
             applet,
             &["-dcf"],
-            &fixture(format, PAYLOAD)[..3],
+            &fixture(format, PAYLOAD)[..magic_length],
         );
         assert!(!output.status.success(), "{applet}: {output:?}");
         let mut concatenated = fixture(format, PAYLOAD);
-        concatenated.extend_from_slice(&fixture(format, PAYLOAD)[..3]);
+        concatenated.extend_from_slice(&fixture(format, PAYLOAD)[..magic_length]);
         let output = run(scratch.path(), applet, &["-dcf"], &concatenated);
         assert!(!output.status.success(), "{applet}: {output:?}");
     }

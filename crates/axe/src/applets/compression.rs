@@ -927,7 +927,7 @@ impl Options {
                 let length = read_prefix(&mut input, &mut magic)?;
                 let prefix = &magic[..length];
                 let mut input = prefix.chain(input);
-                if passthrough && !self.test && !matches_magic(prefix, b"\xfd7zXZ\0") {
+                if passthrough && !self.test && !prefix.starts_with(b"\xfd7zXZ\0") {
                     Decoded::clean(io::copy(&mut input, &mut output)?)
                 } else {
                     Decoded::clean(io::copy(&mut XzReader::new(input, true), &mut output)?)
@@ -1361,9 +1361,7 @@ fn matches_magic(prefix: &[u8], magic: &[u8]) -> bool {
 
 fn zstd_magic(prefix: &[u8]) -> bool {
     if prefix.len() < 4 {
-        return (0xfd2f_b522_u32..=0xfd2f_b528)
-            .chain(0x184d_2a50..=0x184d_2a5f)
-            .any(|magic| matches_magic(prefix, &magic.to_le_bytes()));
+        return false;
     }
     let magic = u32::from_le_bytes(prefix[..4].try_into().expect("four-byte magic"));
     (0xfd2f_b522..=0xfd2f_b528).contains(&magic) || magic & 0xffff_fff0 == 0x184d_2a50

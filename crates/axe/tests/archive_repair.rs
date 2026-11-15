@@ -223,8 +223,8 @@ fn zstd_forced_stdout_copies_plaintext_after_complete_frames() {
         }
     }
     for tail in [
-        &first[..3],
-        &b"\x50\x2a\x4d"[..],
+        &first[..4],
+        &b"\x50\x2a\x4d\x18"[..],
         &b"\x50\x2a\x4d\x18\x04\0\0\0x"[..],
     ] {
         let mut compressed = first.clone();
@@ -320,5 +320,38 @@ fn base32_invalid_alphabet_bytes_commit_the_preceding_padded_prefix() {
         let output = run(scratch.path(), applet, &args, &encoded[..7]);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(output.stdout.is_empty(), "{output:?}");
+    }
+}
+
+#[test]
+fn incomplete_compression_magic_is_plaintext_only_in_forced_stdout_mode() {
+    let scratch = Scratch::new("incomplete-magic");
+    for (applet, magic) in [
+        ("xz", &b"\xfd7zXZ\0"[..]),
+        ("unxz", &b"\xfd7zXZ\0"[..]),
+        ("xzcat", &b"\xfd7zXZ\0"[..]),
+        ("zstd", &b"\x28\xb5\x2f\xfd"[..]),
+        ("zstd", &b"\x50\x2a\x4d\x18"[..]),
+    ] {
+        for length in 1..magic.len() {
+            let prefix = &magic[..length];
+            let output = run(scratch.path(), applet, &["-dcf"], prefix);
+            assert!(output.status.success(), "{applet} {prefix:?}: {output:?}");
+            assert_eq!(output.stdout, prefix);
+            let output = run(scratch.path(), applet, &["-dc"], prefix);
+            assert!(!output.status.success(), "{applet} {prefix:?}: {output:?}");
+        }
+        let output = run(scratch.path(), applet, &["-dcf"], magic);
+        assert!(!output.status.success(), "{applet} {magic:?}: {output:?}");
+    }
+    let frame = zstd::stream::encode_all(&b"payload\n"[..], 1).unwrap();
+    for magic in [&b"\x28\xb5\x2f\xfd"[..], &b"\x50\x2a\x4d\x18"[..]] {
+        for length in 1..magic.len() {
+            let mut input = frame.clone();
+            input.extend_from_slice(&magic[..length]);
+            let output = run(scratch.path(), "zstd", &["-dcf"], &input);
+            assert!(output.status.success(), "{input:?}: {output:?}");
+            assert_eq!(output.stdout, [&b"payload\n"[..], &magic[..length]].concat());
+        }
     }
 }
