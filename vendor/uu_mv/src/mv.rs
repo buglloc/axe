@@ -804,7 +804,7 @@ fn rename(
 ) -> io::Result<()> {
     let mut backup_path = None;
 
-    if to.exists() {
+    if to.symlink_metadata().is_ok() {
         if opts.update == UpdateMode::None {
             if opts.debug {
                 println!("{}", translate!("mv-debug-skipped", "target" => to.quote()));
