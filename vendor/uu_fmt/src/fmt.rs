@@ -338,7 +338,9 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let mut ostream = BufWriter::new(stdout());
 
     for file_name in &files {
-        process_file(file_name, &fmt_opts, &mut ostream)?;
+        if let Err(error) = process_file(file_name, &fmt_opts, &mut ostream) {
+            uucore::show!(error);
+        }
     }
 
     Ok(())

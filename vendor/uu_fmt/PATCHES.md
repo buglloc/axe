@@ -15,6 +15,8 @@ Source: the `uu_fmt` 0.12.0 crate from crates.io, upstream revision
   stripping CRLF or consuming them as word separators.
 - Keep record terminators on unformatted lines, including nonmatching prefix
   records, rather than synthesizing a newline at EOF.
+- Diagnose failed file operands and continue formatting later files while
+  retaining a failing command status.
 
 Upstreamability: width and line-break changes target GNU fmt and are
 upstreamable; no upstream issue or commit is recorded in AXE.

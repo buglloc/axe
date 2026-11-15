@@ -103,3 +103,13 @@ fn fmt_nonmatching_prefix_records_keep_their_terminators() {
         );
     }
 }
+
+#[test]
+fn fmt_missing_operand_does_not_suppress_later_files() {
+    let scratch = Scratch::new();
+    fs::write(scratch.path().join("a"), b"abc\tdef").unwrap();
+    let output = run(scratch.path(), "fmt", &["missing", "a"], b"");
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, b"abc\tdef\n");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing"));
+}
