@@ -277,3 +277,32 @@ fn uniq_field_skipping_uses_horizontal_blanks_only() {
         b"a\nb\0",
     );
 }
+
+#[test]
+fn paste_serial_keeps_output_around_missing_operands() {
+    let scratch = Scratch::new();
+    fs::write(scratch.path().join("a"), b"a\nb\n").unwrap();
+    fs::write(scratch.path().join("b"), b"c").unwrap();
+    for args in [
+        &["-s", "a", "missing", "b"][..],
+        &["-s", "missing", "a", "b"][..],
+    ] {
+        let output = run(scratch.path(), "paste", args, b"");
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(output.stdout, b"a\tb\nc\n");
+        assert!(!output.stderr.is_empty());
+    }
+    fs::write(scratch.path().join("a"), b"a\0b\0").unwrap();
+    let output = run(scratch.path(), "paste", &["-zs", "a", "missing", "b"], b"");
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, b"a\tb\0c\0");
+    assert!(!output.stderr.is_empty());
+    let mut input = vec![b'x'; 8191];
+    input.extend_from_slice(b"\na\nb\n");
+    let mut expected = vec![b'x'; 8191];
+    expected.extend_from_slice(b"|a:b\n");
+    assert_success(
+        run(scratch.path(), "paste", &["-s", "-d|:"], &input),
+        &expected,
+    );
+}

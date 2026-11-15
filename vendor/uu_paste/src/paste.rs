@@ -5,18 +5,18 @@
 
 use clap::{Arg, ArgAction, Command};
 use std::cell::{OnceCell, RefCell};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Stdin, Write, stdin, stdout};
 use std::iter::Cycle;
-use std::path::Path;
 use std::rc::Rc;
 use std::slice::Iter;
-use uucore::error::{UResult, USimpleError};
+use uucore::display::Quotable;
+use uucore::error::{FromIo, UResult, USimpleError};
 use uucore::format_usage;
 use uucore::i18n::charmap::mb_char_len;
 use uucore::line_ending::LineEnding;
-use uucore::translate;
+use uucore::{show, translate};
 
 mod options {
     pub const DELIMITER: &str = "delimiters";
@@ -95,30 +95,36 @@ fn paste(
     let unescaped_and_encoded_delimiters = parse_delimiters(delimiters)?;
 
     let stdin_once_cell = OnceCell::<Rc<RefCell<Stdin>>>::new();
+    let line_ending_byte = u8::from(line_ending);
+    let mut stdout = stdout().lock();
+    if serial {
+        for filename in &filenames {
+            let input_source = match InputSource::open(filename, &stdin_once_cell) {
+                Ok(input_source) => input_source,
+                Err(error) => {
+                    show!(error);
+                    continue;
+                }
+            };
+            write_serial_input_source(
+                &mut stdout,
+                input_source,
+                &unescaped_and_encoded_delimiters,
+                line_ending_byte,
+            )?;
+        }
+        return Ok(());
+    }
 
     let mut input_source_vec = Vec::with_capacity(filenames.len());
 
     for filename in filenames {
-        let input_source = if filename == "-" {
-            InputSource::StandardInput(
-                stdin_once_cell
-                    .get_or_init(|| Rc::new(RefCell::new(stdin())))
-                    .clone(),
-            )
-        } else {
-            let path = Path::new(&filename);
-            let file = File::open(path)?;
-            InputSource::File(BufReader::new(file))
-        };
-
-        input_source_vec.push(input_source);
+        input_source_vec.push(InputSource::open(&filename, &stdin_once_cell)?);
     }
 
-    let line_ending_byte = u8::from(line_ending);
     let input_source_vec_len = input_source_vec.len();
-    let mut stdout = stdout().lock();
 
-    if !serial && input_source_vec_len == 1 {
+    if input_source_vec_len == 1 {
         // With a single input source (no -s), `paste` output is identical to input,
         // except that a missing final line ending must be added.
         // Stream directly to avoid unbounded line buffering on inputs like /dev/zero.
@@ -137,69 +143,73 @@ fn paste(
 
     let mut output = Vec::new();
 
-    if serial {
-        for input_source in &mut input_source_vec {
-            output.clear();
+    let mut eof = vec![false; input_source_vec_len];
 
-            while input_source.read_until(line_ending_byte, &mut output)? > 0 {
-                remove_trailing_line_ending_byte(line_ending_byte, &mut output);
-                delimiter_state.write_delimiter(&mut output);
-            }
+    loop {
+        output.clear();
 
-            delimiter_state.remove_trailing_delimiter(&mut output);
+        let mut eof_count = 0;
 
-            stdout.write_all(&output)?;
-            stdout.write_all(line_ending_byte_array_ref)?;
-
-            // In serial mode each input file is concatenated onto its own
-            // output line, so the delimiter list has to restart from its first
-            // element for the next file rather than carrying the cycle over.
-            delimiter_state.reset_to_first_delimiter();
-        }
-    } else {
-        let mut eof = vec![false; input_source_vec_len];
-
-        loop {
-            output.clear();
-
-            let mut eof_count = 0;
-
-            for (i, input_source) in input_source_vec.iter_mut().enumerate() {
-                if eof[i] {
-                    eof_count += 1;
-                } else {
-                    match input_source.read_until(line_ending_byte, &mut output)? {
-                        0 => {
-                            eof[i] = true;
-                            eof_count += 1;
-                        }
-                        _ => {
-                            remove_trailing_line_ending_byte(line_ending_byte, &mut output);
-                        }
+        for (i, input_source) in input_source_vec.iter_mut().enumerate() {
+            if eof[i] {
+                eof_count += 1;
+            } else {
+                match input_source.read_until(line_ending_byte, &mut output)? {
+                    0 => {
+                        eof[i] = true;
+                        eof_count += 1;
+                    }
+                    _ => {
+                        remove_trailing_line_ending_byte(line_ending_byte, &mut output);
                     }
                 }
-
-                delimiter_state.write_delimiter(&mut output);
             }
 
-            if eof_count == input_source_vec_len {
-                break;
-            }
-
-            delimiter_state.remove_trailing_delimiter(&mut output);
-
-            stdout.write_all(&output)?;
-            stdout.write_all(line_ending_byte_array_ref)?;
-
-            // Quote:
-            //     When the -s option is not specified:
-            //     [...]
-            //     The delimiter shall be reset to the first element of list after each file operand is processed.
-            // https://pubs.opengroup.org/onlinepubs/9799919799/utilities/paste.html
-            delimiter_state.reset_to_first_delimiter();
+            delimiter_state.write_delimiter(&mut output);
         }
+
+        if eof_count == input_source_vec_len {
+            break;
+        }
+
+        delimiter_state.remove_trailing_delimiter(&mut output);
+
+        stdout.write_all(&output)?;
+        stdout.write_all(line_ending_byte_array_ref)?;
+
+        // https://pubs.opengroup.org/onlinepubs/9799919799/utilities/paste.html
+        delimiter_state.reset_to_first_delimiter();
     }
 
+    Ok(())
+}
+
+fn write_serial_input_source(
+    writer: &mut impl Write,
+    mut input_source: InputSource,
+    delimiters: &[Box<[u8]>],
+    line_ending: u8,
+) -> UResult<()> {
+    let mut delimiters = delimiters.iter().cycle();
+    let mut buffer = [0_u8; 8 * 1024];
+    let mut pending_delimiter = false;
+    while let bytes_read @ 1.. = input_source.read(&mut buffer)? {
+        for segment in buffer[..bytes_read].split_inclusive(|&byte| byte == line_ending) {
+            if pending_delimiter {
+                if let Some(delimiter) = delimiters.next() {
+                    writer.write_all(delimiter)?;
+                }
+                pending_delimiter = false;
+            }
+            if segment.last() == Some(&line_ending) {
+                writer.write_all(&segment[..segment.len() - 1])?;
+                pending_delimiter = true;
+            } else {
+                writer.write_all(segment)?;
+            }
+        }
+    }
+    writer.write_all(&[line_ending])?;
     Ok(())
 }
 
@@ -375,6 +385,21 @@ enum InputSource {
 }
 
 impl InputSource {
+    fn open(filename: &OsStr, stdin_cell: &OnceCell<Rc<RefCell<Stdin>>>) -> UResult<Self> {
+        if filename == "-" {
+            Ok(Self::StandardInput(
+                stdin_cell
+                    .get_or_init(|| Rc::new(RefCell::new(stdin())))
+                    .clone(),
+            ))
+        } else {
+            File::open(filename)
+                .map(BufReader::new)
+                .map(Self::File)
+                .map_err_context(|| filename.maybe_quote().to_string())
+        }
+    }
+
     fn read(&mut self, buf: &mut [u8]) -> UResult<usize> {
         let us = match self {
             Self::File(bu) => bu.read(buf)?,
