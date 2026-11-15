@@ -442,19 +442,20 @@ deleted file mode 100644
 -	return syscall.CreateProcess(nil, argv, nil, nil, true, 0, nil, nil, &sI, &pI)
 -}
 diff --git a/cmd/commands_test.go b/cmd/commands_test.go
-deleted file mode 100644
 --- a/cmd/commands_test.go
-+++ /dev/null
-@@ -1,39 +0,0 @@
--package caddycmd
--
--import (
++++ b/cmd/commands_test.go
+@@ -1,10 +1,7 @@
+ package caddycmd
+ 
+ import (
 -	"maps"
+ 	"path/filepath"
 -	"reflect"
 -	"slices"
--	"testing"
--)
--
+ 	"testing"
+ 
+ 	"github.com/spf13/cobra"
+@@ -17,31 +14,0 @@
 -func TestCommandsAreAvailable(t *testing.T) {
 -	// trigger init, and build the default factory, so that
 -	// all commands from this package are available
@@ -485,6 +486,7 @@ deleted file mode 100644
 -		t.Errorf("expected %v, got %v", expectedCommandNames, commandNames)
 -	}
 -}
+-
 diff --git a/cmd/packagesfuncs_test.go b/cmd/packagesfuncs_test.go
 --- a/cmd/packagesfuncs_test.go
 +++ b/cmd/packagesfuncs_test.go

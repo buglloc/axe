@@ -167,6 +167,8 @@ The Store OpenSSH client tools (`ssh`, `scp`, and `sftp`) disable host-key verif
 
 `caddy` includes the standard modules for HTTP serving, reverse proxying, and automatic HTTPS. Use `caddy list-modules --versions` to inspect bundled modules. It embeds edition CA roots as a fallback for outgoing TLS connections. Explicit trust pools remain available. Certificate and configuration state needs a writable directory. Binary-replacement commands (`upgrade`, `add-package`, and `remove-package`) are excluded; additional DNS-provider plugins are not bundled.
 
+Caddy rejects conflicting `client_auth` policies for the same hostname and ambiguous FastCGI script paths. Validate existing Caddyfiles before replacing a running instance.
+
 `layerx` reads Docker-save and OCI archives without a daemon. Live image inspection uses a Docker-compatible Docker or Podman API; `build` also needs the selected engine's CLI on `PATH`. It provides a terminal UI, JSON analysis, efficiency gates with `ci`, and image comparisons with `compare`.
 
 `cek` reads images directly from registries or a local Docker-compatible daemon. It supports merged-filesystem inspection, file extraction, content-aware comparisons, and OCI exports. Registry authentication uses Docker configuration; configured credential helpers must be on `PATH`. It embeds edition CA roots as a fallback when system trust is unavailable, and honors `SSL_CERT_FILE`.
