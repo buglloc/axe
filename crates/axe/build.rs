@@ -85,9 +85,9 @@ fn run() -> Result<(), String> {
     let edition_root = env::var_os("AXE_EDITION_ROOT")
         .filter(|root| !root.is_empty())
         .map_or_else(|| workspace.to_path_buf(), PathBuf::from);
-    let edition_json = read_text(&edition_root, "edition.json")?;
+    let edition_json = read_text(&edition_root, "config/edition.json")?;
     let edition: Edition = serde_json::from_str(&edition_json)
-        .map_err(|error| format!("invalid edition.json: {error}"))?;
+        .map_err(|error| format!("invalid config/edition.json: {error}"))?;
     validate_edition(&edition)?;
 
     let build_commit = build_commit(workspace)?;
@@ -105,7 +105,7 @@ fn run() -> Result<(), String> {
     }
 
     for path in [
-        "edition.json",
+        "config/edition.json",
         "config/store.json",
         "keys/ssh/host_ed25519",
         "keys/ssh/user_ca_keys",
@@ -333,7 +333,7 @@ fn git_output(workspace: &Path, args: &[&str]) -> Option<String> {
 fn validate_edition(edition: &Edition) -> Result<(), String> {
     if edition.schema_version != EDITION_SCHEMA_VERSION {
         return Err(format!(
-            "edition.json schema_version {} is unsupported; expected {EDITION_SCHEMA_VERSION}",
+            "config/edition.json schema_version {} is unsupported; expected {EDITION_SCHEMA_VERSION}",
             edition.schema_version
         ));
     }
@@ -343,9 +343,12 @@ fn validate_edition(edition: &Edition) -> Result<(), String> {
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
     {
-        return Err("edition.json id must match [a-z0-9-]+".into());
+        return Err("config/edition.json id must match [a-z0-9-]+".into());
     }
-    validate_principals(&edition.sshd.principals, "edition.json sshd.principals")?;
+    validate_principals(
+        &edition.sshd.principals,
+        "config/edition.json sshd.principals",
+    )?;
     validate_relay(&edition.relay)?;
     validate_aliases(&edition.aliases)
 }
@@ -374,13 +377,13 @@ fn validate_relay(config: &RelayConfig) -> Result<(), String> {
     ] {
         if endpoint.is_some_and(str::is_empty) {
             return Err(format!(
-                "edition.json relay.{name} must be null or a non-empty string"
+                "config/edition.json relay.{name} must be null or a non-empty string"
             ));
         }
     }
     if config.enabled_by_default && config.tcp_endpoint.is_none() {
         return Err(
-            "edition.json relay.enabled_by_default requires relay.tcp_endpoint for the default transport"
+            "config/edition.json relay.enabled_by_default requires relay.tcp_endpoint for the default transport"
                 .into(),
         );
     }
@@ -390,11 +393,11 @@ fn validate_relay(config: &RelayConfig) -> Result<(), String> {
 fn validate_aliases(aliases: &BTreeMap<String, AliasConfig>) -> Result<(), String> {
     for (name, alias) in aliases {
         if name.is_empty() {
-            return Err("edition.json aliases contains an empty alias name".into());
+            return Err("config/edition.json aliases contains an empty alias name".into());
         }
         if alias.argv.first().is_none_or(String::is_empty) {
             return Err(format!(
-                "edition.json alias {name:?} must have a non-empty argv"
+                "config/edition.json alias {name:?} must have a non-empty argv"
             ));
         }
     }

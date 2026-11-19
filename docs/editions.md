@@ -17,7 +17,7 @@ cp config/store.json "$AXE_EDITION_ROOT/config/store.json"
 cp config/bootstrap.json "$AXE_EDITION_ROOT/config/bootstrap.json"
 cp store/bootstrap.json "$AXE_EDITION_ROOT/store/bootstrap.json"
 cp store/trusted/*.pub "$AXE_EDITION_ROOT/store/trusted/"
-cat > "$AXE_EDITION_ROOT/edition.json" <<'JSON'
+cat > "$AXE_EDITION_ROOT/config/edition.json" <<'JSON'
 {
   "schema_version": 3,
   "id": "my-axe",

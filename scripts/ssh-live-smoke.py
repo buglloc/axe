@@ -181,11 +181,11 @@ def prepare(args: argparse.Namespace) -> None:
         source = args.source.resolve()
         for name in ("config", "keys/ssh", "store"):
             (root / name).mkdir(parents=True, exist_ok=True)
-        edition = json.loads((source / "edition.json").read_text())
+        edition = json.loads((source / "config/edition.json").read_text())
         edition["id"] = "ssh-live-smoke"
         edition["sshd"] = {"principals": [principal]}
         edition["relay"] = {"enabled_by_default": False, "tcp_endpoint": None, "quic_endpoint": None}
-        (root / "edition.json").write_text(json.dumps(edition, indent=2) + "\n")
+        (root / "config/edition.json").write_text(json.dumps(edition, indent=2) + "\n")
         shutil.copyfile(source / "config/store.json", root / "config/store.json")
         shutil.copyfile(source / "config/bootstrap.json", root / "config/bootstrap.json")
         for name in ("store/trusted", "store/bootstrap.json", "store/bootstrap-index.cbor.zst"):

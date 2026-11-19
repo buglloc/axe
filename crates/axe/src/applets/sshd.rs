@@ -344,7 +344,7 @@ fn prepare(options: &mut Options) -> io::Result<()> {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!(
-                        "relay is enabled by default but edition.json has no {} endpoint",
+                        "relay is enabled by default but config/edition.json has no {} endpoint",
                         options.relay_transport
                     ),
                 )

@@ -17,11 +17,11 @@ just generate-dev-keys
 
 `AXE_EDITION_ROOT` selects the edition directory; it defaults to the checkout. Missing inputs are not borrowed from the public checkout.
 
-Provide `edition.json`, `config/store.json`, `store/trusted/*.pub`, `keys/ssh/host_ed25519`, and public CA keys in `keys/ssh/user_ca_keys`. Keep the generated inventory in `store/bootstrap.json`. A signed `store/bootstrap-index.cbor.zst` is optional for development builds but required for OSS releases; when present, it must match the trusted keys and inventory.
+Provide `config/edition.json`, `config/store.json`, `store/trusted/*.pub`, `keys/ssh/host_ed25519`, and public CA keys in `keys/ssh/user_ca_keys`. Keep the generated inventory in `store/bootstrap.json`. A signed `store/bootstrap-index.cbor.zst` is optional for development builds but required for OSS releases; when present, it must match the trusted keys and inventory.
 
 For TCP relay credentials, provide `keys/relay/token`; for QUIC, provide `keys/relay/quic_server_cert.pem`, `quic_client_cert.pem`, and `quic_client_key.pem`. Additional HTTPS roots go in `store/nix/assets/trusted_ca.pem`. Store signing keys, S3 credentials, and the relay server private key are not embedded.
 
-See [docs/editions.md](docs/editions.md) for an `edition.json` example and a build using OSS Store trust. Changing embedded configuration, trust, or identities requires rebuilding and redistributing `axe`.
+See [docs/editions.md](docs/editions.md) for a `config/edition.json` example and a build using OSS Store trust. Changing embedded configuration, trust, or identities requires rebuilding and redistributing `axe`.
 
 ## Production identities
 
@@ -90,7 +90,7 @@ allowed.
 
 ## Relay endpoints and identities
 
-The OSS edition has no default relay. Configure endpoints in `edition.json` if needed. The default transport is TCP; `enabled_by_default` requires a TCP endpoint and a token of at least 32 bytes. Generate deployment-specific credentials on a controlled machine:
+The OSS edition has no default relay. Configure endpoints in `config/edition.json` if needed. The default transport is TCP; `enabled_by_default` requires a TCP endpoint and a token of at least 32 bytes. Generate deployment-specific credentials on a controlled machine:
 
 ```bash
 mkdir -p keys/relay

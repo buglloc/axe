@@ -735,7 +735,7 @@ def stage_assets(version: str, commit: str, out: Path, edition: Path, page: Path
 
 
 def publish(version: str, out: Path, edition: Path, directory: Path | None) -> None:
-    if edition != ROOT or json.loads((edition / "edition.json").read_text())["id"] != "oss":
+    if edition != ROOT or json.loads((edition / "config/edition.json").read_text())["id"] != "oss":
         raise ReleaseError("public GitHub releases require the OSS edition root")
     tag = f"v{version}"
 
