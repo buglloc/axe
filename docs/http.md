@@ -1,6 +1,6 @@
 # HTTP applet
 
-The bundled `http` applet makes bounded HTTP/1.1 requests. By default it writes one versioned `axe_http` JSON document containing the request method and URL, final status and URL, headers, redirect history, resolved `Location`, and response body.
+The bundled `http` applet sends HTTP/1.1 requests. By default it writes one versioned `axe_http` JSON document with the request method and URL, final status and URL, headers, redirect history, resolved `Location`, and response body.
 
 Inside Brush, run:
 
@@ -14,15 +14,15 @@ The method defaults to `GET`, or `POST` when a body is supplied. Use `-X/--metho
 
 ## Output and limits
 
-Body and header values preserve bytes: valid UTF-8 uses `{"encoding":"utf8","data":"..."}`; other bytes use `{"encoding":"base64","data":"..."}`. `--body` writes raw body bytes instead of JSON.
+The applet preserves body and header bytes. It encodes valid UTF-8 as `{"encoding":"utf8","data":"..."}` and other bytes as `{"encoding":"base64","data":"..."}`. `--body` writes raw body bytes instead of JSON.
 
-The body limit defaults to 16 MiB; `--max-bytes` changes it. On overflow, JSON output retains response metadata but omits the body and reports `limit_bytes` and `received_at_least_bytes`. Raw-body output may contain a partial prefix; check the exit status before using it. `--timeout` bounds the whole request, including redirects, and defaults to 30 seconds.
+The body limit defaults to 16 MiB; `--max-bytes` changes it. If the body exceeds the limit, the JSON keeps the response metadata, omits the body, and reports `limit_bytes` and `received_at_least_bytes`. With `--body`, you may get only the start of the body. Check the exit status before using it. `--timeout` covers the whole request, including redirects, and defaults to 30 seconds.
 
-A completed response exits with status `0`, including HTTP `4xx` and `5xx`. Transport, TLS, redirect, body-limit, and output failures exit with status `1`; invalid CLI arguments exit with status `2`. Request failures use JSON in the default mode and stderr in `--body` mode. Failure to write JSON is reported on stderr.
+A complete HTTP response returns exit status `0`, even for `4xx` and `5xx`. Transport, TLS, redirect, body-limit, and output failures return `1`; invalid CLI arguments return `2`. The applet reports request failures in JSON by default and on stderr with `--body`. A failure to write JSON goes to stderr.
 
 ## Redirects and security
 
-Redirects are not followed by default. Inspect `.response.resolved_location` one hop at a time; use `-L/--follow` only when the entire possible chain is authorized. Following is limited to 10 redirects. Redirected requests do not forward `Authorization` or `Cookie`. `POST`, `PUT`, `PATCH`, and `DELETE` cannot be replayed across `307/308`; the request fails rather than preserving the method and body.
+The applet does not follow redirects by default. Inspect `.response.resolved_location` one hop at a time. Use `-L/--follow` only if the entire possible chain is authorized. With `--follow`, the applet follows at most 10 redirects and omits `Authorization` and `Cookie` from redirected requests. It fails rather than replaying `POST`, `PUT`, `PATCH`, or `DELETE` across a `307` or `308`.
 
 HTTPS trusts Mozilla roots and any additional CAs configured by the edition. `-k/--insecure` disables certificate and hostname verification. `--proxy` sets an explicit HTTP CONNECT proxy instead of proxy environment variables.
 

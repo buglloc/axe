@@ -1,6 +1,6 @@
 # Commands and command resolution
 
-Run these commands with an installed `axe` binary to inspect bundled applets and the configured Store:
+Use an installed `axe` binary to inspect bundled applets and the configured Store:
 
 ```bash
 axe --list
@@ -11,9 +11,10 @@ axe doctor --json
 
 `commands` returns a versioned JSON inventory. `availability` is `local`, `on_demand`, or `blocked`; `local_path` is the published applet path, if one exists. Use the shell's `type`, `command`, and `command -v` builtins to inspect aliases, functions, and builtins.
 
-Each command has one primary `category`, shared by bundled and Store commands.
-Aliases inherit their target's category. Categories describe purpose; `source`
-separately identifies bundled or Store delivery.
+Bundled and Store commands use the same set of categories. Each command has
+one primary `category` based on its purpose, and aliases inherit their
+target's category. The `source` field tells you whether a command is
+bundled or comes from the Store.
 
 ## Command resolution
 
@@ -23,9 +24,17 @@ Within the shell, resolution follows this order:
 alias/function → shell builtin → bundled applet → AXE Store → PATH
 ```
 
-Bundled applets take precedence over AXE Store and `PATH`. Commands not registered by AXE use normal `PATH` lookup. For a Store command, AXE tries a matching host executable only after a transient or unavailable delivery failure, excluding its own applet bridge and executable. If none is usable, the delivery failure exits with status 126. Signature, digest, schema, TLS, integrity, and configuration failures also exit with status 126, without falling back to `PATH`. An unresolved command exits with status 127.
+Bundled applets take precedence over AXE Store and `PATH`. Commands not
+registered by AXE use normal `PATH` lookup. For a Store command, AXE tries a
+matching host executable only if delivery is temporarily unsuccessful or
+unavailable. It skips its own applet bridge and executable. If no host
+executable is usable, the command exits with status 126. Signature, digest,
+schema, TLS, integrity, and configuration failures also exit with status
+126, without falling back to `PATH`. An unresolved command exits with status 127.
 
-For an asynchronous command, `$!` holds the child PID. When the shell runs an asynchronous list in its own process, there is no child PID: `$!` holds a `%N` job specification instead, which `wait` accepts. Such a job ends with the current shell.
+For an asynchronous command, `$!` holds the child PID. If the shell runs an
+asynchronous list in its own process, `$!` instead holds a `%N` job
+specification that `wait` accepts. That job ends with the shell.
 
 A pipeline stage or background list running in a subshell returns only its exit status to the parent. `exit`, `return`, `break`, and expansion or builtin errors end that subshell alone; `errexit` and `pipefail` still determine how the parent handles a failing status. With `lastpipe` enabled, control flow in a final stage running in the parent applies to the parent.
 
@@ -41,15 +50,18 @@ The first `--` after an applet name belongs to AXE. To pass an option terminator
 
 A symlink named after a bundled applet also runs that applet; for example, a link named `jq` to the installed `axe` binary runs the bundled `jq`. Inside the AXE shell, no `axe` prefix is needed. AXE-managed shells and SSH exec sessions export `AXE=true`.
 
-The applet PATH bridge is best-effort; bundled commands still resolve without it. See [Runtime survivability](runtime-survivability.md) for child execution and behavior when the executable is removed, and [AXE Store](store.md) for Store storage and delivery.
+AXE sets up the applet PATH bridge on a best-effort basis. Bundled commands
+still resolve without it. See [Runtime survivability](runtime-survivability.md)
+for child execution and what happens if the executable is removed, and
+[AXE Store](store.md) for Store storage and delivery.
 
 ## Interactive prompt
 
 The default `PS1` is `\n[axe] \u@\H:\w\n\$ `: a blank line separating the
 prompt from command output, the user and full hostname, the current directory,
-then a new line and `$` for a regular user or `#` for root. The blank line also
-appears before the first prompt. The prompt is independent of the executable's
-filename.
+then a new line and `$` for a regular user or `#` for root. The blank line
+appears even before the first prompt. The executable's filename does not
+affect the prompt.
 
 AXE does not automatically load `~/.bashrc` or `~/.brushrc`. An inherited
 `PS1`, including an empty value, still takes precedence over the default.
@@ -57,15 +69,18 @@ AXE does not automatically load `~/.bashrc` or `~/.brushrc`. An inherited
 (`axe -l`) may still load `~/.bash_profile`, `~/.bash_login`, or `~/.profile`;
 an explicit `source` from those files can load other files.
 
-`--norc` and `--noprofile` remain available as explicit shell options.
-`--noenv` ignores inherited environment variables and is separate from AXE's
-default startup policy.
+You can still pass `--norc` and `--noprofile` explicitly. `--noenv` ignores
+inherited environment variables; it is separate from AXE's default startup
+policy.
 
 ## Bundled commands
 
-Bundled commands are built into `axe`; Store commands are signed on-demand artifacts. An inventory entry does not guarantee a reachable download.
+Bundled commands are built into `axe`; Store commands are signed artifacts
+downloaded on demand. A Store command can appear in the inventory even if
+its download is unreachable.
 
-Brush builtins handle shell state, jobs, history, completion, and POSIX/Bash-style control flow. The inventory below groups bundled applets by their primary purpose.
+Brush builtins handle shell state, jobs, history, completion, and
+POSIX/Bash-style control flow. The table groups bundled applets by purpose.
 
 | Category | Bundled commands |
 | --- | --- |
@@ -154,8 +169,8 @@ replaced with U+FFFD, and output is valid JSON. `--tab`, `--indent`, `--seq`,
 string payloads raw and terminates non-string JSON payloads with a newline.
 `--stream` reads path/value and container-end events without building the input
 document; `--stream-errors` emits parse errors as events. `--unbuffered` flushes
-each output value. `fromstream`, `truncate_stream`, and `tostream` are not
-available.
+each output value. AXE does not provide `fromstream`, `truncate_stream`, or
+`tostream`.
 Sequence mode ignores bytes before the first record separator and discards a
 final numeric record without a terminator, which may have been truncated.
 
@@ -168,9 +183,9 @@ whitespace modes (`-i`, `-w`, `-b`, `-E`, `-Z`), `-B`, `-I`,
 and locale display columns in UTF-8 locales. `-x`, `-X`, `-D`, `-F`, `-l`, `-p`,
 `-H`, `--color`, and custom line-format options are rejected.
 `sdiff` prints side-by-side output and merges interactively with `-o FILE`.
-Without `-a`, differing binary inputs produce a stdout report and status 1;
-identical binary inputs produce no output. Binary merge output is empty unless
-`-a` forces text handling, matching GNU.
+Without `-a`, `sdiff` reports differing binary inputs on stdout and exits
+with status 1. Identical binary inputs produce no output. As with GNU `sdiff`,
+the merge output for binary inputs is empty unless `-a` forces text handling.
 `diff`, `cmp`, and `sdiff` distinguish differences or merge decisions from
 input errors. `diff -I` accepts byte-oriented BRE patterns with backreferences;
 matching does not emulate locale-sensitive collation or equivalence classes.
@@ -184,10 +199,11 @@ including invalid UTF-8, and `-regex`/`-iregex` accept byte-oriented operands.
 Output write failures report an error and return status 1. `xargs` supports
 GNU logical EOF options `-E`, legacy `-e`, and `--eof`; the marker is ignored
 with `-0` and `-d`.
-Completed arguments before a malformed quoted field are executed before
-`xargs` reports failure. `-L` and `-I` keep incomplete logical records together.
-Quoted-input mode warns about NUL bytes and passes the prefix before the first
-NUL in each argument; use `-0` for NUL-separated pathname transport.
+If quoted input is malformed, `xargs` runs commands with the preceding
+complete arguments before reporting failure. `-L` and `-I` keep incomplete
+logical records together. Quoted-input mode warns about NUL bytes and passes
+only the part of each argument before its first NUL. Use `-0` for
+NUL-separated pathnames.
 
 `tree -h` prints compact human-readable sizes before names, for example
 `[4.9K]  big`. It accepts clustered and repeated flags; `--help` prints help.
@@ -208,14 +224,14 @@ mode.
 They do not implement the custom format languages of `-e` and `-f`.
 
 `file` uses bounded content heuristics, not the complete libmagic database. It
-samples at most 64 KiB from a regular file; stdin JSON detection consumes the
-complete input. ELF descriptions include the header class, byte order, machine,
+samples at most 64 KiB from a regular file but reads all of stdin to detect
+JSON there. ELF descriptions include the header class, byte order, machine,
 link mode, ABI note, build ID, debug information, and symbol-table stripping
-when those metadata are available. It supports `-E`, `-N`, `--mime-encoding`,
-and `-h`/`--no-dereference`, but not `-F` or `-k`. Empty regular files use
-`inode/x-empty`; empty stdin uses `application/x-empty`. Valid JSON scalars are
-recognized as JSON. `strings --unicode` is not supported; its JSON output is
-an AXE extension.
+when that information is available. `file` supports `-E`, `-N`,
+`--mime-encoding`, and `-h`/`--no-dereference`, but not `-F` or `-k`. It reports
+empty regular files as `inode/x-empty` and empty stdin as
+`application/x-empty`. It recognizes valid JSON scalars as JSON. AXE's
+`strings` adds JSON output but does not support `strings --unicode`.
 Wide `strings` encodings use printable ASCII units; `-w` also preserves
 whitespace controls, including vertical tabs.
 
@@ -229,11 +245,12 @@ decompression (`-d`), stdout (`-c`), explicit output (`-o FILE`), integrity chec
 (`-t`), overwrite (`-f`), input removal (`--rm`), levels 1–19, `--ultra` levels
 20–22, `--fast[=N]`, and worker counts (`-T N`; zero selects available CPUs).
 Compression includes a checksum; decompression accepts concatenated frames.
-Successful `-t` reports the decoded byte count on stderr unless quiet.
-`-l`/`--list` reports frame counts, sizes, and checksum presence without
-decompressing payloads, including concatenated and skippable frames. It requires
-file operands, not stdin. Listing checks structure, not payload integrity or
-checksum validity; use `-t` for integrity checks.
+On success, `-t` reports the decoded byte count on stderr unless quiet mode is
+enabled. `-l`/`--list` reports frame counts, sizes, and whether checksums are
+present, without decompressing payloads. It includes concatenated and
+skippable frames and requires file operands rather than stdin. Listing
+checks structure, not payload integrity or checksum validity. Use `-t` to
+check integrity.
 `zstd -dcf` copies non-frame plaintext to stdout, including a plaintext tail
 after complete frames. Recognized corrupt frame headers remain errors.
 
@@ -265,11 +282,12 @@ argument-taking options consume following words, and `-C` is positional.
 `--null` switches lists to NUL delimiters. List entries may include `-C DIR`
 or `--directory=DIR` directives, and files-from operands combine with positional
 members and `--exclude`.
-Listings stream as entries are read. `--strip-components=N` affects extraction,
-not listing. Extraction checks member paths, parent directories and hardlink
-targets against the destination. Missing requested members exit with status 2.
-Independent entries continue after a `--keep-old-files` collision; existing
-directories retain their metadata in this mode.
+`tar` lists entries as it reads them. `--strip-components=N` affects
+extraction, not listing. Extraction checks member paths, parent directories
+and hardlink targets against the destination. `tar` exits with status 2 if
+requested members are missing. With `--keep-old-files`, `tar` continues
+processing independent entries after a collision and leaves the metadata of
+existing directories unchanged.
 
 Tar creation defaults to GNU headers. `--format=gnu|ustar|posix|pax` selects
 the output format; `posix` and `pax` use PAX extensions for names and metadata
@@ -295,7 +313,11 @@ Partition-table metadata is separate from filesystem type detection. A matching
 magic number alone does not identify a truncated or structurally invalid image.
 These are identity probes, not complete filesystem consistency checks.
 
-`blockdev --report` accepts an optional device list. With no devices, `--report` must be the first argument; it reads `/proc/partitions`, skips zero-capacity entries, and continues quietly after device errors. An empty list succeeds; any device failure makes the report unsuccessful.
+`blockdev --report` accepts an optional device list. If you omit the list,
+`--report` must be the first argument. In that case it reads
+`/proc/partitions`, skips zero-capacity entries, and continues quietly after
+device errors. An empty list succeeds, but any device failure makes the
+report unsuccessful.
 
 `mountpoint PATH` exits with status 0 for a mountpoint, 32 for an existing
 non-mountpoint, and 1 when the path cannot be resolved. Linux mount detection
@@ -316,7 +338,11 @@ A remount changes only the flags you name. Other flags, such as `nosuid`, `nodev
 
 `umount` accepts mountpoints or sources, including explicit `--target` and `--source` operands. `-A`/`--all-targets` requires an operand and selects every mountpoint of that filesystem. `-R` follows the mount-ID graph, including overmount stacks; a failure stops that chain while independent operands are still attempted. `-a` preserves `/` and excludes `proc`, `devfs`, `devpts`, `sysfs`, `rpc_pipefs`, `nfsd`, and `selinuxfs`; `-t` replaces those exclusions. Type (`-t`) and option (`-O`) filters apply to `-a`, not explicit targets.
 
-Unmount options include force (`-f`), lazy detach (`-l`), read-only fallback (`-r`), fake execution (`--fake`), disabled canonicalization (`-c`), disabled helpers (`-i`), quiet missing-target errors (`-q`), and a mount namespace (`-N PID|PATH`). `--fake` performs no unmount or read-only remount. Verbose messages (`-v`) go to stderr.
+Unmount options include force (`-f`), lazy detach (`-l`), read-only fallback
+(`-r`), fake execution (`--fake`), disabling canonicalization (`-c`),
+disabling helpers (`-i`), suppressing missing-target errors (`-q`), and
+selecting a mount namespace (`-N PID|PATH`). `--fake` performs no unmount or
+read-only remount. Verbose messages (`-v`) go to stderr.
 
 When the filesystem rejects an option, `mount` prints the kernel's message, for example `fsconfig() failed: tmpfs: Unknown parameter 'size2'`. On kernels without the `fsopen` API it falls back to `mount(2)` and prints a generic error.
 
@@ -324,8 +350,8 @@ Image files mount through loop devices. `mount` attaches one for `-o loop`, `loo
 
 Without an explicit filesystem type, `mount` rejects ambiguous filesystem
 signatures with status 32 before attempting filesystem mounts or helpers.
-Genuinely unidentified sources retain the kernel-filesystem fallback; `-t`
-remains an explicit type selection.
+If `mount` finds no identifiable signature, it can still fall back to the
+kernel. Use `-t` to select a type explicitly.
 
 For `mount`, `-o encryption`, `-N`, `-T`, and `-F` are not supported.
 
@@ -334,7 +360,7 @@ For `mount`, `-o encryption`, `-N`, `-T`, and `-F` are not supported.
 The Store `ip` command is the iproute2 implementation on Linux. It supports
 network inspection and configuration when Store delivery is available.
 
-The bundled `ifconfig`, `arp`, and `route` commands remain available without
+The bundled `ifconfig`, `arp`, and `route` commands work without
 Store delivery. `ifconfig` displays interface configuration, `arp` displays
 the kernel's `/proc/net/arp` table with net-tools ATF flags, and `route`
 provides read-only routing-table inspection. `route -n` selects numeric
@@ -343,7 +369,13 @@ Route mutation, cache-table inspection, and unsupported options are rejected.
 
 The bundled `ps` accepts BSD option clusters such as `aux` and `auxww`. `a` selects processes with a terminal, `x` selects the current user's processes including those without a terminal, and `ax` or `aux` selects all processes visible through `/proc`, including other users' processes without a terminal.
 
-`ps -a` selects terminal-attached processes other than session leaders. `T` adds processes on the caller's terminal; `r` restricts the selected set to running or uninterruptible processes. `-U` selects real UIDs, while `-u` and `--user` select effective UIDs; user names, numeric IDs, and comma- or whitespace-separated lists are accepted. Explicit `-p` lists replace broad selections such as `-e` or `ax`, but combine additively with UID lists and `T`.
+`ps -a` selects terminal-attached processes other than session leaders. `T`
+adds processes on the caller's terminal. `r` restricts the selection to
+running or uninterruptible processes. `-U` selects real UIDs, while `-u` and
+`--user` select effective UIDs. These options accept user names, numeric IDs,
+and comma- or whitespace-separated lists. Explicit `-p` lists replace broad
+selections such as `-e` or `ax`, but add to selections made with UID lists or
+`T`.
 
 `ps -f` prints `UID PID PPID C STIME TTY TIME CMD`, with effective-user names and `TIME` in `HH:MM:SS` form. With no matching processes, it prints the headers and exits with status 1. Custom `-o` headers disappear only when every field has an empty label, as in `-o pid=,args=`.
 
@@ -375,24 +407,25 @@ use procps-style headings and widths.
 `vmstat` uses memory values from `/proc/meminfo`, including reclaimable slab in
 cache, and scales swap rates to the selected unit. Its first context-switch rate
 is averaged over uptime, so it can differ from procps 4.0.7.
-`top` reports processes, not a `-H` thread view, and does not implement `-o`
-ordering. Its first CPU display is cumulative; later samples use interval deltas.
-Its `RES` and `%MEM` use resident memory from `/proc/PID/status`; `SHR` is
-`RssFile + RssShmem`.
+`top` reports processes. It supports neither the `-H` thread view nor `-o`
+ordering. The first CPU display is cumulative; later samples use the change
+in CPU counters over each interval. `RES` and `%MEM` use resident memory
+from `/proc/PID/status`; `SHR` is `RssFile + RssShmem`.
 `hugetop` has an AXE interface: `-b` selects batch mode and `-n COUNT`
 sets the sample count; it does not emulate procps NUMA, once or human-size modes.
 `tload` uses the current terminal, not a TTY pathname operand.
 
-`lsof` lists visible cwd, root, executable, memory-mapped file and descriptor
-entries. Like lsof, it lists each mapped file once, reports a deleted mapped
-file as `DEL`, and annotates the name when the path no longer refers to the
-mapped file; unlike lsof, a mapped path keeps embedded whitespace.
-`-a` intersects requested selection classes; otherwise they are combined. It
-supports the `-F` field subset `p`, `c`, `f`, `n`, `t`, `u`, `L`, `i`, `D`,
-`s`, `P`, `a`, `o`, `r` and the NUL terminator selector `0`; other fields are
-rejected. `+d` and `+D` match directory entries by device and inode, so
-hardlinks match and unlinked files do not. `+D` stays on the same filesystem
-and does not follow directory symlinks.
+`lsof` lists visible entries for current working directories, roots,
+executables, memory-mapped files and file descriptors. Like upstream `lsof`,
+it lists each mapped file once, reports deleted mapped files as `DEL`, and
+annotates names when the path no longer refers to the mapped file. Unlike
+upstream `lsof`, it preserves whitespace within mapped paths. With `-a`, an
+entry must match all requested selection classes; otherwise the classes
+are combined. `lsof` accepts the `-F` fields `p`, `c`, `f`, `n`, `t`, `u`,
+`L`, `i`, `D`, `s`, `P`, `a`, `o`, `r` and the NUL terminator selector `0`.
+It rejects other fields. `+d` and `+D` match directory entries by device and
+inode, so hardlinks match and unlinked files do not. `+D` stays on the same
+filesystem and does not follow directory symlinks.
 
 `iostat` uses uptime for the first interval and interval deltas thereafter.
 Extended `-x` output is limited to device, `await`, `aqu-sz` and `%util` fields;
@@ -403,8 +436,8 @@ transport modes. `ipcs -b` and `--human` are not supported.
 
 `ping` reports reply TTL/hop-limit data from received packets. `traceroute`
 matches actual replies and error-queue messages to its probes; unresponsive
-hops remain `*`. `host` and `nslookup` retain the responding DNS server's
-provenance and retry truncated UDP replies over TCP.
+hops remain `*`. `host` and `nslookup` report which DNS server responded and
+retry truncated UDP replies over TCP.
 
 `ipcalc` supports numeric IPv4/IPv6 information and validation, not DNS, GeoIP,
 random-network generation, splitting or deaggregation.
@@ -418,9 +451,10 @@ wrapping and generic CLI-error statuses can differ. In particular, awk/sed
 generic usage failures use status 2; tar CLI failures use 2 rather than GNU 64.
 Linux builds report `Linux` for `uname -o`, not `GNU/Linux`.
 
-`logname` does not use `LOGNAME` or `USER` as login identity. On Linux it looks
-up the audit login UID in the passwd database; a missing, unset or unresolved
-login identity exits with status 1. Other targets use the native login lookup.
+`logname` does not use `LOGNAME` or `USER` to determine the login identity.
+On Linux it looks up the audit login UID in the passwd database. If the login
+identity is missing, unset or unresolved, `logname` exits with status 1.
+Other targets use the native login lookup.
 
 `printf` floating-point conversion uses the platform's `long double` precision
 and range; it is not arbitrary-precision decimal arithmetic. `more` copies
@@ -431,8 +465,9 @@ Linux `stty` accepts arbitrary decimal speeds and the GNU `exta`/`extb`
 aliases. Other targets accept their standard baud-rate names and reject
 unsupported numeric rates.
 
-Safe divergences are retained: compression preserves existing output after a
-failed decode, `strings` reports stdout failures, and valid JSON scalars remain
-JSON even where libmagic chooses text. Custom commands such as HTTP, Vzik and
-Goblin retain their own interfaces. Goblin's JSON path display is not a lossless
-Unix pathname transport; see its [output schema](../skills/axe/references/goblin-output-schema.md).
+Some behavior differs from the reference tools: compression preserves
+existing output after a failed decode, `strings` reports stdout failures,
+and `file` identifies valid JSON scalars as JSON even when libmagic reports
+text. Custom commands such as HTTP, Vzik and Goblin retain their own
+interfaces. Goblin's JSON path display is not a lossless Unix pathname
+transport; see its [output schema](../skills/axe/references/goblin-output-schema.md).

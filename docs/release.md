@@ -26,7 +26,7 @@ just release-prepare initial
 
 `release-prepare` drafts `release-notes/vX.Y.Z.md` with OMP and updates the workspace version and lockfile. Preparation may need registry access even when builds are cached. It does not create a tag or publish anything.
 
-Review every claim against the code and commits. Correct or remove unsupported claims, then commit and push the reviewed source. This is the release boundary: do not add source commits after this push.
+Review every claim against the code and commits. Correct or remove unsupported claims, then commit and push the reviewed source. Do not add source commits after this push.
 
 ```bash
 git add Cargo.toml Cargo.lock release-notes/
@@ -36,13 +36,11 @@ git push origin main
 
 ## Workflow 2: validate and publish
 
-Run the complete publisher workflow:
-
 ```bash
 just release-publish
 ```
 
-`release-publish` checks formatting, the project and Store inventory, Clippy, and smoke tests. It builds `axe`, `axe-relay`, and `vzik` for all three supported targets, checks the runnable x86_64 `axe` binary's version, commit, and `oss` edition, generates `registry.json`, and stages the complete release. Existing staged assets are reused rather than rebuilt.
+`release-publish` checks formatting, the project and Store inventory, Clippy, and smoke tests. It builds `axe`, `axe-relay`, and `vzik` for all three supported targets. It checks the runnable x86_64 `axe` binary's version, commit, and `oss` edition, generates `registry.json`, and stages the release. It reuses existing staged assets.
 
 Build Darwin binaries only inside the development shell; its `cargo-zigbuild` is patched so `dyld` does not abort them at startup. Rebuild an affected binary with `just build-darwin-arm64`; copying or re-signing it does not help.
 
@@ -52,7 +50,7 @@ To test both Store publication phases without touching remote systems, run the o
 just release-check /path/outside/checkout/axe-release-check
 ```
 
-Keep `dist/releases/vX.Y.Z/`, or `$AXE_RELEASE_DIR/releases/vX.Y.Z` when overridden. It holds the tested assets, checksums, reviewed notes, and release metadata needed for publication and retries. Use a directory outside the checkout, or an ignored path under `dist/`, for the local preflight.
+Keep `dist/releases/vX.Y.Z/` (or `$AXE_RELEASE_DIR/releases/vX.Y.Z` if set). It holds the tested assets, checksums, reviewed notes, and release metadata needed for publication and retries. Run the local preflight in a directory outside the checkout or an ignored path under `dist/`.
 
 `release-publish`:
 

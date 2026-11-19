@@ -1,6 +1,6 @@
 # AXE Store
 
-AXE Store delivers tools on demand. Nix builds the packages; `axe-store` signs their metadata and publishes them. AXE verifies signatures, sizes, and SHA-256 hashes before execution. Previously cached tools can run offline. On Linux, single-file tools and static package entrypoints run even when the cache filesystem does not permit execution. Packages still need writable storage for their data.
+AXE Store delivers tools on demand. Nix builds the packages; `axe-store` signs their metadata and publishes them. AXE verifies signatures, sizes, and SHA-256 hashes before execution. Cached tools can run offline. On Linux, single-file tools and static package entrypoints can run even if the cache filesystem disallows execution. Packages still need writable storage for their data.
 
 `AXE_STORE_DIR` sets the preferred cache root. If it is unavailable, AXE tries configured roots, the platform cache, writable persistent mounts, tmpfs, and the temporary directory. Store metadata is isolated by URL, trust keys, and channel. Use separate roots for co-installed editions.
 
@@ -10,9 +10,9 @@ Set the mode with `AXE_STORE_MODE` or `sshd --store-mode`:
 - `cache-only`: use embedded metadata and the verified cache without network requests.
 - `off`: do not initialize Store or register its commands.
 
-In `auto` and `cache-only`, transient delivery failures or an unavailable tool can permit `PATH` fallback. Signature, integrity, and configuration errors do not. `sshd` passes its mode to shell and exec sessions; child sessions cannot relax an inherited restriction.
+In `auto` and `cache-only`, AXE may fall back to `PATH` if delivery fails temporarily or a tool is unavailable. It does not fall back on signature, integrity, or configuration errors. `sshd` passes its mode to shell and exec sessions; child sessions cannot relax an inherited restriction.
 
-`axe refresh-tools` fetches and verifies the current Index; it requires `auto` mode. `axe clean-tools` removes metadata for the current Store identity but keeps tool payloads that other identities can share. It skips inaccessible automatically discovered roots but reports permission errors for an explicit `AXE_STORE_DIR`.
+`axe refresh-tools` requires `auto` mode and fetches and verifies the current Index. `axe clean-tools` removes metadata for the current Store identity but keeps tool payloads that other identities can share. It skips inaccessible roots it discovers automatically but reports permission errors for an explicit `AXE_STORE_DIR`.
 
 ## Package inventory
 
@@ -123,13 +123,13 @@ This table comes from [`store/bootstrap.json`](../store/bootstrap.json).
 
 Nmap NSE script threads are interrupted after five seconds without yielding; allocations beyond 400 MB fail. Long-running custom scripts must yield during computation.
 
-Naabu supports embedded service fingerprinting and opt-in UDP payloads with `-uP`. A unitless `-timeout` is interpreted in milliseconds; an entirely excluded port set is an error.
+Naabu supports embedded service fingerprinting and opt-in UDP payloads with `-uP`. A `-timeout` value without a unit is in milliseconds. Excluding every port is an error.
 
 The `nuclei` package includes pinned `nuclei-templates`; no separate template download is needed on first run.
 
 `betterleaks` embeds its default detection rules, tokenizer, and word list. Filesystem and stdin scans do not require Git; history and clone modes require `git` on `PATH`. Live credential validation is opt-in with `--validation` and sends detected credentials to provider APIs. Use `--redact` when writing reports that must not expose secrets.
 
-Pass `--config FILE` for repository-specific Betterleaks rules. Automatic `.betterleaks.toml` and `.gitleaks.toml` loading requires `--unsafe-auto-load-config`; local Git configuration requires `--trust-local-git-config`. Enable either only for trusted repositories.
+Pass `--config FILE` for repository-specific Betterleaks rules. Loading `.betterleaks.toml` and `.gitleaks.toml` automatically requires `--unsafe-auto-load-config`; using local Git configuration requires `--trust-local-git-config`. Enable either only for trusted repositories.
 
 `yq --split-exp` confines output paths to the working directory unless `--security-allow-write-any-path` is explicitly enabled for trusted input. `--inplace` replaces a symbolic link instead of modifying its target and rejects direct updates to read-only files.
 
@@ -147,7 +147,7 @@ Katana's explicit `-kb`, `-filter-page-type`, and `-auto-login` features can dow
 
 `zdns` supports explicit resolvers with `--name-servers` and local recursion with `--iterative`. Select the internal resolver explicitly for private DNS; `--threads` controls concurrency.
 
-The `interactsh-client` package removes automatic version checks and their machine-information telemetry. Explicit authentication, ASN lookups, and manual updates remain opt-in.
+The `interactsh-client` package does not check for updates automatically or send the machine-information telemetry associated with those checks. Authentication, ASN lookups, and manual updates are opt-in.
 
 The `gori` package disables startup update checks by default. Set `update.check_enabled` to `true` in its settings file to enable them.
 
@@ -155,7 +155,7 @@ The Linux `7zz` build uses the free codec set, without RAR. Darwin uses the upst
 
 `asciinema rec --return session.cast` records a new `$SHELL` session; exiting ends the recording, and `--return` preserves the session's exit status. `asciinema play session.cast` replays it locally. On Linux, `-c COMMAND` uses `$SHELL -c`, falling back to `/bin/sh` when `SHELL` is unset. Local recording and playback need no writable home directory; the recording's destination must be writable.
 
-Uploads and remote streams are explicit network operations and use host TLS trust. `ASCIINEMA_CONFIG_HOME` and `ASCIINEMA_STATE_HOME` select configuration and writable publishing state directories. Keyboard input capture is disabled by default; `--capture-input` also records sensitive input such as passwords. Terminal output can expose secrets even with input capture disabled.
+Uploads and remote streams are explicit network operations and use host TLS trust. `ASCIINEMA_CONFIG_HOME` selects the configuration directory; `ASCIINEMA_STATE_HOME` selects the writable publishing state directory. Keyboard input capture is disabled by default; `--capture-input` also records sensitive input such as passwords. Terminal output can expose secrets even with input capture disabled.
 
 `tmux` embeds terminfo entries for modern terminals, including Ghostty, Kitty, Foot, Alacritty, and WezTerm, so it does not need a host terminfo database. Host terminfo still works for custom definitions. AXE shell and SSH sessions keep the client's `TERM`; panes default to `tmux-256color`.
 
@@ -167,9 +167,9 @@ Uploads and remote streams are explicit network operations and use host TLS trus
 
 `valkey-cli` supports TLS. With `--tls`, it uses the edition's embedded CA bundle unless `--cacert` or `--cacertdir` is given.
 
-`rclone` embeds CA roots and timezone data. Release checks, self-update, the GUI downloader, and cloud SDK telemetry are removed or disabled. The authenticated RC API and explicit `--rc-files` remain available. `rclone mount` needs host FUSE support and its mount helper; `cmount` is not included.
+`rclone` embeds CA roots and timezone data. The package does not provide release checks, self-update, the GUI downloader, or cloud SDK telemetry. The authenticated RC API and explicit `--rc-files` remain available. `rclone mount` needs host FUSE support and its mount helper; `cmount` is not included.
 
-`s5cmd` uses AWS credentials and profiles, supports custom S3 endpoints with `--endpoint-url`, and runs command files with `run`. It embeds Mozilla CA roots and additional CAs from the selected edition as a fallback when system roots are unavailable. System trust and `SSL_CERT_FILE` custom CA bundles remain available. S3-compatible providers may support only a subset of its operations.
+`s5cmd` uses AWS credentials and profiles, supports custom S3 endpoints with `--endpoint-url`, and runs command files with `run`. If system roots are unavailable, it falls back to embedded Mozilla CA roots and additional CAs from the selected edition. It also supports custom CA bundles through `SSL_CERT_FILE`. S3-compatible providers may support only a subset of its operations.
 
 `restic` supports local and remote encrypted repositories. It embeds edition CA roots as a fallback when system trust is unavailable; `--cacert` remains available for explicit trust. SFTP and rclone backends require `ssh` and `rclone` on `PATH`. Mounting requires host FUSE support. Self-update is excluded.
 
@@ -187,7 +187,7 @@ Caddy rejects conflicting `client_auth` policies for the same hostname and ambig
 
 `websocat` includes CA roots for verified WSS connections. OpenSSL's system trust and `SSL_CERT_FILE` remain available for additional CAs.
 
-`fio` includes Linux AIO and io_uring engines; host kernel and security policy determine whether they can run. The package excludes the libnbd engine and Python plotting tools. Write workloads can overwrite data: use a fresh temporary directory and a regular file for a smoke check, not a block device:
+`fio` includes Linux AIO and io_uring engines; the host kernel and security policy determine whether they can run. The package excludes the libnbd engine and Python plotting tools. Write workloads can overwrite data. For a smoke check, use a regular file in a fresh temporary directory, not a block device:
 
 ```bash
 (
@@ -208,7 +208,7 @@ Caddy rejects conflicting `client_auth` policies for the same hostname and ambig
 
 ### Text editors
 
-`micro` embeds syntax definitions, themes, help, and its built-in plugins. The linter plugin is disabled by default; set `"linter": true` in `settings.json` to enable it. Backups, history, and configuration retain upstream behavior and need writable storage. Use `-config-dir DIR` or `MICRO_CONFIG_HOME` to select a writable configuration directory.
+`micro` embeds syntax definitions, themes, help, and its built-in plugins. The linter plugin is disabled by default; set `"linter": true` in `settings.json` to enable it. Backups, history, and configuration work as they do upstream and still need writable storage. Use `-config-dir DIR` or `MICRO_CONFIG_HOME` to select a writable configuration directory.
 
 `ox` embeds its default configuration, syntax highlighting, and the `autoindent`, `pairs`, and `quickcomment` plugins. It does not start the configuration assistant automatically; run `ox --config-assist` explicitly when setup is needed. The assistant needs a writable home directory to save its settings. Additional plugins can require external commands or network access.
 
@@ -218,7 +218,7 @@ For an explicitly stateless session, use `vim -N -u NONE -i NONE -n FILE`. This 
 
 ### File managers and read-only filesystems
 
-`broot` and `spf` (superfile) load embedded defaults when user configuration is absent. Ordinary directory navigation and built-in text previews do not require writable configuration, state, cache, or temporary directories. Existing user configuration takes precedence; malformed or unreadable files remain errors. Both need a usable interactive terminal and a readable directory to browse.
+`broot` and `spf` (superfile) load embedded defaults when user configuration is absent. Ordinary directory navigation and built-in text previews do not require writable configuration, state, cache, or temporary directories. Both tools prefer existing user configuration and report malformed or unreadable files as errors. Both need a usable interactive terminal and a readable directory to browse.
 
 | Dependency | `broot` | `spf` |
 | --- | --- | --- |
@@ -231,7 +231,7 @@ For an explicitly stateless session, use `vim -N -u NONE -i NONE -n FILE`. This 
 
 `broot` does not prompt to install shell integration. Use `broot --print-shell-function bash` for explicit setup. `--write-default-conf` and `--install` write only when requested. Normal startup does not enable file logging; `BROOT_LOG` opts into a log in the working directory. Set `kitty_graphics_transmission: chunks` to avoid temporary files for Kitty image previews. SVG preview fonts and explicit preview converters remain host dependencies. Linux clipboard integration uses X11 when available.
 
-`spf` does not extract configuration or themes, create trash directories, or open a log at startup. Explicit pin/toggle changes use `$XDG_DATA_HOME/superfile`; `debug = true` and `cd_on_quit = true` use `$XDG_STATE_HOME/superfile`. Defaults are `~/.local/share` and `~/.local/state`. Trash operations need a writable trash destination. Config repair flags and chooser output also need writable destinations.
+`spf` does not extract configuration or themes, create trash directories, or open a log at startup. Explicit pin and toggle changes use `$XDG_DATA_HOME/superfile`; `debug = true` and `cd_on_quit = true` use `$XDG_STATE_HOME/superfile`. The base directories default to `~/.local/share` and `~/.local/state`, respectively. Trash operations, config repair flags, and chooser output all need writable destinations.
 
 Without `/proc`, `spf` emits disk-discovery diagnostics but directory navigation remains available. On a read-only filesystem, explicit file changes, state persistence, and preview conversions that need temporary files still require an appropriate writable destination; ordinary navigation does not silently create a temporary configuration tree.
 
@@ -243,13 +243,13 @@ Neither tool sends telemetry or checks for updates automatically.
 
 OpenSSL and NSS CA data come from the nixpkgs revision pinned in `flake.lock`. Curl has its own source pin in `store/nix/packages/network.nix`. Review package-specific overrides when updating nixpkgs, then regenerate and check the Store bootstrap metadata.
 
-Library and CA-bundle updates require rebuilding their consumers, including tools whose own version is unchanged. A new AXE executable does not replace published Store payloads. Build and publish the updated packages, then refresh the signed bootstrap snapshot through the publication workflow below.
+When you update a library or CA bundle, rebuild the packages that use it, even if their own versions have not changed. A new AXE executable does not replace published Store payloads. Build and publish the updated packages, then refresh the signed bootstrap snapshot through the publication workflow below.
 
 ## Adding a package
 
 Package definitions live in [`store/nix/packages/`](../store/nix/packages/).
 
-Use a package artifact when a tool needs adjacent runtime files. Store sets `AXE_STORE_PACKAGE_DIR` to the verified package directory for the entrypoint process; the working directory does not change. Single-file tools do not receive this variable.
+Use a package artifact when a tool needs adjacent runtime files. For the entrypoint process, Store sets `AXE_STORE_PACKAGE_DIR` to the verified package directory without changing the working directory. Single-file tools do not receive this variable.
 
 Each package belongs to one primary category, shared with bundled commands. Its Store ID is generated as `<category>/<name>`; command aliases use the same package and category. Choose the category by the tool's main purpose, not its implementation or transport:
 
@@ -269,7 +269,7 @@ Each package belongs to one primary category, shared with bundled commands. Its 
 | `runtime` | Runtimes |
 | `axe` | AXE |
 
-For example, `restic`, `fio`, `findmnt`, `rclone`, `rsync`, and `s5cmd` belong to `storage`, while `binwalk` and `pspy` belong to `debugging`. Terminal multiplexers belong to `terminal`; Python belongs to `runtime`. Define only categories containing packages in the public Store inventory; do not add empty modules or compatibility category aliases. Changing a package's category changes its Store ID and requires regenerating the inventory and the signed snapshot before release.
+For example, `restic`, `fio`, `findmnt`, `rclone`, `rsync`, and `s5cmd` belong to `storage`, while `binwalk` and `pspy` belong to `debugging`. Terminal multiplexers belong to `terminal`; Python belongs to `runtime`. Define a category only if it contains packages in the public Store inventory. Do not add empty modules or compatibility category aliases. Changing a package's category changes its Store ID and requires regenerating the inventory and the signed snapshot before release.
 
 For CGO-free Go packages whose tests run `go build`, set `GO_EXTLINK_ENABLED=0` as well as `CGO_ENABLED=0`: package `ldflags` do not reach those builds, and the musl Go toolchain otherwise defaults to external linking. Apply patches that only remove dependency imports in `postConfigure`, after vendoring, so the pinned vendor hash still matches.
 
@@ -291,12 +291,12 @@ just store-build    # build and sign packages without uploading
 just store-publish  # upload the staged packages and update the Index
 ```
 
-To regenerate the inventory, build, publish, and replace the edition's signed bootstrap snapshot in one step:
+To regenerate the inventory, build and publish the packages, and replace the edition's signed bootstrap snapshot in one step:
 
 ```bash
 just store-sync
 ```
 
-Publication rejects removal of previously published tool, channel, or target entries. For an intentional removal, review the affected consumers before running `AXE_STORE_ALLOW_TARGET_REMOVAL=1 just store-sync`. This override permits removal; it does not migrate installed binaries.
+Publication rejects attempts to remove previously published tool, channel, or target entries. For an intentional removal, review the affected consumers before running `AXE_STORE_ALLOW_TARGET_REMOVAL=1 just store-sync`. This override permits removal; it does not migrate installed binaries.
 
 Review and commit the updated `store/bootstrap.json` and `store/bootstrap-index.cbor.zst` together before an AXE release. Store publication does not publish AXE binaries; follow [Local releases](release.md) for that.

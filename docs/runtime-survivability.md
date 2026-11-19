@@ -1,6 +1,6 @@
 # Runtime survivability
 
-AXE can keep running after its executable is removed. Starting another AXE process is harder: bundled applets launched from the shell, daemon workers, SSH sessions, and nested commands such as `xargs` all need one, and whether that works depends on the platform and execution policy.
+AXE can keep running after its executable is removed. Whether it can start another AXE process depends on the platform and execution policy. Shell-launched applets, daemon workers, SSH sessions, and nested commands such as `xargs` need a child process.
 
 ## What remains available
 
@@ -35,7 +35,7 @@ Bundled pipeline stages do not guarantee full pipeline concurrency or pipeline-w
 
 ## Runtime storage and PATH
 
-AXE keeps command links and private executable copies under a runtime root. It uses the first available of:
+AXE stores command links and private executable copies in the first available runtime root:
 
 1. `AXE_WORK_DIR`.
 2. A runtime root inherited from a parent AXE process.
@@ -62,6 +62,6 @@ commands jq
 jq -n '{ok: true}'
 ```
 
-`doctor` reports shell state, launch candidates, relay and bridge availability, self-exec and process-creation probes, filesystem restrictions, and degradations. Its exit status only says whether the report was written; read the report to see which capabilities work. `--path` selects the directory for filesystem probes, not the runtime root. The probes create temporary files and child processes.
+`doctor` reports shell state, launch candidates, relay and bridge availability, self-exec and process-creation probes, filesystem restrictions, and degradations. Its exit status tells you whether it wrote the report. Read the report to see which capabilities work. `--path` selects the directory for filesystem probes, not the runtime root. The probes create temporary files and child processes.
 
-`commands NAME` shows whether an applet has a published `local_path`; the shell can launch the applet without one. The last example starts a bundled applet as a child. If that works but an external program cannot find the applet, inspect `PATH`, `AXE_APPLET_DIR`, and the bridge. If child launch fails, check the self-exec and process-creation results, seccomp policy, runtime-root permissions, free space, and mount options.
+`commands NAME` shows whether an applet has a published `local_path`; the shell can launch the applet without one. The `jq -n` example starts a bundled applet as a child. If that works but an external program cannot find the applet, inspect `PATH`, `AXE_APPLET_DIR`, and the bridge. If child launch fails, check the self-exec and process-creation results, seccomp policy, runtime-root permissions, free space, and mount options.

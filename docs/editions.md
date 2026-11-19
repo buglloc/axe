@@ -1,10 +1,10 @@
 # Build a custom edition
 
-An edition changes the inputs embedded in `axe`: its ID, SSH host key and trusted user CAs, relay defaults and credentials, command aliases, and AXE Store consumer trust. It uses the same public source tree. Keep the edition root outside tracked source (or under ignored `target/`) and keep private keys out of Git. An edition that only needs different SSH or relay settings can use the existing OSS Store without publishing another Store.
+All editions build from the same public source tree. Each edition sets the ID, SSH host key, trusted user CAs, relay defaults and credentials, command aliases, and AXE Store consumer trust embedded in `axe`. Keep the edition root outside tracked source or under the ignored `target/` directory. Keep private keys out of Git. If you only need different SSH or relay settings, you can reuse the OSS Store.
 
 ## Build locally with the OSS Store
 
-From the public checkout, enter the development shell and create an isolated edition root. This example uses OSS Store configuration and trust without a signed bootstrap Index. It needs network access to discover Store tools unless a verified Index is already cached. Replace `my-axe` and the SSH principal with your own values. The edition ID accepts only lowercase ASCII letters, digits, and hyphens.
+Enter the development shell from the public checkout and create a separate edition root. This example uses the OSS Store configuration and trust without a signed bootstrap Index. Unless a verified Index is already cached, `axe` needs network access to discover Store tools. Set `id` and `sshd.principals` for your edition. The ID accepts only lowercase ASCII letters, digits, and hyphens.
 
 ```bash
 just shell
@@ -39,9 +39,9 @@ install -Dm755 "$AXE_EDITION_ROOT/dist/axe-x86_64-unknown-linux-musl" "$AXE_EDIT
 Edit `config/bootstrap.json` in the edition root to set `default_args`, for
 example `["sshd"]`; an empty array keeps the normal `axe` invocation.
 
-The build recipe generates missing development SSH and relay identities in this root without replacing complete pairs. Do not deploy them in production. Do not run `just generate-dev-keys` when reusing Store trust without its private signing key: that recipe requires both. Consumer builds do not need a Store signing key.
+The build recipe generates missing development SSH and relay identities and leaves complete pairs alone. Do not deploy development identities. If you reuse Store trust without its signing key, skip `just generate-dev-keys`: the recipe requires a Store signing key when public trust already exists. Consumer builds do not need the Store signing key.
 
-To discover Store tools offline on first run, copy `store/bootstrap-index.cbor.zst` into the edition root before building. The build verifies the snapshot's signature and trust and rejects an inventory that differs from `store/bootstrap.json`. The snapshot contains metadata, not tools; offline execution still needs cached artifacts. For a separate Store, provision its trust, metadata, endpoint, and publisher credentials; see [AXE Store](store.md) and [BOOTSTRAP.md](../BOOTSTRAP.md).
+To discover Store tools offline on first run, copy the signed snapshot to `store/bootstrap-index.cbor.zst` under the edition root before building. The build verifies the snapshot's signature and trust and rejects an inventory that differs from `store/bootstrap.json`. The snapshot contains metadata, not tools; offline execution still needs cached artifacts. For a separate Store, provision its trust, metadata, endpoint, and publisher credentials. See [AXE Store](store.md) and [BOOTSTRAP.md](../BOOTSTRAP.md).
 
 ## Prepare a deployable edition
 

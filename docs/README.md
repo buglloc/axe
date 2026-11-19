@@ -1,6 +1,6 @@
 # Documentation
 
-Start with the [project README](../README.md) for downloads, a first run, and a brief software overview.
+The [project README](../README.md) has downloads, quick-start instructions, and an overview of AXE.
 
 ## Using AXE
 

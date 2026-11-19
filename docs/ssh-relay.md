@@ -16,7 +16,7 @@ SSH shell and exec sessions start in the selected `workdir`. AXE sets:
 HOME=<workdir>/.axe-home
 ```
 
-AXE creates this directory with private permissions, and it persists with the workdir. Sessions do not see the daemon's own home directory.
+AXE creates a private home directory that persists with `workdir`. Sessions do not see the daemon's own home directory.
 
 If `PATH` is unset or empty when `sshd` starts, AXE uses:
 
@@ -24,7 +24,7 @@ If `PATH` is unset or empty when `sshd` starts, AXE uses:
 /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ```
 
-A non-empty inherited `PATH` is kept. The AXE applet bridge, when available, comes first.
+AXE keeps a non-empty inherited `PATH` and prepends its applet bridge when available.
 
 If `LC_ALL`, `LC_CTYPE`, and `LANG` are all unset or empty after client variables are applied, shell and exec sessions set `LANG=C.UTF-8`. A non-empty value in any of them, including `C`, prevents this. AXE does not set `LC_ALL` or change `TERM`.
 
@@ -50,7 +50,7 @@ As in OpenSSH, the server overrides some accepted values. AXE sets `HOME`, `AXE`
 
 ## Signals and terminals
 
-On Unix, SSH signal requests go to the session's process group. A session killed by a signal reports `exit-signal`; otherwise it reports `exit-status`. Closing a session kills its process group, and remaining group members are also killed when the main process exits. Processes that start their own session are not affected.
+On Unix, `sshd` sends signal requests to the session's process group. A session killed by a signal reports `exit-signal`; otherwise it reports `exit-status`. When the session closes or its main process exits, `sshd` kills the remaining members of the process group. Processes that start their own session are not affected.
 
 PTY sessions apply the client's terminal modes and follow window size changes.
 
@@ -69,9 +69,9 @@ Besides `expand-path@openssh.com`, SFTP supports:
 
 ## Relay
 
-The target runs `axe sshd`; the separate `axe-relay` daemon assigns it a public TCP port on a reachable host. Relay is disabled by default in the OSS edition. Use `--relay ENDPOINT` to enable it or `--no-relay` to override an edition's configured default.
+Run `axe sshd` on the target. On a reachable host, the separate `axe-relay` daemon assigns the target a public TCP port. The OSS edition leaves relay disabled by default. Use `--relay ENDPOINT` to enable it or `--no-relay` to override an edition's configured default.
 
-TCP is the default transport. It authenticates with a bearer token of at least 32 bytes, supplied by the edition or `AXE_RELAY_TOKEN`; keep its control traffic on a trusted network such as a VPN. QUIC uses mutual TLS over UDP. Supply target credentials through the edition or the `AXE_RELAY_QUIC_*_FILE` variables shown below.
+TCP is the default transport. It uses a bearer token of at least 32 bytes from the edition or `AXE_RELAY_TOKEN`. Keep TCP control traffic on a trusted network such as a VPN. QUIC uses mutual TLS over UDP. Supply target credentials through the edition or the `AXE_RELAY_QUIC_*_FILE` variables shown below.
 
 The relay daemon needs both a TCP token and QUIC server credentials, even when targets use only one transport. Generate credentials and configure endpoints as described in [`BOOTSTRAP.md`](../BOOTSTRAP.md#relay-endpoints-and-identities).
 
@@ -79,9 +79,9 @@ Each registration allows at most 128 active tunnels; further public connections 
 
 Targets reconnect with jittered exponential backoff of up to 30 seconds. QUIC treats a connection as dead after 30 seconds without traffic. TCP uses OS keepalive with 15-second idle and 5-second probe intervals; the total detection time depends on the OS.
 
-Reconnecting does not resume existing tunnels. Clients must reconnect, and the target may receive a different public port, so query `wait` or the API again. Registrations with the same client ID coexist, which makes lookups ambiguous; give each target a unique ID. All tunnels of a TCP registration share one TCP connection, so a stalled tunnel can delay the others.
+Reconnecting does not resume existing tunnels. Clients must reconnect, and the target may receive a different public port. Query `wait` or the API again. All tunnels of a TCP registration share one TCP connection, so a stalled tunnel can delay the others.
 
-Set a unique `--relay-id` for each target; the default ID can collide across hosts or containers. For a QUIC target, supply the certificate files unless the edition embeds them:
+Set a unique `--relay-id` for each target. The default ID can collide across hosts or containers, and registrations with the same ID coexist, making lookups ambiguous. For a QUIC target, supply the certificate files unless the edition embeds them:
 
 ```bash
 AXE_RELAY_QUIC_SERVER_CERT_FILE=keys/relay/quic_server_cert.pem \
@@ -104,7 +104,7 @@ sudo install -d -o root -g root -m 0700 /etc/axe-relay
 sudo install -o root -g root -m 0600 keys/relay/{token,quic_server_key.pem,quic_server_cert.pem,quic_client_cert.pem} /etc/axe-relay/
 ```
 
-Replace `relay.example.org` with the relay's public DNS name and save this JSON as `config.json`. All fields are required. `public_bind` is a bare IP address; listener addresses include a port and bracket IPv6.
+Replace `relay.example.org` with the relay's public DNS name and save this JSON as `config.json`. All fields are required. Use a bare IP address for `public_bind`. Listener addresses need a port; put IPv6 addresses in brackets.
 
 ```json
 {
@@ -150,11 +150,11 @@ PrivateTmp=true
 WantedBy=multi-user.target
 ```
 
-The server requires `--config FILE`; `--token FILE` overrides its `token_file`. Both take file paths, whereas `AXE_RELAY_TOKEN` on a TCP target holds the token itself. The dashboard and API listener speaks plain HTTP and can bind a private or VPN address. The dashboard asks for the bearer token, and every JSON API request needs `Authorization: Bearer <token>` matching `token_file`.
+The server requires `--config FILE`. Use `--token FILE` to override the configured `token_file`. Both flags take paths; `AXE_RELAY_TOKEN` on a TCP target holds the token itself. The dashboard and API share a plain HTTP listener that can bind to a private or VPN address. The dashboard asks for the bearer token, and every JSON API request needs `Authorization: Bearer <token>` matching `token_file`.
 
 For TCP targets, change the loopback-only `tcp_control` address to the relay's private or VPN address and allow only those targets to reach it. Never expose this listener to an untrusted network. Allow UDP 11000 from QUIC targets and TCP 3000–6000 from SSH users, and keep the firewall rules in sync with the public port range.
 
-The `axe-relay` client commands accept HTTPS and HTTP API URLs. Set `AXE_RELAY_API_URL` and `AXE_RELAY_API_TOKEN`, or pass `--api` and `--api-token`. The default API URL is `http://127.0.0.1:7000`. Over plain HTTP the bearer token travels unencrypted, so use it only on a trusted private network or put the API behind an HTTPS reverse proxy.
+The `axe-relay` client accepts HTTP and HTTPS API URLs. Set `AXE_RELAY_API_URL` and `AXE_RELAY_API_TOKEN`, or pass `--api` and `--api-token`. The default URL is `http://127.0.0.1:7000`. Plain HTTP sends the bearer token unencrypted. Use it only on a trusted private network, or put the API behind an HTTPS reverse proxy.
 
 Start the service and wait for a target:
 

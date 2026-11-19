@@ -1,6 +1,6 @@
 # Vzik
 
-`vzik` collects bounded host and container evidence. It runs as a standalone binary or as an AXE applet. Start with passive host context, then pick a targeted command:
+`vzik` collects host and container evidence within set limits. Run it as a standalone binary or as an AXE applet. Start with `overview`, then choose a command for the details you need:
 
 ```bash
 vzik --version
@@ -23,7 +23,7 @@ Field types, units, missing values, and encodings are specified in the [collecti
 
 ## Discovery and output
 
-`vzik capabilities` lists probes and global limits. Pass a probe ID, as in `vzik capabilities porto.list`, to see its request schema and access requirements. A probe that cannot reach a host service reports itself as unavailable; unsupported probes are reported, not silently omitted.
+`vzik capabilities` lists probes and global limits. Pass a probe ID, as in `vzik capabilities porto.list`, to see its request schema and access requirements. If a probe cannot reach a host service, it reports itself as unavailable. The output also lists unsupported probes.
 
 `vzik --version` (or `-V`) prints the version without collecting evidence. Discovery, validation, summaries, capture stdout, and receipts are pretty-printed JSON. Collection and process diagnostics are compact JSONL, one complete record per line.
 
@@ -46,17 +46,17 @@ vzik monitor sockets [COMMON_OPTIONS]
 vzik monitor all --files PATH... [--glob PATTERN] [COMMON_OPTIONS]
 ```
 
-File paths are watched recursively and symlinks are not followed. Process and socket monitoring covers everything visible in the collector's namespaces.
+File monitoring watches paths recursively without following symlinks. Process and socket monitoring covers everything visible in the collector's namespaces.
 
 Process events are exact when the kernel process connector is available and sampled from `/proc` otherwise. File events name the responsible process only when vzik has the privileges for fanotify; without them, inotify reports changes without attribution. Socket changes are always sampled.
 
-Process records include the executable and arguments, so treat the output as sensitive; `--full` also adds environment data. Monitoring exits with status `3` when a selected class is only sampled, a provider is unavailable, events were dropped, or tracked state was evicted, and with `141` when stdout closes.
+Treat the output as sensitive: process records include the executable and arguments, and `--full` adds environment data. Monitoring exits with status `3` if a selected class is only sampled, a provider is unavailable, events were dropped, or tracked state was evicted. It exits with `141` when stdout closes.
 
 ## Collection and capture
 
 `collect` and other collection commands write protocol-v5 JSONL. A final `stream_end` record closes the stream but does not guarantee full coverage: check its `collection_outcome`, `truncated`, and per-capability coverage. A complete collection exits with status `0`; a degraded one exits with `3`. A stream without `stream_end` is incomplete. Use `validate` to check a saved stream and `summarize` to see its coverage.
 
-`vzik capture COMMAND --output-dir DIR` creates a new private directory with `capture.jsonl`, `receipt.json`, and `stderr.jsonl`. The parent must exist and `DIR` must not. For custom file names, use `--output FILE --receipt FILE [--stderr FILE]` instead; stderr then defaults to the output path plus `.stderr`. Capture never overwrites existing files. It writes the receipt only after validating the stream, so an interrupted capture leaves files without a receipt. A receipt can describe degraded evidence; it does not mean every probe succeeded.
+`vzik capture COMMAND --output-dir DIR` creates a private directory with `capture.jsonl`, `receipt.json`, and `stderr.jsonl`. The parent directory must exist; `DIR` must be new. For custom file names, use `--output FILE --receipt FILE [--stderr FILE]` instead. In that case stderr defaults to the output path plus `.stderr`. Capture never overwrites existing files. It writes the receipt after validating the stream, so an interrupted capture can leave files without a receipt. A receipt confirms validation, not that every probe succeeded.
 
 ## Reading saved evidence
 
@@ -68,6 +68,6 @@ vzik summarize overview-evidence/capture.jsonl
 jq 'select(.type == "data" and .data_kind == "host_overview") | .data | {scope, detail, host: .environment.host, uid_map: .environment.restrictions.uid_map}' overview-evidence/capture.jsonl
 ```
 
-When projecting process records, keep `scope` and `pid` alongside the selected fields.
+If you select only some fields from process records, keep `scope` and `pid`.
 
 Evidence can contain sensitive host data. Keep the capture, receipt, and stderr files together when sharing or archiving a collection.
