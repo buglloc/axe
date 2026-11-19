@@ -957,17 +957,31 @@ impl Client {
 
     fn metadata_root(&self) -> Option<PathBuf> {
         self.storage_roots()
-            .into_iter()
             .find(|root| ensure_writable_root(root, self.config.max_metadata_bytes).is_ok())
             .map(|root| root.join("metadata").join(&self.metadata_namespace))
     }
 
-    pub(crate) fn storage_roots(&self) -> Vec<PathBuf> {
+    pub(crate) fn storage_roots(&self) -> impl Iterator<Item = PathBuf> {
         #[cfg(test)]
-        if let Some(roots) = &self.storage_roots_override {
-            return roots.clone();
-        }
-        storage_roots(&self.config)
+        let overrides = self.storage_roots_override.as_deref();
+        #[cfg(not(test))]
+        let overrides: Option<&[PathBuf]> = None;
+
+        let candidates = overrides.is_none().then(|| {
+            let explicit = std::env::var_os("AXE_STORE_DIR")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from);
+            axe_paths::store_candidate_roots(
+                explicit,
+                &self.config.persistent_roots,
+                &self.config.tmpfs_roots,
+            )
+        });
+        overrides
+            .into_iter()
+            .flatten()
+            .cloned()
+            .chain(candidates.into_iter().flatten())
     }
 }
 
@@ -1729,13 +1743,6 @@ pub(crate) fn classify_http(stage: StoreStage, error: ureq::Error) -> StoreError
         }
         _ => StoreError::transient(stage, error.to_string()),
     }
-}
-
-fn storage_roots(config: &ClientConfig) -> Vec<PathBuf> {
-    let explicit = std::env::var_os("AXE_STORE_DIR")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from);
-    axe_paths::store_candidate_roots(explicit, &config.persistent_roots, &config.tmpfs_roots)
 }
 
 pub(crate) fn ensure_writable_root(root: &Path, required: u64) -> Result<(), StoreError> {

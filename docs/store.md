@@ -2,7 +2,9 @@
 
 AXE Store delivers tools on demand. Nix builds the packages; `axe-store` signs their metadata and publishes them. AXE verifies signatures, sizes, and SHA-256 hashes before execution. Cached tools can run offline. On Linux, single-file tools and static package entrypoints can run even if the cache filesystem disallows execution. Packages still need writable storage for their data.
 
-`AXE_STORE_DIR` sets the preferred cache root. If it is unavailable, AXE tries configured roots, the platform cache, writable persistent mounts, tmpfs, and the temporary directory. Store metadata is isolated by URL, trust keys, and channel. Use separate roots for co-installed editions.
+`AXE_STORE_DIR` sets the preferred cache root. AXE tries configured roots and the platform cache before searching writable persistent mounts, tmpfs, and the temporary directory. For package execution, AXE tries roots that permit execution before `noexec` roots, where Linux uses a sealed `memfd` for a static entrypoint.
+
+Store metadata is isolated by URL, trust keys, and channel. Use separate roots for co-installed editions.
 
 Set the mode with `AXE_STORE_MODE` or `sshd --store-mode`:
 

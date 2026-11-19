@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io;
+use std::iter::once_with;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -13,37 +15,21 @@ pub enum MountExecutionPolicy {
     Unsupported,
 }
 
-pub fn store_candidate_roots(
+pub fn store_candidate_roots<'a>(
     explicit: Option<PathBuf>,
-    persistent_roots: &[PathBuf],
-    tmpfs_roots: &[PathBuf],
-) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(path) = explicit {
-        push_unique(&mut roots, path);
-    }
-    for root in persistent_roots {
-        push_unique(&mut roots, root.clone());
-    }
-
-    if let Some(root) = store_platform_cache_root() {
-        push_unique(&mut roots, root);
-    }
-
-    for root in detected_store_mount_roots(false) {
-        push_unique(&mut roots, root);
-    }
-
-    for root in tmpfs_roots {
-        push_unique(&mut roots, root.clone());
-    }
-
-    for root in detected_store_mount_roots(true) {
-        push_unique(&mut roots, root);
-    }
-
-    push_unique(&mut roots, std::env::temp_dir().join("axe-store"));
-    roots
+    persistent_roots: &'a [PathBuf],
+    tmpfs_roots: &'a [PathBuf],
+) -> impl Iterator<Item = PathBuf> + 'a {
+    let mut seen = HashSet::new();
+    explicit
+        .into_iter()
+        .chain(persistent_roots.iter().cloned())
+        .chain(once_with(store_platform_cache_root).flatten())
+        .chain(once_with(|| detected_store_mount_roots(false)).flatten())
+        .chain(tmpfs_roots.iter().cloned())
+        .chain(once_with(|| detected_store_mount_roots(true)).flatten())
+        .chain(once_with(|| std::env::temp_dir().join("axe-store")))
+        .filter(move |path| seen.insert(path.clone()))
 }
 
 pub fn select_runtime_root(
@@ -279,7 +265,7 @@ fn detected_store_mount_roots(tmpfs_only: bool) -> Vec<PathBuf> {
         } else {
             mount.join(".axe-store")
         };
-        push_unique(&mut roots, root);
+        roots.push(root);
     }
     roots
 }
@@ -342,9 +328,22 @@ pub fn mount_execution_policy(_path: &Path) -> MountExecutionPolicy {
     MountExecutionPolicy::Unsupported
 }
 
+/// Checks the mount flag for `path` or its closest existing ancestor without procfs.
 #[cfg(target_os = "linux")]
 pub fn path_is_noexec(path: &Path) -> bool {
-    mount_execution_policy(path) == MountExecutionPolicy::NoExec
+    for ancestor in path.ancestors() {
+        let candidate = if ancestor.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            ancestor
+        };
+        match filesystem_stats(candidate) {
+            Ok(stat) => return stat.f_flag & libc::ST_NOEXEC != 0,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(_) => break,
+        }
+    }
+    false
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -387,11 +386,11 @@ fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
 }
 
 #[cfg(unix)]
-pub fn available_bytes(root: &Path) -> io::Result<u64> {
+fn filesystem_stats(path: &Path) -> io::Result<libc::statvfs> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
-    let encoded = CString::new(root.as_os_str().as_bytes())
+    let encoded = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "storage path contains NUL"))?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     // SAFETY: encoded is NUL-terminated and stat points to writable storage.
@@ -399,7 +398,12 @@ pub fn available_bytes(root: &Path) -> io::Result<u64> {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: statvfs returned success and initialized the structure.
-    let stat = unsafe { stat.assume_init() };
+    Ok(unsafe { stat.assume_init() })
+}
+
+#[cfg(unix)]
+pub fn available_bytes(root: &Path) -> io::Result<u64> {
+    let stat = filesystem_stats(root)?;
     let available = u128::from(stat.f_bavail) * u128::from(stat.f_frsize);
 
     Ok(u64::try_from(available).unwrap_or(u64::MAX))

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::ffi::OsString;
 #[cfg(target_os = "linux")]
 use std::ffi::{CString, OsStr};
@@ -709,18 +710,17 @@ fn prepare_package(
     let relative = unpacked_relative(resolved.artifact.unpacked_sha256);
     let mut corruption = None;
     let mut last_storage = None;
-    let mut roots = client.storage_roots();
-    roots.sort_by_cached_key(|root| {
-        root.ancestors()
-            .find_map(|ancestor| {
-                fs::canonicalize(if ancestor.as_os_str().is_empty() {
-                    Path::new(".")
-                } else {
-                    ancestor
-                })
-                .ok()
-            })
-            .is_some_and(|path| axe_paths::path_is_noexec(&path))
+    let mut candidates = client.storage_roots();
+    let mut noexec = VecDeque::new();
+    let roots = std::iter::from_fn(|| {
+        for root in candidates.by_ref() {
+            if axe_paths::path_is_noexec(&root) {
+                noexec.push_back(root);
+            } else {
+                return Some(root);
+            }
+        }
+        noexec.pop_front()
     });
     for root in roots {
         if let Err(error) = ensure_writable_root(&root, reserve) {
